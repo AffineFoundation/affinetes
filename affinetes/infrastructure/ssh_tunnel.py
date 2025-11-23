@@ -116,10 +116,13 @@ class SSHTunnelManager:
                 client_socket, addr = self._server_socket.accept()
                 
                 try:
+                    # Set timeout for channel opening to avoid indefinite hang
+                    # This prevents blocking when target container is unreachable
                     channel = self._transport.open_channel(
                         "direct-tcpip",
                         (remote_ip, remote_port),
-                        addr
+                        addr,
+                        timeout=10  # 10 seconds timeout
                     )
                     
                     for src, dst in [(client_socket, channel), (channel, client_socket)]:
@@ -248,12 +251,19 @@ class SSHTunnelManager:
                     pass
                 self._server_socket = None
             
-            # Close SSH connection
+            # Close SSH connection with timeout protection
             if self._ssh_client:
                 try:
                     logger.debug("Closing SSH connection")
-                    self._ssh_client.close()
-                    logger.debug("SSH connection closed")
+                    # Close in a separate thread with timeout to avoid blocking
+                    import concurrent.futures
+                    with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
+                        future = executor.submit(self._ssh_client.close)
+                        try:
+                            future.result(timeout=2)  # 2 second timeout
+                            logger.debug("SSH connection closed")
+                        except concurrent.futures.TimeoutError:
+                            logger.warning("SSH connection close timed out, forcing cleanup")
                 except Exception as e:
                     logger.warning(f"Error closing SSH connection: {e}")
                 finally:

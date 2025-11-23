@@ -263,8 +263,6 @@ class LocalBackend(AbstractBackend):
         
         # Remote: recreate SSH tunnel (IP may have changed)
         if self._is_remote:
-            logger.info("Remote deployment: recreating SSH tunnel after restart")
-            
             if self._ssh_tunnel_manager:
                 try:
                     self._ssh_tunnel_manager.cleanup()

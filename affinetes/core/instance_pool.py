@@ -150,8 +150,7 @@ class InstancePool:
                 {
                     "host": inst.host,
                     "port": inst.port,
-                    "requests": inst.request_count,
-                    "last_check": inst.last_check
+                    "requests": inst.request_count
                 }
                 for inst in self._instances
             ]

@@ -24,19 +24,25 @@ class HTTPExecutor:
             container_ip: Container internal IP address (e.g., 172.17.0.2)
             container_port: Container internal port (default: 8000)
             env_type: EnvType.FUNCTION_BASED or EnvType.HTTP_BASED
-            timeout: Request timeout in seconds
+            timeout: Request timeout in seconds (read timeout, connect timeout is 10s)
         """
         self.base_url = f"http://{container_ip}:{container_port}"
         self.env_type = env_type
         self.timeout = timeout
+        # Separate connect and read timeouts to avoid long hangs on connection
         self.client = httpx.AsyncClient(
-            timeout=timeout,
+            timeout=httpx.Timeout(
+                connect=10.0,  # 10s for connection establishment
+                read=timeout,  # User-specified timeout for response
+                write=30.0,    # 30s for sending request
+                pool=10.0      # 10s for acquiring connection from pool
+            ),
             limits=httpx.Limits(
                 max_connections=100,
                 max_keepalive_connections=20
             )
         )
-        logger.debug(f"HTTPExecutor initialized: {self.base_url} (type: {env_type})")
+        logger.debug(f"HTTPExecutor initialized: {self.base_url} (type: {env_type}, connect_timeout=10s, read_timeout={timeout}s)")
     
     async def call_method(
         self,
