@@ -447,7 +447,21 @@ class R2Dataset:
         if self._index is None:
             logger.debug("Waiting for dataset index to load...")
             await self._load_index()
-        
+
+        # Wait for background initialization (file downloads) to complete
+        if self._init_task is not None:
+            logger.debug("Waiting for background dataset initialization to complete...")
+            try:
+                await asyncio.wait_for(self._init_task, timeout=download_timeout)
+                logger.debug("Background initialization completed successfully")
+            except asyncio.TimeoutError:
+                logger.warning(
+                    f"Background initialization timeout after {download_timeout}s. "
+                    "Will attempt on-demand download for required file."
+                )
+            except Exception as e:
+                logger.warning(f"Background initialization failed: {e}. Will attempt on-demand download.")
+
         # Validate task_id range
         if task_id < 0:
             raise ValueError(f"task_id must be non-negative, got {task_id}")
