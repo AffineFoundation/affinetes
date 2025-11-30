@@ -1,24 +1,13 @@
-"""Python interpreter simulation environment.
-
-This environment generates short Python programs and asks the model to
-predict the exact stdout of running them. The prompt follows the
-same structure as `python_env.py` in the repo, but the implementation
-is containerized so it can be built/run via `afs`.
-"""
+"""Program generation utilities for the Python environments."""
 
 from __future__ import annotations
 
 import contextlib
 import io
-import os
 import random
 import re
-import time
 from collections import defaultdict
 from typing import Any, Dict, Iterable, List, Sequence
-
-import httpx
-import openai
 
 # Operations that the generator may use when building a program
 DEFAULT_ALLOWED_OPS: tuple[str, ...] = (
@@ -76,16 +65,7 @@ def build_program(
     allowed_ops: Sequence[str] = DEFAULT_ALLOWED_OPS,
     max_digits: int = 5,
 ) -> tuple[list[str], list[str]]:
-    """
-    Generate a small Python program.
-
-    Returns
-    -------
-    code_lines: list[str]
-        Executable Python statements (without >>>).
-    ops_used: list[str]
-        Operations that actually emitted code.
-    """
+    """Generate a small Python program."""
     rng = random.Random(seed)
     code_lines: list[str] = []
     ops_used: list[str] = []
@@ -247,7 +227,6 @@ def build_program(
         "MAX": op_max,
     }
 
-    # Bootstrap with one scalar and one list so the program is non-empty
     initial_scalar = new_name()
     scalar_value = rand_int()
     vars_state["raw"][initial_scalar] = scalar_value
@@ -266,7 +245,6 @@ def build_program(
         if handler:
             handler()
 
-    # Always end with a print to guarantee observable output
     op_print()
     return code_lines, ops_used
 
@@ -294,126 +272,3 @@ def extract_answer(text: str | None) -> str | None:
     if not match:
         return None
     return match.group(1)
-
-
-class Actor:
-    """Generate Python challenges and score model outputs."""
-
-    def __init__(self):
-        self.api_key = os.getenv("CHUTES_API_KEY")
-
-    async def _chat(
-        self,
-        prompt: str,
-        model: str,
-        base_url: str,
-        timeout: int,
-        temperature: float,
-        api_key: str | None,
-    ) -> str:
-        client = openai.AsyncOpenAI(
-            base_url=base_url.rstrip("/"),
-            api_key=api_key or self.api_key,
-            timeout=httpx.Timeout(timeout),
-            max_retries=0,
-        )
-        response = await client.chat.completions.create(
-            model=model,
-            messages=[{"role": "user", "content": prompt}],
-            temperature=temperature,
-            stream=False,
-        )
-        if not response.choices:
-            raise RuntimeError("LLM returned no choices")
-        content = response.choices[0].message.content
-        if content is None:
-            raise RuntimeError("LLM returned empty content")
-        return content
-
-    async def evaluate(
-        self,
-        model: str = "deepseek-ai/DeepSeek-V3",
-        base_url: str = "https://llm.chutes.ai/v1",
-        timeout: int = 120,
-        temperature: float = 0.0,
-        api_key: str | None = None,
-        task_id: int | None = None,
-        seed: int | None = None,
-        op_count: int = 8,
-        allowed_ops: Sequence[str] | None = None,
-        max_digits: int = 4,
-        answer: str | None = None,
-    ) -> dict[str, Any]:
-        """
-        Generate a Python code challenge and score the model output.
-
-        Parameters mirror the other affinetes environments so callers
-        can pass `model`, `base_url`, and `CHUTES_API_KEY`.
-        """
-        start = time.time()
-        allowed = tuple(allowed_ops) if allowed_ops else DEFAULT_ALLOWED_OPS
-        seed_value = seed if seed is not None else (task_id if task_id is not None else random.getrandbits(32))
-        api_key_value = api_key or self.api_key
-
-        code_lines, ops_used = build_program(
-            seed=seed_value,
-            op_count=op_count,
-            allowed_ops=allowed,
-            max_digits=max_digits,
-        )
-        prompt = format_prompt(code_lines)
-
-        try:
-            expected_output = execute_program(code_lines)
-        except Exception as exc:  # pragma: no cover - generation failure is surfaced to caller
-            return {
-                "task_name": "python-env",
-                "success": False,
-                "score": 0.0,
-                "error": f"Generated program failed: {exc}",
-                "prompt": prompt,
-                "seed": seed_value,
-            }
-
-        # Either call the model or accept a direct answer (useful for tests)
-        if answer is None:
-            if not api_key_value:
-                return {
-                    "task_name": "python-env",
-                    "success": False,
-                    "score": 0.0,
-                    "error": "Provide CHUTES_API_KEY or pass `answer` to skip LLM call.",
-                    "prompt": prompt,
-                    "seed": seed_value,
-                }
-            model_response = await self._chat(
-                prompt=prompt,
-                model=model,
-                base_url=base_url,
-                timeout=timeout,
-                temperature=temperature,
-                api_key=api_key_value,
-            )
-        else:
-            model_response = answer
-
-        provided_output = extract_answer(model_response)
-
-        # Accept trailing newline differences but keep formatting strict otherwise
-        expected_canonical = expected_output.rstrip("\n")
-        provided_canonical = provided_output.rstrip("\n") if provided_output is not None else None
-        success = provided_canonical is not None and provided_canonical == expected_canonical
-        score = 1.0 if success else 0.0
-
-        return {
-            "task_name": "python-env",
-            "success": success,
-            "score": score,
-            "expected_output": expected_output,
-            "provided_output": provided_output,
-            "model_response": model_response,
-            "prompt": prompt,
-            "seed": seed_value,
-            "ops_used": ops_used,
-            "time_taken": time.time() - start,
-        }
