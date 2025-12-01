@@ -9,10 +9,7 @@ from typing import Any, Dict, Tuple
 import numpy as np
 from scipy.optimize import minimize, differential_evolution
 
-from .function_ast import (
-    RandomFunction, FunctionProperties,
-    random_psd, matern_frequencies
-)
+from ._function import RandomFunction, FunctionProperties, random_psd, matern_frequencies
 
 
 @dataclass(frozen=True)
@@ -83,6 +80,12 @@ PRIORS = dict(
 )
 
 
+def _spawn_rngs(seed: int, n: int = 3) -> Tuple[np.random.Generator, ...]:
+    """Deterministically split seed into independent RNG streams."""
+    seqs = np.random.SeedSequence(seed).spawn(n)
+    return tuple(np.random.default_rng(s) for s in seqs)
+
+
 def sample_hyperparameters(rng: np.random.Generator) -> Hyperparameters:
     """Sample from max-entropy priors."""
     P = PRIORS
@@ -146,43 +149,51 @@ def sample_function(hp: Hyperparameters, rng: np.random.Generator) -> RandomFunc
 
 
 def find_optimum(f: RandomFunction, bounds: np.ndarray, rng: np.random.Generator,
-                 n_starts: int = 20) -> Tuple[np.ndarray, float]:
-    """Find global minimum via multi-start optimization."""
+                 n_starts: int = 10) -> Tuple[np.ndarray, float]:
+    """Find a high-quality minimum via light-weight multi-start search."""
     d = f.dimension()
-    best_x, best_f = None, float('inf')
-
-    # Starting points: origin + random
-    starts = [np.zeros(d)] + [rng.uniform(bounds[:, 0], bounds[:, 1]) for _ in range(n_starts - 1)]
     scipy_bounds = list(zip(bounds[:, 0], bounds[:, 1]))
 
-    for x0 in starts:
-        try:
-            res = minimize(f.evaluate, x0, jac=f.gradient, method='L-BFGS-B',
-                           bounds=scipy_bounds, options={'maxiter': 1000, 'gtol': 1e-8})
-            if res.fun < best_f:
-                best_x, best_f = res.x, res.fun
-        except Exception:
-            pass
+    def _local_minimum(x0: np.ndarray) -> Tuple[np.ndarray, float]:
+        res = minimize(
+            f.evaluate,
+            x0,
+            jac=f.gradient,
+            method='L-BFGS-B',
+            bounds=scipy_bounds,
+            options={'maxiter': 200, 'gtol': 1e-8},
+        )
+        f_val = float(res.fun)
+        if not np.isfinite(f_val):
+            return x0, float(f.evaluate(x0))
+        return res.x, f_val
 
-    # Global search for non-convex
+    starts = [np.zeros(d)] + [rng.uniform(bounds[:, 0], bounds[:, 1]) for _ in range(max(1, n_starts - 1))]
+    best_x, best_f = _local_minimum(starts[0])
+
+    for x0 in starts[1:]:
+        x_cand, f_cand = _local_minimum(x0)
+        if f_cand < best_f:
+            best_x, best_f = x_cand, f_cand
+
     if f.properties().convexity_weight < 0.9:
-        try:
-            res = differential_evolution(f.evaluate, scipy_bounds, maxiter=max(50, 500 // d),
-                                         seed=int(rng.integers(2**31)), tol=1e-8, polish=True)
-            if res.fun < best_f:
-                best_x, best_f = res.x, res.fun
-        except Exception:
-            pass
+        res = differential_evolution(
+            f.evaluate,
+            scipy_bounds,
+            maxiter=max(25, 300 // max(1, d)),
+            seed=int(rng.integers(2**31)),
+            tol=1e-8,
+            polish=True,
+        )
+        if res.success and np.isfinite(res.fun) and res.fun < best_f:
+            best_x, best_f = res.x, float(res.fun)
 
-    return (best_x, best_f) if best_x is not None else (np.zeros(d), f(np.zeros(d)))
+    return best_x, float(best_f)
 
 
 def generate(seed: int) -> Problem:
     """Generate a complete optimization problem from seed."""
-    rng = np.random.default_rng(seed)
-    hp_rng = np.random.default_rng(rng.integers(2**63))
-    func_rng = np.random.default_rng(rng.integers(2**63))
-    opt_rng = np.random.default_rng(rng.integers(2**63))
+    hp_rng, func_rng, opt_rng = _spawn_rngs(seed, 3)
 
     hp = sample_hyperparameters(hp_rng)
     bounds = np.array([[-5 * hp.length_scale, 5 * hp.length_scale]] * hp.dimension)

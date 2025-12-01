@@ -6,9 +6,9 @@ No presets, no hand-crafting.
 f(x) = γ·(quadratic + softmax_planes) + (1-γ)·spectral + ε‖x‖²
 """
 
-from .env import Actor, Session, Query
-from .generator import generate, Problem, Hyperparameters, PRIORS
-from .function_ast import (
+from .bbo import Actor, Session, Query
+from ._generator import generate, Problem, Hyperparameters, PRIORS
+from ._function import (
     RandomFunction,
     FunctionProperties,
     random_psd,

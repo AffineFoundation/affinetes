@@ -5,8 +5,7 @@ where components are sampled from well-understood distributions.
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Callable
+from dataclasses import dataclass, field
 import numpy as np
 
 
@@ -38,30 +37,31 @@ class FunctionProperties:
         return self.lipschitz_estimate * np.sqrt(self.dimension / T)
 
 
+@dataclass(frozen=True, slots=True)
 class RandomFunction:
-    """A random function built from quadratic + piecewise-linear + spectral components."""
+    """Random function = γ·(quadratic + softmax planes) + (1-γ)·spectral + ε‖x‖²."""
 
-    def __init__(
-        self,
-        H: np.ndarray,           # Hessian (d×d PSD)
-        g: np.ndarray,           # Linear term (d,)
-        c: float,                # Constant
-        A: np.ndarray,           # Plane normals (n_planes×d)
-        b: np.ndarray,           # Plane offsets (n_planes,)
-        tau: float,              # Softmax temperature
-        omega: np.ndarray,       # Frequencies (n_freq×d)
-        alpha: np.ndarray,       # Amplitudes (n_freq,)
-        phi: np.ndarray,         # Phases (n_freq,)
-        gamma: float,            # Convexity weight
-        eps: float,              # Regularization
-        props: FunctionProperties,
-    ):
-        self.H, self.g, self.c = H, g, c
-        self.A, self.b, self.tau = A, b, tau
-        self.omega, self.alpha, self.phi = omega, alpha, phi
-        self.gamma, self.eps = gamma, eps
-        self.props = props
-        self._d = len(g)
+    H: np.ndarray           # (d×d) PSD
+    g: np.ndarray           # (d,) linear term
+    c: float                # constant offset
+    A: np.ndarray           # (n_planes×d) plane normals
+    b: np.ndarray           # (n_planes,) plane offsets
+    tau: float              # softmax temperature
+    omega: np.ndarray       # (n_freq×d) frequencies
+    alpha: np.ndarray       # (n_freq,) amplitudes
+    phi: np.ndarray         # (n_freq,) phases
+    gamma: float            # convexity weight
+    eps: float              # small strongly-convex regularizer
+    props: FunctionProperties
+
+    _d: int = field(init=False, repr=False)
+    _has_planes: bool = field(init=False, repr=False)
+    _has_spectral: bool = field(init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "_d", self.g.shape[0])
+        object.__setattr__(self, "_has_planes", self.b.size > 0)
+        object.__setattr__(self, "_has_spectral", self.alpha.size > 0)
 
     def __call__(self, x: np.ndarray) -> float:
         return self.evaluate(x)
@@ -73,39 +73,55 @@ class RandomFunction:
         return self.props
 
     def evaluate(self, x: np.ndarray) -> float:
-        x = np.asarray(x)
+        x = self._ensure_vector(x)
         f_quad = 0.5 * x @ self.H @ x + self.g @ x + self.c
-        f_pwl = self._logsumexp(self.A @ x + self.b, self.tau) if len(self.b) else 0.0
-        f_spec = np.sum(self.alpha * np.cos(self.omega @ x + self.phi)) if len(self.alpha) else 0.0
+        f_pwl = self._logsumexp(self.A @ x + self.b, self.tau) if self._has_planes else 0.0
+        if self._has_spectral:
+            phases = self.omega @ x + self.phi
+            f_spec = np.sum(self.alpha * np.cos(phases))
+        else:
+            f_spec = 0.0
         return float(self.gamma * (f_quad + f_pwl) + (1 - self.gamma) * f_spec + self.eps * (x @ x))
 
     def gradient(self, x: np.ndarray) -> np.ndarray:
-        x = np.asarray(x)
+        x = self._ensure_vector(x)
         grad = self.gamma * (self.H @ x + self.g) + 2 * self.eps * x
 
-        if len(self.b):
+        if self._has_planes:
             w = self._softmax(self.A @ x + self.b, self.tau)
             grad += self.gamma * (self.A.T @ w)
 
-        if len(self.alpha):
-            grad += (1 - self.gamma) * (self.omega.T @ (-self.alpha * np.sin(self.omega @ x + self.phi)))
+        if self._has_spectral:
+            phases = self.omega @ x + self.phi
+            grad += (1 - self.gamma) * (self.omega.T @ (-self.alpha * np.sin(phases)))
 
         return grad
 
     def hessian(self, x: np.ndarray) -> np.ndarray:
-        x = np.asarray(x)
+        x = self._ensure_vector(x)
         hess = self.gamma * self.H + 2 * self.eps * np.eye(self._d)
 
-        if len(self.b):
+        if self._has_planes:
             w = self._softmax(self.A @ x + self.b, self.tau)
             mu = self.A.T @ w
-            hess += self.gamma / self.tau * (self.A.T @ np.diag(w) @ self.A - np.outer(mu, mu))
+            weighted_A = self.A.T * w
+            pwl_hess = weighted_A @ self.A - np.outer(mu, mu)
+            hess += self.gamma / self.tau * pwl_hess
 
-        if len(self.alpha):
-            coeffs = -self.alpha * np.cos(self.omega @ x + self.phi)
-            hess += (1 - self.gamma) * (self.omega.T @ np.diag(coeffs) @ self.omega)
+        if self._has_spectral:
+            phases = self.omega @ x + self.phi
+            coeffs = -self.alpha * np.cos(phases)
+            hess += (1 - self.gamma) * ((self.omega.T * coeffs) @ self.omega)
 
         return hess
+
+    def _ensure_vector(self, x: np.ndarray) -> np.ndarray:
+        x_arr = np.asarray(x, dtype=np.float64)
+        original_shape = x_arr.shape
+        x_vec = x_arr.reshape(-1)
+        if x_vec.shape[0] != self._d:
+            raise ValueError(f"Expected vector of length {self._d}, got shape {original_shape}")
+        return x_vec
 
     @staticmethod
     def _logsumexp(z: np.ndarray, tau: float) -> float:

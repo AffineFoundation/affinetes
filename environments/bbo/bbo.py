@@ -10,10 +10,10 @@ from typing import Any, Dict, List, Optional, Sequence
 import time
 import numpy as np
 
-from .generator import generate, Problem
+from ._generator import generate, Problem
 
 
-@dataclass
+@dataclass(slots=True)
 class Query:
     x: np.ndarray
     value: float
@@ -21,7 +21,7 @@ class Query:
     time: float = field(default_factory=time.time)
 
 
-@dataclass
+@dataclass(slots=True)
 class Session:
     problem: Problem
     allow_gradient: bool = True
@@ -49,12 +49,17 @@ class Session:
             raise ValueError(f"Point outside [{b[0,0]:.1f}, {b[0,1]:.1f}]^{d}")
         return x
 
-    def query(self, x: Sequence[float], with_grad: bool = False) -> Dict[str, Any]:
+    def _ensure_budget(self) -> None:
         if self.n_queries >= self.budget:
             raise ValueError(f"Budget exhausted ({self.budget} queries)")
+
+    def _ensure_gradient_allowed(self, with_grad: bool) -> None:
         if with_grad and not self.allow_gradient:
             raise ValueError("Gradient queries not allowed")
 
+    def query(self, x: Sequence[float], with_grad: bool = False) -> Dict[str, Any]:
+        self._ensure_budget()
+        self._ensure_gradient_allowed(with_grad)
         x = self._validate(x)
         f = self.problem.function
         val = f(x)
@@ -100,12 +105,10 @@ class Actor:
     """
 
     def __init__(self, seed: Optional[int] = None):
-        seed = seed if seed is not None else np.random.default_rng().integers(2**31)
-        self.session = Session(generate(seed))
+        self.session = Session(generate(self._normalize_seed(seed)))
 
     async def reset(self, seed: Optional[int] = None, allow_gradient: bool = True) -> Dict[str, Any]:
-        seed = seed if seed is not None else np.random.default_rng().integers(2**31)
-        self.session = Session(generate(seed), allow_gradient)
+        self.session = Session(generate(self._normalize_seed(seed)), allow_gradient)
         return await self.spec()
 
     async def spec(self) -> Dict[str, Any]:
@@ -173,3 +176,7 @@ class Actor:
             "scoring": "exp(-regret/lower_bound), success if ratio < 2",
             "function": "γ·(quadratic + softmax_planes) + (1-γ)·spectral + ε‖x‖²",
         }
+
+    @staticmethod
+    def _normalize_seed(seed: Optional[int]) -> int:
+        return int(seed if seed is not None else np.random.default_rng().integers(2**31))
