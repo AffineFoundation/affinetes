@@ -33,7 +33,6 @@ async def main():
         mode="docker",
         env_vars={"CHUTES_API_KEY": api_key},
         pull=False,
-        cleanup=False,
     )
     print("   ✓ Environment loaded (container started with HTTP server)")
 

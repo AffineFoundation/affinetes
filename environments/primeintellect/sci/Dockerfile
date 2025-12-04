@@ -6,8 +6,18 @@ RUN apt-get update && apt-get install -y \
     git \
     && rm -rf /var/lib/apt/lists/*
 
-# Pre-download HuggingFace dataset during build to avoid runtime downloads
-RUN pip install datasets && python3 -c "from datasets import load_dataset; load_dataset('PrimeIntellect/INTELLECT-3-RL', 'science', split='train')"
+# Install datasets package (shared layer across all primeintellect environments)
+RUN pip install --no-cache-dir datasets
+
+# Pre-download ALL INTELLECT-3-RL dataset subsets (shared layer across all environments)
+# This ensures all four environments (mth/sci/cde/lgc) share the same cached dataset layer
+RUN python3 -c "from datasets import load_dataset; \
+    print('Downloading all INTELLECT-3-RL subsets for cache sharing...'); \
+    load_dataset('PrimeIntellect/INTELLECT-3-RL', 'math', split='train'); \
+    load_dataset('PrimeIntellect/INTELLECT-3-RL', 'science', split='train'); \
+    load_dataset('PrimeIntellect/INTELLECT-3-RL', 'code', split='train'); \
+    load_dataset('PrimeIntellect/INTELLECT-3-RL', 'logic', split='train'); \
+    print('All subsets cached successfully!')"
 
 # Set working directory
 WORKDIR /app
