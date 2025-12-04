@@ -9,7 +9,7 @@ load_dotenv(override=True)
 
 async def main():
     print("\n" + "=" * 60)
-    print("Affinetes: Science Environment Evaluation Example")
+    print("Affinetes: Math Environment Evaluation Example")
     print("=" * 60)
 
     api_key = os.getenv("CHUTES_API_KEY")
@@ -19,17 +19,17 @@ async def main():
         print("   Or create .env file with: CHUTES_API_KEY=your-key")
         sys.exit(1)
 
-    print("\n1. Building Docker image for science environment...")
-    # Build the image from the sci environment directory
+    print("\n1. Building Docker image for math environment...")
+    # Build the image from the mth environment directory
     af_env.build_image_from_env(
-        env_path="environments/sci",
-        image_tag="science:latest",
+        env_path="environments/primeintellect/mth",
+        image_tag="math:latest",
     )
     print("   ✓ Image built successfully")
     
-    print("\n2. Loading science environment from image 'science:latest'...")
+    print("\n2. Loading math environment from image 'math:latest'...")
     env = af_env.load_env(
-        image="science:latest",
+        image="math:latest",
         mode="docker",
         env_vars={"CHUTES_API_KEY": api_key},
         pull=False,
@@ -41,11 +41,11 @@ async def main():
         print("\n3. Available methods in environment:")
         await env.list_methods(print_info=True)
 
-        print("\n4. Running science evaluation in container (async)...")
+        print("\n4. Running math evaluation in container (async)...")
         result = await env.evaluate(
             model="deepseek-ai/DeepSeek-V3",
             base_url="https://llm.chutes.ai/v1",
-            task_id=100,  # Deterministic task selection
+            task_id=42,  # Deterministic task selection
             temperature=0.7,
             timeout=600
         )

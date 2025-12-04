@@ -1,6 +1,7 @@
 import affinetes as af_env
 import os
 import sys
+import json
 import asyncio
 from dotenv import load_dotenv
 
@@ -9,7 +10,7 @@ load_dotenv(override=True)
 
 async def main():
     print("\n" + "=" * 60)
-    print("Affinetes: Math Environment Evaluation Example")
+    print("Affinetes: Code Environment Evaluation Example")
     print("=" * 60)
 
     api_key = os.getenv("CHUTES_API_KEY")
@@ -19,17 +20,17 @@ async def main():
         print("   Or create .env file with: CHUTES_API_KEY=your-key")
         sys.exit(1)
 
-    print("\n1. Building Docker image for math environment...")
-    # Build the image from the mth environment directory
+    print("\n1. Building Docker image for code environment...")
+    # Build the image from the cde environment directory
     af_env.build_image_from_env(
-        env_path="environments/mth",
-        image_tag="math:latest",
+        env_path="environments/primeintellect/cde",
+        image_tag="code:latest",
     )
     print("   ✓ Image built successfully")
     
-    print("\n2. Loading math environment from image 'math:latest'...")
+    print("\n2. Loading code environment from image 'code:latest'...")
     env = af_env.load_env(
-        image="math:latest",
+        image="code:latest",
         mode="docker",
         env_vars={"CHUTES_API_KEY": api_key},
         pull=False,
@@ -41,11 +42,11 @@ async def main():
         print("\n3. Available methods in environment:")
         await env.list_methods(print_info=True)
 
-        print("\n4. Running math evaluation in container (async)...")
+        print("\n4. Running code evaluation in container (async)...")
         result = await env.evaluate(
             model="deepseek-ai/DeepSeek-V3",
             base_url="https://llm.chutes.ai/v1",
-            task_id=42,  # Deterministic task selection
+            task_id=50,  # Deterministic task selection
             temperature=0.7,
             timeout=600
         )
@@ -66,7 +67,9 @@ async def main():
             print(f"\n   Extra info:")
             print(f"     Seed: {result['extra'].get('seed')}")
             print(f"     Dataset index: {result['extra'].get('dataset_index')}")
-            print(f"     Standard answer: {result['extra'].get('answer', '')[:100]}...")
+            print(f"     Source: {result['extra'].get('source', 'unknown')}")
+            test_cases = result['extra'].get('test_cases', [])
+            print(f"     Number of tests: {len(json.loads(test_cases).get('inputs', [])) if test_cases else 0}")
             
             if 'conversation' in result['extra']:
                 conv = result['extra']['conversation']
