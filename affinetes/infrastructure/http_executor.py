@@ -33,7 +33,7 @@ class HTTPExecutor:
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(
                 connect=30.0,  # 30s for connection establishment (SSH tunnel needs more time)
-                read=timeout,  # User-specified timeout for response
+                read=None,     # No read timeout - allow long-running tasks
                 write=30.0,    # 30s for sending request
                 pool=30.0      # 30s for acquiring connection from pool
             ),
@@ -108,7 +108,9 @@ class HTTPExecutor:
                 f"HTTP {e.response.status_code}: {e.response.text}"
             )
         except Exception as e:
-            raise ExecutionError(f"Failed to call method '{method_name}': {e}")
+            raise ExecutionError(
+                f"Failed to call method '{method_name}': {type(e).__name__}: {e}"
+            ) from e
     
     async def list_methods(self) -> list:
         """List available methods with detailed information (async)"""
