@@ -184,12 +184,27 @@ class ProgramExecutor:
         if truncated and proc.poll() is None:
             try:
                 if os.name != "nt":
+                    # Send SIGTERM first
                     os.killpg(proc.pid, 15)
-                    time.sleep(0.2)
+                    # Wait up to 1 second for graceful shutdown
+                    for _ in range(10):
+                        time.sleep(0.1)
+                        if proc.poll() is not None:
+                            break
+                    # Force kill if still running
                     if proc.poll() is None:
                         os.killpg(proc.pid, 9)
+                        # Wait to reap zombie and prevent accumulation
+                        try:
+                            proc.wait(timeout=0.5)
+                        except subprocess.TimeoutExpired:
+                            pass
                 else:
                     proc.kill()
+                    try:
+                        proc.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        pass
             except Exception:
                 pass
 

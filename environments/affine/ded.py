@@ -156,10 +156,18 @@ class DEDTask:
                 continue
 
             try:
-                out, err = await loop.run_in_executor(
-                    None, self._executor.execute, exec_prog, inp
+                # Add timeout protection: executor timeout (30s) + 5s buffer
+                out, err = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        None, self._executor.execute, exec_prog, inp
+                    ),
+                    timeout=self._executor.timeout + 5
                 )
+            except asyncio.TimeoutError:
+                logger.warning(f"Test case {i} timed out after {self._executor.timeout + 5}s")
+                out, err = "", "[EXECUTOR_TIMEOUT]"
             except Exception as e:
+                logger.warning(f"Test case {i} raised exception: {e}")
                 out, err = "", str(e)
 
             ok_run = not err.strip()
@@ -171,7 +179,8 @@ class DEDTask:
                 passed += 1
                 logger.debug(f"Test case {i} passed")
             else:
-                logger.debug(f"Test case {i} failed. Got: {out_norm!r}, Expected: {exp_norm!r}")
+                logger.debug(f"Test case {i} failed. Got: {out_norm!r}, Expected: {exp_norm!r}, Error: {err[:100]}")
+                break
 
         score = 1.0 if passed == total else 0.0
         logger.debug(f"DED evaluation completed with score: {score} ({passed}/{total})")
