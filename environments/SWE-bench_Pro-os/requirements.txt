@@ -1,0 +1,6 @@
+# SWE-bench Pro environment dependencies
+datasets>=2.14.0
+mini-swe-agent
+litellm>=1.0.0
+docker>=6.0.0
+pyyaml>=6.0
