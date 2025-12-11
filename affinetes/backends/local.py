@@ -131,12 +131,11 @@ class LocalBackend(AbstractBackend):
             # Initialize connection address
             local_host, local_port = self._initialize_connection_address()
             
-            # Create HTTP executor
+            # Create HTTP executor with configurable timeout
             self._http_executor = HTTPExecutor(
                 container_ip=local_host,
                 container_port=local_port,
                 env_type=self._env_type,
-                timeout=600
             )
             
             # Record container start time for restart detection
@@ -354,11 +353,11 @@ class LocalBackend(AbstractBackend):
             local_host, local_port = self._initialize_connection_address()
             
             # Create HTTP executor with accessible address
+            # Use longer timeout for long-running tasks (default 1800s = 30 minutes)
             self._http_executor = HTTPExecutor(
                 container_ip=local_host,
                 container_port=local_port,
                 env_type=self._env_type,
-                timeout=600
             )
             
             # Wait for HTTP server to be ready

@@ -17,7 +17,6 @@ class HTTPExecutor:
         container_ip: str,
         container_port: int = 8000,
         env_type: str = None,
-        timeout: int = 600
     ):
         """
         Args:
@@ -28,7 +27,6 @@ class HTTPExecutor:
         """
         self.base_url = f"http://{container_ip}:{container_port}"
         self.env_type = env_type
-        self.timeout = timeout
         # Separate connect and read timeouts to avoid long hangs on connection
         self.client = httpx.AsyncClient(
             timeout=httpx.Timeout(
@@ -42,7 +40,7 @@ class HTTPExecutor:
                 max_keepalive_connections=200  # Increased from 20 to 200 to support high concurrency
             )
         )
-        logger.debug(f"HTTPExecutor initialized: {self.base_url} (type: {env_type}, connect_timeout=30s, read_timeout={timeout}s)")
+        logger.debug(f"HTTPExecutor initialized: {self.base_url} (type: {env_type}, connect_timeout=30s)")
     
     async def call_method(
         self,
