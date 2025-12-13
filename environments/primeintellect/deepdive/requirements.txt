@@ -1,0 +1,12 @@
+# Core dependencies
+datasets
+httpx
+openai
+pydantic
+
+# DeepDive specific dependencies
+aiofiles>=24.1.0
+aiohttp>=3.10.0
+pdfminer-six>=20251107
+trafilatura>=2.0.0
+verifiers>=0.1.8
