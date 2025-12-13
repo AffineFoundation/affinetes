@@ -34,10 +34,10 @@ logger.setLevel(os.environ.get("I3_CODE_LOG_LEVEL", "INFO"))
 INSTRUCTION_PROMPT = "Solve the programming task below in a Python markdown code block."
 
 # Default timeout per test case (seconds)
-DEFAULT_TEST_TIMEOUT = 60
+DEFAULT_TEST_TIMEOUT = 20
 
 # Memory limit per subprocess in MB (prevent container OOM)
-SUBPROCESS_MEMORY_LIMIT_MB = 512
+SUBPROCESS_MEMORY_LIMIT_MB = 1024
 
 # Global semaphore for test concurrency control (lazy initialization)
 _GLOBAL_TEST_SEMAPHORE = None
@@ -46,7 +46,7 @@ def _get_semaphore():
     """Get or create global test semaphore"""
     global _GLOBAL_TEST_SEMAPHORE
     if _GLOBAL_TEST_SEMAPHORE is None:
-        _GLOBAL_TEST_SEMAPHORE = asyncio.Semaphore(5)
+        _GLOBAL_TEST_SEMAPHORE = asyncio.Semaphore(1)
     return _GLOBAL_TEST_SEMAPHORE
 
 
