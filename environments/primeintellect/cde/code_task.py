@@ -34,7 +34,7 @@ logger.setLevel(os.environ.get("I3_CODE_LOG_LEVEL", "INFO"))
 INSTRUCTION_PROMPT = "Solve the programming task below in a Python markdown code block."
 
 # Default timeout per test case (seconds)
-DEFAULT_TEST_TIMEOUT = 20
+DEFAULT_TEST_TIMEOUT = 40
 
 # Memory limit per subprocess in MB (prevent container OOM)
 SUBPROCESS_MEMORY_LIMIT_MB = 1024
