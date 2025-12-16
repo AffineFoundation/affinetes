@@ -99,6 +99,8 @@ def load_env(
     mem_limit: Optional[str] = None,
     cleanup: bool = True,
     connect_only: bool = False,
+    host_network: bool = False,
+    host_port: Optional[int] = None,
     **backend_kwargs
 ) -> EnvironmentWrapper:
     """
@@ -122,6 +124,8 @@ def load_env(
         mem_limit: Memory limit for container (e.g., "512m", "1g", "2g")
         cleanup: If True, automatically stop and remove container on exit (default: True)
                  If False, container will continue running after program exits
+        host_network: If True, use host network mode (network_mode="host")
+        host_port: Port to use when host_network=True (default: 8000). Useful to avoid port conflicts.
         **backend_kwargs: Additional backend-specific parameters
         
     Returns:
@@ -188,6 +192,8 @@ def load_env(
                 mem_limit=mem_limit,
                 cleanup=cleanup,
                 connect_only=connect_only,
+                host_network=host_network,
+                host_port=host_port,
                 **backend_kwargs
             )
         
@@ -205,6 +211,8 @@ def load_env(
             pull=pull,
             mem_limit=mem_limit,
             cleanup=cleanup,
+            host_network=host_network,
+            host_port=host_port,
             **backend_kwargs
         )
         
@@ -225,6 +233,8 @@ def _load_single_instance(
     mem_limit: Optional[str] = None,
     cleanup: bool = True,
     connect_only: bool = False,
+    host_network: bool = False,
+    host_port: Optional[int] = None,
     **backend_kwargs
 ) -> EnvironmentWrapper:
     """Load a single instance"""
@@ -242,6 +252,8 @@ def _load_single_instance(
             mem_limit=mem_limit,
             auto_cleanup=cleanup,
             connect_only=connect_only,
+            host_network=host_network,
+            host_port=host_port,
             **backend_kwargs
         )
     elif mode == "basilica":
@@ -294,6 +306,8 @@ def _load_multi_instance(
     pull: bool = False,
     mem_limit: Optional[str] = None,
     cleanup: bool = True,
+    host_network: bool = False,
+    host_port: Optional[int] = None,
     **backend_kwargs
 ) -> EnvironmentWrapper:
     """Load multiple instances with load balancing"""
@@ -330,6 +344,8 @@ def _load_multi_instance(
                     pull=pull,
                     mem_limit=mem_limit,
                     cleanup=cleanup,
+                    host_network=host_network,
+                    host_port=host_port + i if host_port else None,
                     **backend_kwargs
                 )
                 for i in range(replicas)
@@ -392,6 +408,8 @@ async def _deploy_instance(
     pull: bool = False,
     mem_limit: Optional[str] = None,
     cleanup: bool = True,
+    host_network: bool = False,
+    host_port: Optional[int] = None,
     **backend_kwargs
 ) -> InstanceInfo:
     """Deploy a single instance (async)"""
@@ -416,6 +434,8 @@ async def _deploy_instance(
             pull=pull,
             mem_limit=mem_limit,
             auto_cleanup=cleanup,
+            host_network=host_network,
+            host_port=host_port,
             **backend_kwargs
         )
     else:
