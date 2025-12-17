@@ -38,6 +38,8 @@ class LocalBackend(AbstractBackend):
         mem_limit: Optional[str] = None,
         auto_cleanup: bool = True,
         connect_only: bool = False,
+        host_network: bool = False,
+        host_port: Optional[int] = None,
         **docker_kwargs
     ):
         """
@@ -55,6 +57,8 @@ class LocalBackend(AbstractBackend):
             auto_cleanup: If True, automatically stop and remove container on cleanup (default: True)
                          If False, container will continue running after cleanup
             connect_only: If True, only connect to existing container without creating new one
+            host_network: If True, use host network mode (network_mode="host")
+            host_port: Port to use when host_network=True (default: 8000)
             **docker_kwargs: Additional Docker container options
         """
         self.image = image
@@ -83,6 +87,8 @@ class LocalBackend(AbstractBackend):
         self._pull = pull
         self._mem_limit = mem_limit
         self._auto_cleanup = auto_cleanup
+        self._host_network = host_network
+        self._host_port = host_port or 8000
         
         # SSH tunnel for remote access
         self._is_remote = host and host.startswith("ssh://")
@@ -311,11 +317,17 @@ class LocalBackend(AbstractBackend):
                 logger.info(f"Environment type (detected): {self._env_type}")
             
             # Merge environment variables
-            if env_vars:
+            merged_env_vars = env_vars.copy() if env_vars else {}
+            
+            # Add port configuration to environment if using host network
+            if self._host_network:
+                merged_env_vars["AFFINETES_PORT"] = str(self._host_port)
+            
+            if merged_env_vars:
                 if "environment" in docker_kwargs:
-                    docker_kwargs["environment"].update(env_vars)
+                    docker_kwargs["environment"].update(merged_env_vars)
                 else:
-                    docker_kwargs["environment"] = env_vars
+                    docker_kwargs["environment"] = merged_env_vars
             
             # Prepare container configuration
             container_config = {
@@ -328,9 +340,14 @@ class LocalBackend(AbstractBackend):
                 **docker_kwargs
             }
             
-            # Network handling: Only needed for local DOOD deployment
-            # Remote deployment uses SSH tunnel, so no network configuration needed
-            if not self._is_remote:
+            # Network handling
+            if self._host_network:
+                # Host network mode requested
+                container_config["network_mode"] = "host"
+                logger.info("Using host network mode (network_mode='host')")
+            elif not self._is_remote:
+                # Only needed for local DOOD deployment
+                # Remote deployment uses SSH tunnel, so no network configuration needed
                 # Detect runtime environment
                 runtime_env = self._detect_runtime_environment()
                 
@@ -350,7 +367,13 @@ class LocalBackend(AbstractBackend):
             self._container = self._docker_manager.start_container(**container_config)
             
             # Initialize connection address
-            local_host, local_port = self._initialize_connection_address()
+            if self._host_network:
+                # Host network mode: use localhost with configured port
+                local_host = "localhost"
+                local_port = self._host_port
+                logger.info(f"Host network mode, accessing via localhost: {local_host}:{local_port}")
+            else:
+                local_host, local_port = self._initialize_connection_address()
             
             # Create HTTP executor with accessible address
             # Use longer timeout for long-running tasks (default 1800s = 30 minutes)

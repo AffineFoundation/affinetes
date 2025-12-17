@@ -36,7 +36,7 @@ agent:
     2. Provide exactly ONE bash command to execute
 
     ## Important Boundaries
-    - MODIFY: Regular source code files in /testbed (this is the working directory for all your subsequent commands)
+    - MODIFY: Regular source code files in /app (this is the working directory for all your subsequent commands)
     - DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.)
 
     ## Recommended Workflow
@@ -209,22 +209,18 @@ agent:
 
     If you have completed your assignment, please consult the first message about how to
     submit your solution (you will not be able to continue working on this task after that).
-  step_limit: 250
-  cost_limit: 3.
+  step_limit: 0.
+  cost_limit: 0.
 
 environment:
-  cwd: "/testbed"
-  timeout: 60
   env:
     PAGER: cat
     MANPAGER: cat
     LESS: -R
     PIP_PROGRESS_BAR: 'off'
     TQDM_DISABLE: '1'
-  environment_class: docker
 
 model:
-  model_name: "anthropic/claude-sonnet-4-5-20250929"
   model_kwargs:
-    drop_params: true
     temperature: 0.0
+    drop_params: true

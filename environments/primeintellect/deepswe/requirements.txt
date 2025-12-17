@@ -1,0 +1,7 @@
+verifiers>=0.1.8
+prime-sandboxes>=0.2.4
+swebench==4.1.0
+swesmith
+datasets
+openai
+httpx

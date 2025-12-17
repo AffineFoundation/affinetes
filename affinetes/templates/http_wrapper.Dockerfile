@@ -18,10 +18,9 @@ RUN echo "" > /app/_affinetes/__init__.py
 # Make directory world-writable to avoid permission issues
 RUN chmod -R 777 /app/_affinetes
 
-# Expose HTTP port
-EXPOSE 8000
-
-# Start server with configurable workers (default: 2)
-# Set UVICORN_WORKERS environment variable to override
+# Start server with configurable workers and port
+# Environment variables:
+#   AFFINETES_PORT: Server port (default: 8000)
+#   UVICORN_WORKERS: Number of workers (default: 2)
 WORKDIR /app
-CMD sh -c "python -m uvicorn _affinetes.server:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}"
+CMD sh -c "python -m uvicorn _affinetes.server:app --host 0.0.0.0 --port ${AFFINETES_PORT:-8000} --workers ${UVICORN_WORKERS:-2}"
