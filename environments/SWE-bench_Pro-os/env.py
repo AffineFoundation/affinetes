@@ -769,6 +769,11 @@ fi
         Returns:
             Result dict with score, patch, and conversation
         """
+        
+        # Reinnitialize script path
+        self.run_scripts_dir = "scripts/evaluation/swe_instance_scripts/run_scripts"
+        self.dockerfiles_dir = "scripts/evaluation/swe_instance_scripts/dockerfiles"
+        
         start = time.time()
         
         # Validate task_id
