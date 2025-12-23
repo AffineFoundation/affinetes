@@ -32,8 +32,8 @@ class SudokuVerifier(Verifier):
                             return False
             except (SyntaxError, ValueError):
                 return False
-            # Get original puzzle grid from metadata
-            original_sudoku = data.metadata.get("puzzle_grid")
+            # Get original puzzle grid from metadata (try original_sudoku first, fallback to puzzle_grid)
+            original_sudoku = data.metadata.get("original_sudoku") or data.metadata.get("puzzle_grid")
             if not original_sudoku:
                 return False
             if not self._is_valid_sudoku(sudoku_solution, grid_size, box_size):
