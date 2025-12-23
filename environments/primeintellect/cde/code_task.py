@@ -44,7 +44,7 @@ def _get_semaphore():
     """Get or create global test semaphore"""
     global _GLOBAL_TEST_SEMAPHORE
     if _GLOBAL_TEST_SEMAPHORE is None:
-        _GLOBAL_TEST_SEMAPHORE = asyncio.Semaphore(5)
+        _GLOBAL_TEST_SEMAPHORE = asyncio.Semaphore(20)
     return _GLOBAL_TEST_SEMAPHORE
 
 
