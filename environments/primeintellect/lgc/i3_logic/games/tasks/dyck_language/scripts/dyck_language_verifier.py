@@ -5,7 +5,10 @@ from i3_logic.base.verifier import Verifier
 class DyckLanguageVerifier(Verifier):
     def verify(self, data: Data, test_answer: str) -> bool:
         try:
-            full_sequence = data.metadata["full_sequence"]
+            # Try to get full_sequence, fallback to answer if not found
+            full_sequence = data.metadata.get("full_sequence")
+            if not full_sequence:
+                full_sequence = data.answer
 
             extracted_answer = self.extract_answer(test_answer)
 

@@ -1,0 +1,2 @@
+basilica-sdk>=0.10.0
+affinetes

@@ -1,0 +1,5 @@
+open-spiel>=1.0.0
+numpy>=1.24.0
+openai>=1.0.0
+httpx>=0.24.0
+pydantic>=2.0.0

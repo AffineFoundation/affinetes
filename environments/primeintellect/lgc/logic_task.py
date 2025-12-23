@@ -16,13 +16,12 @@ class LogicTask:
     
     def __init__(
         self,
-        dataset_name: str = "PrimeIntellect/INTELLECT-3-RL",
-        dataset_subset: str = "logic",
+        dataset_name: str = "AffineFoundation/affine-lgc",
         dataset_split: str = "train",
         dataset_shuffle: bool = False,
         difficulty_key: str = "avg@16_qwen3_4b_instruct_2507",
         min_avg_reward: float = 0.0,
-        max_avg_reward: float = 1.0,
+        max_avg_reward: float = 100.0,
         tasks_to_skip: list = None,
     ):
         """
@@ -43,10 +42,10 @@ class LogicTask:
         
         # Load and filter dataset
         self.dataset = (
-            load_dataset(dataset_name, dataset_subset, split=dataset_split)
+            load_dataset(dataset_name, split=dataset_split)
             .map(lambda x: {"info": json.loads(x["info"]), "answer": ""})
             .filter(lambda x: x["info"]["task"] not in tasks_to_skip)
-            .filter(lambda x: min_avg_reward <= x.get(difficulty_key, 0) <= max_avg_reward)
+            .filter(lambda x: min_avg_reward <= (x.get(difficulty_key) or 0) <= max_avg_reward)
             .select_columns(["question", "answer", "info"])
         )
         
@@ -81,6 +80,7 @@ class LogicTask:
                 "info": sample["info"],
                 "task_id": task_id,
                 "dataset_index": idx,
+                "dataset_len": len(self.dataset),
                 "task_type": sample["info"]["task"]
             }
         )
