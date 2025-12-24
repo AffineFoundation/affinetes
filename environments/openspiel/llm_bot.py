@@ -149,7 +149,9 @@ class LLMBot(pyspiel.Bot):
         for attempt in range(self._max_api_retries):
             try:
                 response, usage = self._execute_llm_call()
-                self._accumulate_usage(usage)
+                # Store the latest usage (do NOT accumulate, as it's already cumulative)
+                if usage:
+                    self._total_usage = usage.copy()
                 return response, usage
             except Exception as e:
                 if attempt < self._max_api_retries - 1:
@@ -175,12 +177,6 @@ class LLMBot(pyspiel.Bot):
 
         with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
             return executor.submit(run_async).result()
-
-    def _accumulate_usage(self, usage: Optional[Dict]):
-        """Accumulate token usage statistics"""
-        if usage:
-            for key in ("prompt_tokens", "completion_tokens", "total_tokens"):
-                self._total_usage[key] += usage.get(key, 0)
 
     def _handle_api_failure(self, error: Exception):
         """Handle final API failure after all retries"""
