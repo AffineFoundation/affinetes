@@ -35,3 +35,7 @@ Winning: First to get 3 in a row wins."""
         obstype_var = config_id % 2
         obstype_str = "reveal-nothing" if obstype_var == 0 else "reveal-numturns"
         return {"obstype": obstype_str}
+    
+    def get_mcts_config(self) -> tuple[int, int]:
+        """3×3 grid, imperfect information. Simple game with hidden opponent moves."""
+        return (3000, 150)

@@ -1,4 +1,10 @@
-#!/usr/bin/env python3
+# /// script
+# dependencies = [
+#   "basilica-sdk>=0.10.0",
+#   "affinetes",
+# ]
+# ///
+
 """
 Basilica Evaluator - Deploy affinetes environment and run evaluation on Basilica
 

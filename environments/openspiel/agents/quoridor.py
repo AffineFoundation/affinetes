@@ -25,13 +25,7 @@ Each turn, choose ONE action:
 - Place wall: Block 2 spaces between squares (horizontal or vertical). Limited walls per player (8-10).
 
 Wall rules: Cannot completely block any player from reaching their goal edge.
-Winning: First pawn to reach target edge wins.
-
-CRITICAL STRATEGY:
-- ALWAYS move toward your goal edge (the opposite side from your start)
-- AVOID returning to previous positions - this wastes turns
-- Use walls strategically to slow opponents, NOT randomly
-- Prioritize forward progress over defensive walls in early game"""
+Winning: First pawn to reach target edge wins."""
     
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
@@ -47,3 +41,7 @@ CRITICAL STRATEGY:
             "board_size": board_size,
             "wall_count": num_walls
         }
+    
+    def get_mcts_config(self) -> tuple[int, int]:
+        """7×7 or 9×9 board, wall placement strategy. MaxGameLength=4×board². Moderate complexity."""
+        return (800, 80)

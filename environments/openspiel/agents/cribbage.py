@@ -20,13 +20,24 @@ class CribbageAgent(BaseGameAgent):
 Setup: 52-card deck. 2-4 players. Deal 5-6 cards per player. Goal: First to 121 points.
 Each player discards cards to form the "crib" (bonus hand for dealer).
 
-Play: Players alternate playing cards. Cannot exceed running total of 31. Score points for:
-- Pairs (2 points), runs (1 per card), sum of 15 (2 points), sum of 31 (2 points).
+Play Phase: Players alternate playing cards. Running total cannot exceed 31. Score points for:
+- Pairs (2 same rank just played): 2 points
+- Three of a kind: 6 points
+- Four of a kind: 12 points
+- Runs (sequence of 3+ cards): 1 point per card in run
+- Sum of 15: 2 points
+- Sum of 31: 2 points
+- Last card before 31: 1 point
 
-Counting: After play, count hand + starter card for combinations (pairs, runs, 15s, flush).
+Example Scoring:
+- Opponent plays 5, you play 5 → Pair, score 2 points (total is 10)
+- Cards 4-5-6 played in sequence → Run of 3, score 3 points
+- Cards sum to 15 → Score 2 points
+
+Counting Phase: After play, count hand + starter card for combinations (pairs, runs, 15s, flush).
 Dealer also counts the crib.
 
-Scoring is complex; points tracked on cribbage board (pegging)."""
+Card Values: Face cards = 10, Ace = 1, others = face value."""
 
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """

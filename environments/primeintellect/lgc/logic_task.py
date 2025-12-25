@@ -16,7 +16,7 @@ class LogicTask:
     
     def __init__(
         self,
-        dataset_name: str = "AffineFoundation/affine-lgc",
+        dataset_name: str = "AffineFoundation/affine-lgc-xlarge",
         dataset_split: str = "train",
         dataset_shuffle: bool = False,
         difficulty_key: str = "avg@16_qwen3_4b_instruct_2507",

@@ -31,3 +31,7 @@ Winning: Capture all opponent pieces or leave opponent with no legal moves."""
         Checkers parameter generation
         """
         return {}
+    
+    def get_mcts_config(self) -> tuple[int, int]:
+        """8×8 board (dark squares only), mandatory captures. MaxGameLength=1000. High complexity."""
+        return (500, 50)

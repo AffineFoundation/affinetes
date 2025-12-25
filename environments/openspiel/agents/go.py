@@ -28,15 +28,18 @@ Winning: Higher score wins."""
 
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
-        Go parameter generation
+        Go parameter generation - Restricting to smaller boards for LLM evaluation
         """
-        size_var = (config_id // 3) % 3
-        komi_var = config_id % 3
+        size_var = config_id % 2
         
-        board_size = 7 + size_var * 2  # 7, 9, 11
-        komi = 6.5 + komi_var * 0.5    # 6.5, 7.0, 7.5
+        board_size = 5 + size_var * 2  # 5 or 7 (reduced from 7/9/11)
+        komi = 7.5  # Standard komi
         
         return {
             "board_size": board_size,
             "komi": komi
         }
+    
+    def get_mcts_config(self) -> tuple[int, int]:
+        """5×5 or 7×7 board. MaxGameLength=2×board². Very high complexity strategy game."""
+        return (300, 30)

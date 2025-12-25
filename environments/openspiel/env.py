@@ -5,6 +5,7 @@ import time
 import random
 import numpy as np
 import asyncio
+import concurrent.futures
 from open_spiel.python.algorithms import evaluate_bots
 from open_spiel.python.bots import uniform_random
 from open_spiel.python.algorithms import mcts
@@ -17,8 +18,96 @@ from game_config import create_game
 from agents import GAME_AGENTS
 
 
+class SafeRandomRolloutEvaluator(mcts.Evaluator):
+    """
+    Safe MCTS evaluator that handles edge cases in Gin Rummy and similar games.
+    
+    Fixes the "ValueError: 'a' cannot be empty" error that occurs when
+    legal_actions() returns an empty list in non-terminal states.
+    """
+    
+    def __init__(self, n_rollouts=1, random_state=None):
+        """
+        Initialize evaluator
+        
+        Args:
+            n_rollouts: Number of random rollouts per evaluation
+            random_state: numpy RandomState for reproducibility
+        """
+        self._n_rollouts = n_rollouts
+        self._random_state = random_state or np.random.RandomState()
+    
+    def evaluate(self, state):
+        """
+        Evaluate state using random rollouts with safety checks
+        
+        Args:
+            state: OpenSpiel state to evaluate
+            
+        Returns:
+            List of returns for each player
+        """
+        # If terminal state, return actual returns
+        if state.is_terminal():
+            return state.returns()
+        
+        # Safety check: if no legal actions in non-terminal state
+        legal_actions = state.legal_actions()
+        if not legal_actions:
+            # This shouldn't happen in well-formed games, but Gin Rummy has edge cases
+            # Return current returns as approximation
+            return state.returns()
+        
+        # Perform n random rollouts
+        total_returns = np.zeros(state.num_players())
+        
+        for _ in range(self._n_rollouts):
+            working_state = state.clone()
+            
+            # Rollout until terminal
+            while not working_state.is_terminal():
+                legal_actions = working_state.legal_actions()
+                
+                # Safety check during rollout
+                if not legal_actions:
+                    # Edge case: non-terminal state with no legal actions
+                    # Break and use current returns
+                    break
+                
+                # Choose random action
+                action = self._random_state.choice(legal_actions)
+                working_state.apply_action(action)
+            
+            # Accumulate returns
+            total_returns += working_state.returns()
+        
+        # Return average returns across rollouts
+        return total_returns / self._n_rollouts
+    
+    def prior(self, state):
+        """
+        Return prior policy (uniform distribution over legal actions)
+        
+        Args:
+            state: OpenSpiel state
+            
+        Returns:
+            List of (action, probability) tuples
+        """
+        legal_actions = state.legal_actions()
+        
+        # Safety check
+        if not legal_actions:
+            return []
+        
+        # Uniform prior
+        prob = 1.0 / len(legal_actions)
+        return [(action, prob) for action in legal_actions]
+
+
 class Actor:
     """OpenSpiel evaluation wrapper"""
+    executor = concurrent.futures.ThreadPoolExecutor(max_workers=100)
 
     def __init__(self, api_key: str = None):
         """
@@ -35,11 +124,10 @@ class Actor:
         seed: int = None,
         model: str = "deepseek-ai/DeepSeek-V3",
         base_url: str = "https://llm.chutes.ai/v1",
-        timeout: int = 600,
+        timeout: int = 1800,
         temperature: float = 0.7,
         api_key: str = None,
-        opponent: str = "random",
-        task_timeout: int = 1800,
+        opponent: str = "mcts",
     ):
         """
         Run single game evaluation
@@ -49,11 +137,10 @@ class Actor:
             seed: Random seed for reproducibility
             model: LLM model name
             base_url: LLM API base URL
-            timeout: API timeout in seconds (per LLM call)
+            timeout: Overall task timeout in seconds (default 1800s = 30min)
             temperature: LLM temperature
             api_key: Override API key
             opponent: Opponent type ("random" or "mcts")
-            task_timeout: Overall task timeout in seconds (default 1800s = 30min)
         """
         if task_id is None:
             task_id = random.randint(0, 10**11 - 1)
@@ -63,34 +150,20 @@ class Actor:
         current_api_key = api_key or self.api_key
         start_time = time.time()
 
-        try:
-            return await asyncio.wait_for(
-                self._run_evaluation(
-                    task_id,
-                    seed,
-                    model,
-                    base_url,
-                    timeout,
-                    temperature,
-                    current_api_key,
-                    opponent,
-                    start_time,
-                ),
-                timeout=task_timeout,
-            )
-        except asyncio.TimeoutError:
-            return self._build_result(
-                game_name="unknown",
-                score=0.0,
-                llm_return=-1.0,
-                llm_player_id=seed % 2,
-                task_id=task_id,
-                seed=seed,
-                opponent=opponent,
-                start_time=start_time,
-                conversation=[],
-                error=f"Task timeout exceeded ({task_timeout}s)",
-            )
+        return await asyncio.wait_for(
+            self._run_evaluation(
+                task_id,
+                seed,
+                model,
+                base_url,
+                temperature,
+                current_api_key,
+                opponent,
+                start_time,
+                timeout,
+            ),
+            timeout=timeout,
+        )
 
     async def _run_evaluation(
         self,
@@ -98,25 +171,24 @@ class Actor:
         seed,
         model,
         base_url,
-        timeout,
         temperature,
         current_api_key,
         opponent,
         start_time,
+        task_timeout,
     ):
-        """Internal method to run evaluation (wrapped by timeout)"""
+        """Internal method to run evaluation with unified error handling"""
         llm_player_id = seed % 2
-
+        game_name = "unknown"
+        llm_bot = None
+        
         try:
             game, game_config = create_game(task_id)
-
+            game_name = game_config["game_name"]
             num_players = game.num_players()
-            
-            # LLM always plays as player with id = llm_player_id % num_players
             llm_player_id = llm_player_id % num_players
 
             # Get agent for this game
-            game_name = game_config["game_name"]
             agent_class = GAME_AGENTS.get(game_name)
             if not agent_class:
                 raise ValueError(f"No agent found for game: {game_name}")
@@ -127,11 +199,11 @@ class Actor:
                 game=game,
                 player_id=llm_player_id,
                 llm_chat_fn=lambda messages: self._llm_chat(
-                    messages, model, base_url, timeout, temperature, current_api_key, seed
+                    messages, model, base_url, temperature, current_api_key, seed
                 ),
                 rng_seed=seed + 1,
                 agent=agent,
-                max_parsing_retries=3,
+                executor=self.executor,
             )
 
             # Create bots for all players
@@ -140,24 +212,25 @@ class Actor:
                 if player_id == llm_player_id:
                     bots.append(llm_bot)
                 else:
-                    # Other players use opponent bots with different seeds
                     opponent_bot = self._create_opponent_bot(
-                        opponent, player_id, seed + 2 + player_id
+                        opponent, player_id, seed + 2 + player_id, game, agent
                     )
                     bots.append(opponent_bot)
 
-            returns = evaluate_bots.evaluate_bots(
-                state=game.new_initial_state(),
-                bots=bots,
-                rng=np.random.RandomState(seed),
+            loop = asyncio.get_event_loop()
+            returns = await loop.run_in_executor(
+                self.executor,
+                evaluate_bots.evaluate_bots,
+                game.new_initial_state(),
+                bots,
+                np.random.RandomState(seed),
             )
 
             llm_return = returns[llm_player_id]
-            # Compute score using game-type-aware logic
             score = self._compute_score(returns, llm_player_id, game)
 
             return self._build_result(
-                game_name=game_config["game_name"],
+                game_name=game_name,
                 score=score,
                 llm_return=llm_return,
                 llm_player_id=llm_player_id,
@@ -171,20 +244,61 @@ class Actor:
                 all_returns=returns,
             )
 
-        except Exception as e:
-            import traceback
-
-            return self._build_result(
-                game_name="unknown",
-                score=0.0,
-                llm_return=-1.0,
+        except asyncio.TimeoutError:
+            # Task timeout - return accumulated data
+            return self._build_error_result(
+                game_name=game_name,
+                error=f"Task timeout exceeded ({task_timeout}s)",
+                llm_bot=llm_bot,
                 llm_player_id=llm_player_id,
                 task_id=task_id,
                 seed=seed,
                 opponent=opponent,
                 start_time=start_time,
-                conversation=[],
-                error=f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}",
+            )
+
+        except Exception as e:
+            # Other exceptions - return accumulated data with error details
+            import traceback
+            from llm_bot import ParsingError
+
+            error_type = type(e).__name__
+            
+            # Special handling for ParsingError: treat as successful sampling with 0 score
+            # The error is already recorded in conversation history by llm_bot
+            if isinstance(e, ParsingError):
+                print(f"[ParsingError] Game ended due to parsing failure - treating as valid sample with 0 score")
+                return self._build_result(
+                    game_name=game_name,
+                    score=0.0,
+                    llm_return=None,
+                    llm_player_id=llm_player_id,
+                    task_id=task_id,
+                    seed=seed,
+                    opponent=opponent,
+                    start_time=start_time,
+                    conversation=llm_bot.get_conversation() if llm_bot else [],
+                    error=None,  # No error field - this is a valid sample
+                    usage=llm_bot.get_total_usage() if llm_bot else None,
+                    all_returns=None,
+                )
+            
+            # Other exceptions: true errors
+            # Try to get detailed error from llm_bot first
+            if llm_bot and llm_bot.get_last_error():
+                error_msg = llm_bot.get_last_error()
+            else:
+                error_msg = f"[{error_type}] {str(e)}\n{traceback.format_exc()}"
+
+            return self._build_error_result(
+                game_name=game_name,
+                error=error_msg,
+                llm_bot=llm_bot,
+                llm_player_id=llm_player_id,
+                task_id=task_id,
+                seed=seed,
+                opponent=opponent,
+                start_time=start_time,
             )
 
     def _compute_score(self, returns, llm_player_idx, game):
@@ -215,7 +329,7 @@ class Actor:
             if max_utility > min_utility:
                 score = (llm_return - min_utility) / (max_utility - min_utility)
             else:
-                score = 0.5  # Degenerate case
+                score = 0
             return float(score)
         
         # Multi-player games (3-4 players): use ranking-based scoring
@@ -250,25 +364,82 @@ class Actor:
             score = 0.5
         return float(score)
 
-    def _create_opponent_bot(self, opponent, player_id, seed):
-        """Create opponent bot based on type"""
+    def _create_opponent_bot(self, opponent, player_id, seed, game, agent):
+        """Create opponent bot based on type and game dynamics"""
+        game_type = game.get_type()
+        # For simultaneous move games, MCTS doesn't work - fallback to random
+        if game_type.dynamics == pyspiel.GameType.Dynamics.SIMULTANEOUS:
+            return uniform_random.UniformRandomBot(
+                player_id=player_id, rng=np.random.RandomState(seed + 2)
+            )
+        
+        # For sequential games, use requested opponent type
         if opponent == "random":
             return uniform_random.UniformRandomBot(
                 player_id=player_id, rng=np.random.RandomState(seed + 2)
             )
         elif opponent == "mcts":
-            evaluator = mcts.RandomRolloutEvaluator(
-                n_rollouts=10, random_state=np.random.RandomState(seed + 3)
+            # Get MCTS config from agent
+            mcts_config = agent.get_mcts_config()
+            
+            # If agent returns None, game doesn't need MCTS (e.g., single-player)
+            if mcts_config is None:
+                return uniform_random.UniformRandomBot(
+                    player_id=player_id, rng=np.random.RandomState(seed + 2)
+                )
+            
+            max_simulations, n_rollouts = mcts_config
+            
+            # Create a safe evaluator that handles edge cases
+            evaluator = SafeRandomRolloutEvaluator(
+                n_rollouts=n_rollouts, random_state=np.random.RandomState(seed + 3)
             )
             return mcts.MCTSBot(
-                game=None,
-                uct_c=2.0,
-                max_simulations=100,
+                game=game,
+                uct_c=1.414,
+                max_simulations=max_simulations,
                 evaluator=evaluator,
                 random_state=np.random.RandomState(seed + 4),
             )
         else:
             raise ValueError(f"Unknown opponent type: {opponent}")
+
+    def _build_error_result(
+        self,
+        game_name,
+        error,
+        llm_bot,
+        llm_player_id,
+        task_id,
+        seed,
+        opponent,
+        start_time,
+    ):
+        """Build error result with accumulated data from llm_bot"""
+        conversation = []
+        usage = None
+        
+        if llm_bot is not None:
+            try:
+                conversation = llm_bot.get_conversation()
+                usage = llm_bot.get_total_usage()
+            except:
+                pass
+        
+        return self._build_result(
+            game_name=game_name,
+            score=0.0,
+            llm_return=-1.0,
+            llm_player_id=llm_player_id,
+            task_id=task_id,
+            seed=seed,
+            opponent=opponent,
+            start_time=start_time,
+            conversation=conversation,
+            error=error,
+            usage=usage,
+            all_returns=None,
+        )
 
     def _build_result(
         self,
@@ -306,18 +477,13 @@ class Actor:
         }
 
         if error:
-            # Error can be string or dict from llm_bot
-            if isinstance(error, dict):
-                result["extra"]["error"] = [
-                    {"error": error.get("error"), "prompt": error.get("prompt")}
-                ]
-            else:
-                result["extra"]["error"] = [{"error": error}]
+            # Error must be a string
+            result["extra"]["error"] = str(error)
 
         return result
 
     async def _llm_chat(
-        self, messages, model, base_url, timeout, temperature, current_api_key, seed=None
+        self, messages, model, base_url, temperature, current_api_key, seed=None
     ):
         """Call LLM API with streaming and message history support"""
         os.environ.pop("SSL_CERT_FILE", None)
@@ -326,7 +492,6 @@ class Actor:
         async with openai.AsyncOpenAI(
             base_url=base_url.rstrip("/"),
             api_key=current_api_key,
-            timeout=httpx.Timeout(timeout),
             max_retries=0,
         ) as client:
             params = {

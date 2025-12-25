@@ -23,8 +23,6 @@ Each turn:
 - Roll: Roll die and add to turn total. If you roll 1, lose turn total and turn ends.
 - Hold: Add turn total to your permanent score and end turn.
 
-Strategy: Balance risk (rolling for more points) vs. reward (holding to bank points).
-
 Winning: First player to reach or exceed target score wins immediately."""
     
     def generate_params(self, config_id: int) -> Dict[str, Any]:
@@ -38,3 +36,12 @@ Winning: First player to reach or exceed target score wins immediately."""
             "players": 2,
             "winscore": 20 + score_var * 10  # 20, 30, 40
         }
+    
+    def get_mcts_config(self) -> tuple:
+        """
+        Pig: 2 actions (Roll/Hold), 6-sided die
+        MaxGameLength: 1000 but typically 20-40 moves
+        Very simple game, can use highest MCTS strength
+        Config: (5000, 200)
+        """
+        return (5000, 200)

@@ -10,40 +10,64 @@ from agents import GAME_AGENTS
 
 
 # Game order - Prioritized by evaluation quality and model capability assessment
-# High-quality games (effective evaluation, good interaction, reasonable challenge) first
-# Lower-quality games (too easy, poor interaction, or limited scope) last
+# 
+# Quality Criteria:
+# 1. Trajectory Diversity: task_id + seed generates many different game trajectories (防止模型背题)
+# 2. Moderate Difficulty: No guaranteed winning strategy, requires reasoning
+# 3. High Interactivity: Multi-step decision making, not single choices
+# 4. Reproducibility: Same task_id + seed produces identical trajectory
+#
+# Removed Games (with reasons):
+# - "breakthrough": 100% success rate, too easy, no evaluation discrimination
+# - "pig": Limited strategic depth, mostly luck-based (roll or hold)
+# - "phantom_ttt": Even with hidden info, 3x3 grid limits complexity
+# - "cribbage": 0% success rate, rules too complex for LLM to understand
+# - "battleship": 979k avg tokens (100% success but economically prohibitive)
+#
 AVAILABLE_GAMES = [
     # Tier 1: Excellent evaluation games (⭐⭐⭐⭐⭐)
-    "goofspiel",        # idx=0:  Best token efficiency, tests bidding strategy, 100% success but meaningful
-    "liars_dice",       # idx=1:  Excellent interaction design, tests probability reasoning
-    "leduc_poker",      # idx=2:  High efficiency, tests poker reasoning, 80% success (good distinction)
-    "gin_rummy",        # idx=3:  Great interaction quality, tests card game strategy
+    # High trajectory diversity, strong strategic depth, proven evaluation quality
+    "goofspiel",        # idx=0:  Bidding strategy, 100% success, 7.8k tokens, high diversity
+    "liars_dice",       # idx=1:  Probability reasoning, 100% success, 1.1k tokens ⭐
+    "leduc_poker",      # idx=2:  Poker reasoning, 100% success, 1.3k tokens ⭐
+    "gin_rummy",        # idx=3:  Card strategy, 100% success, 167.8k tokens (acceptable)
     
-    # Tier 2: Good evaluation games (⭐⭐⭐⭐)
-    "othello",          # idx=4:  Clear visualization, 40% success, tests spatial reasoning
-    "backgammon",       # idx=5:  Tests long-term planning, 40% success, high token but acceptable
-    "hex",              # idx=6:  Tests path planning, 60% success (improved with format_state)
+    # Tier 2: High-quality evaluation games (⭐⭐⭐⭐)
+    # Good trajectory diversity, moderate difficulty, effective evaluation
+    "othello",          # idx=4:  Spatial reasoning, 50% success, 105.8k tokens
+    "backgammon",       # idx=5:  Long-term planning, 50% success, 347.2k tokens
+    "hex",              # idx=6:  Path planning, 100% success, 13.9k tokens
+    "clobber",          # idx=7:  Capture tactics, 100% success, 16.9k tokens (FIXED)
     
-    # Tier 3: Acceptable but needs improvement (⭐⭐⭐)
-    "battleship",       # idx=7:  Good concept (imperfect info, dual-phase), FIXED token issue
-    "blackjack",        # idx=8:  Good interaction, FIXED seed diversity issue
+    # Tier 3: Multi-player & Complex games (⭐⭐⭐⭐)
+    # Higher complexity, useful for advanced evaluation
+    "hearts",           # idx=8:  4-player card game, 50% success, 27.5k tokens (FIXED)
+    "euchre",           # idx=9:  Trump-based card game, 100% success, 5.8k tokens
+    "dots_and_boxes",   # idx=10: Spatial control, 100% success, 62.1k tokens
     
-    # Tier 4: Limited evaluation value (⭐⭐)
-    "breakthrough",     # idx=9:  100% success (too easy), good interaction but weak opponent
-    "pig",              # idx=10: Simple dice game, limited strategic depth
-    "phantom_ttt",      # idx=11: Tic-tac-toe variant, limited complexity
+    # Tier 4: High-complexity strategy games (⭐⭐⭐⭐)
+    # Complex but high token consumption - use for advanced testing
+    "go",               # idx=11: Board strategy (5x5/7x7), 50% success, 119.1k tokens (OPTIMIZED)
+    "chess",            # idx=12: Complex strategy, 100% success, 287.1k tokens (OPTIMIZED)
+    "checkers",         # idx=13: Classic strategy, 100% success, 83.8k tokens
+    "quoridor",         # idx=14: Path blocking, 100% success, 38.9k tokens
     
-    # Tier 5: Complex games needing further testing
-    "hearts",           # idx=12: Multi-player card game, untested
-    "cribbage",         # idx=13: Complex scoring, untested
-    "euchre",           # idx=14: Trump-based card game, untested
-    "go",               # idx=15: Extremely complex, may have scalability issues
-    "chess",            # idx=16: Very complex, long games, high token consumption expected
-    "checkers",         # idx=17: Classic strategy game, untested
-    "dots_and_boxes",   # idx=18: Simple but requires planning, untested
-    "clobber",          # idx=19: Untested
-    "quoridor",         # idx=20: Untested
+    # Tier 5: Probability & Imperfect Information (⭐⭐⭐)
+    # Special category for testing hidden information reasoning
+    "blackjack",        # idx=15: Probability reasoning (vs dealer), 50% success, 519 tokens (FIXED)
+    "phantom_ttt",      # idx=16: Hidden opponent moves, 100% success, 1.2k tokens (kept for imperfect info testing)
+    
+    # Tier 6: Single-player games (⭐⭐⭐⭐⭐) - NEW
+    # High trajectory diversity, excellent for testing spatial/sequential reasoning
+    "2048",             # idx=17: Sliding tile puzzle, spatial planning, ~50-200 steps
+    "solitaire",        # idx=18: Card sequencing, shuffled deck (high diversity), ~30-100 steps
 ]
+
+# Notes on game changes:
+# 1. Breakthrough: 100% success → no discrimination between models
+# 2. Pig: Too simple, luck-dominant (just "roll or hold")
+# 3. Cribbage: 0% success even after rule improvements
+# 4. Battleship: 979k tokens unsustainable (despite 100% success)
 
 
 

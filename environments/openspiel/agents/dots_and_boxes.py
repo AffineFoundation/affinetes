@@ -23,8 +23,6 @@ Turn: Draw one horizontal or vertical line between two adjacent dots.
 Completing a box: When you draw the 4th side of a box, you claim it (mark with your initial) and take another turn.
 
 Scoring: Each completed box = 1 point.
-Strategy: Avoid giving opponent opportunity to complete boxes. Chain reactions possible in endgame.
-
 Winning: Player with most completed boxes when all lines drawn wins."""
     
     def generate_params(self, config_id: int) -> Dict[str, Any]:
@@ -37,3 +35,7 @@ Winning: Player with most completed boxes when all lines drawn wins."""
             "num_rows": grid_size,
             "num_cols": grid_size
         }
+    
+    def get_mcts_config(self) -> tuple[int, int]:
+        """3×3 to 5×5 grid. MaxGameLength varies. Moderate tactical game."""
+        return (1200, 100)

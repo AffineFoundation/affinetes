@@ -1,6 +1,6 @@
 """OpenSpiel Game Agents Registry"""
 
-# Import all 21 game agents
+# Import all game agents (21 original + 2 single-player)
 from .liars_dice_agent import LiarsDiceAgent
 from .leduc_poker_agent import LeducPokerAgent
 from .battleship_agent import BattleshipAgent
@@ -22,11 +22,15 @@ from .checkers import CheckersAgent
 from .dots_and_boxes import DotsAndBoxesAgent
 from .clobber import ClobberAgent
 from .quoridor import QuoridorAgent
+# Single-player games
+from .game_2048 import Game2048Agent
+from .solitaire import SolitaireAgent
 
 
 # Game name -> Agent class mapping
 # This registry allows looking up the appropriate agent for any game
 GAME_AGENTS = {
+    # Multi-player games
     "leduc_poker": LeducPokerAgent,
     "liars_dice": LiarsDiceAgent,
     "battleship": BattleshipAgent,
@@ -48,6 +52,9 @@ GAME_AGENTS = {
     "dots_and_boxes": DotsAndBoxesAgent,
     "clobber": ClobberAgent,
     "quoridor": QuoridorAgent,
+    # Single-player games (high-quality additions)
+    "2048": Game2048Agent,
+    "solitaire": SolitaireAgent,
 }
 
 __all__ = ["GAME_AGENTS"]

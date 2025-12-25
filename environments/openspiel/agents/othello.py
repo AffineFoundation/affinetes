@@ -23,7 +23,6 @@ Goal: Have more discs of your color when board is full or no moves available.
 Turn: Place disc to sandwich opponent's discs between your new disc and existing disc (horizontally, vertically, or diagonally). All sandwiched opponent discs flip to your color.
 Must flip at least 1 disc; if no valid move, pass turn.
 
-Strategy: Control corners (cannot be flipped). Edge control important.
 Winning: Player with most discs when game ends wins."""
     
     def generate_params(self, config_id: int) -> Dict[str, Any]:
@@ -31,3 +30,7 @@ Winning: Player with most discs when game ends wins."""
         Othello parameter generation
         """
         return {}
+    
+    def get_mcts_config(self) -> tuple[int, int]:
+        """8×8 board, 64 actions, MaxGameLength=128. Medium complexity with large branching factor."""
+        return (1000, 100)

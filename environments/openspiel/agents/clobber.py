@@ -9,7 +9,7 @@ from typing import Dict, Any
 
 
 class ClobberAgent(BaseGameAgent):
-    """Clobber Game Agent - Uses default observation_string formatting"""
+    """Clobber Game Agent - Enhanced with move format clarity"""
     
     @property
     def game_name(self) -> str:
@@ -23,8 +23,10 @@ Goal: Be the last player able to move.
 Movement: On your turn, move one of your pieces orthogonally (horizontally or vertically) to capture an adjacent opponent piece. The captured piece is removed and replaced by your piece.
 Must capture: Every move must capture an opponent piece. No non-capturing moves allowed.
 
-Losing: If you have no legal moves (no adjacent opponent pieces to capture), you lose.
-Strategy: Force opponent into position with no captures available."""
+Move Format: Moves are specified as "row col" (e.g., "2 3" means row 2, column 3).
+Important: You can ONLY move to a position occupied by an opponent piece that is directly adjacent (up/down/left/right) to one of your pieces.
+
+Losing: If you have no legal moves (no adjacent opponent pieces to capture), you lose."""
     
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
@@ -36,3 +38,7 @@ Strategy: Force opponent into position with no captures available."""
             "rows": board_size,
             "columns": board_size
         }
+    
+    def get_mcts_config(self) -> tuple[int, int]:
+        """5×5 to 7×7 board, limited adjacent moves, MaxGameLength=rows×cols-1. Medium complexity."""
+        return (1500, 100)

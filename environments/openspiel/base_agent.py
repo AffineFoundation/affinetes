@@ -53,48 +53,7 @@ class BaseGameAgent(ABC):
             Game parameter dictionary
         """
         pass
-    
-    def format_action_history(
-        self,
-        action_history: List[Tuple[int, int]],
-        state: pyspiel.State
-    ) -> str:
-        """
-        Format action history (default implementation)
-        
-        Args:
-            action_history: List of (player_id, action) tuples
-            state: Current game state
-            
-        Returns:
-            Formatted action history
-        """
-        if not action_history:
-            return "No actions taken yet."
-        
-        # For games with moves_history (like chess), use it to avoid state-dependent errors
-        if hasattr(state, 'moves_history'):
-            try:
-                moves = state.moves_history()
-                if moves and len(moves) == len(action_history):
-                    lines = []
-                    for i, (player_id, _) in enumerate(action_history):
-                        move = moves[i]
-                        if hasattr(move, 'to_string'):
-                            move_str = move.to_string()
-                        else:
-                            move_str = str(move)
-                        lines.append(f"Player {player_id}: {move_str}")
-                    return "\n".join(lines)
-            except:
-                pass
-        
-        # Fallback: simple action ID list (avoids action_to_string errors)
-        lines = []
-        for player_id, action in action_history:
-            lines.append(f"Player {player_id}: action {action}")
-        
-        return "\n".join(lines)
+
     
     def generate_system_prompt(self) -> str:
         """
@@ -129,20 +88,17 @@ class BaseGameAgent(ABC):
         self,
         state: pyspiel.State,
         player_id: int,
-        action_history: List[Tuple[int, int]]
+        legal_actions: List[int]
     ) -> str:
         """
         Generate user prompt (called each turn)
         
         Includes: current state, legal actions
         
-        NOTE: Action history is NOT included here because LLM already maintains
-        full conversation history. Including it would be redundant and waste tokens.
-        
         Args:
             state: Game state
             player_id: Player ID
-            action_history: Action history (unused, kept for compatibility)
+            legal_actions: Pre-computed legal actions
             
         Returns:
             User prompt text
@@ -150,12 +106,13 @@ class BaseGameAgent(ABC):
         # 1. Format state
         state_desc = self.format_state(state, player_id)
         
-        # 2. Legal actions
-        legal_actions = state.legal_actions(player_id)
-        actions_desc = [
-            f"{action} -> {state.action_to_string(player_id, action)}"
-            for action in legal_actions
-        ]
+        actions_desc = []
+        for action in legal_actions:
+            try:
+                action_str = state.action_to_string(player_id, action)
+                actions_desc.append(f"{action} -> {action_str}")
+            except Exception as e:
+                actions_desc.append(f"{action}")
         
         # 3. Build prompt (NO action history - LLM has full conversation history)
         prompt_parts = [

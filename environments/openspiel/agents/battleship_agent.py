@@ -53,17 +53,7 @@ SHIP PLACEMENT:
 
 WINNING:
 - Score = value of opponent's ships sunk - value of your ships sunk
-- By default all ships have equal value (zero-sum game)
-
-STRATEGY TIPS:
-1. Placement Phase:
-   - Avoid clustering ships too densely
-   - Consider spreading ships to reduce consecutive hit risk
-   
-2. Shooting Phase:
-   - Remember previously shot locations
-   - If you hit a ship, continue shooting nearby to sink it
-   - Sinking ships is more valuable than just hitting"""
+- By default all ships have equal value (zero-sum game)"""
 
     def format_state(self, state, player_id: int) -> str:
         """

@@ -31,16 +31,9 @@ Bidding rules: Each bid must be higher than the previous bid. "Higher" means:
   - Same face value but higher quantity (e.g., "2 fours" beats "1 four")
   - Same quantity but higher face value (e.g., "2 fives" beats "2 fours")
 
-CRITICAL - Wild dice: 6s are WILD and count as ANY face value!
-- When counting dice for a bid, ALWAYS include 6s in the count
+Wild dice: 6s are WILD and count as ANY face value.
+- When counting dice for a bid, include 6s in the count
 - Example: Bid "3 fours" means at least 3 dice showing EITHER 4 OR 6
-- Example: If you have dice [3, 6] and opponent bids "2-3" (two threes), there are actually 2 dice showing 3 or 6 (your 3 and your 6), so the bid is TRUE
-- When deciding to call "Liar", remember your 6s can count toward opponent's bid!
-
-Strategic tips:
-- Only call "Liar" when you're confident the bid is IMPOSSIBLE given your dice
-- Remember to count your 6s as wildcards when evaluating opponent's bid
-- Conservative play: avoid calling "Liar" unless the bid seems very high
 
 Winning: If you call Liar and previous bid was false, opponent loses. If bid was true or exact, you lose.
 """
@@ -72,38 +65,8 @@ Winning: If you call Liar and previous bid was false, opponent loses. If bid was
         ]
         
         if current_bid:
-            # Extract bid details for direct evaluation
-            bid_quantity, bid_face = self._extract_bid_details(current_bid)
-            if bid_quantity and bid_face:
-                # Count how many dice the player has that match the bid (including 6s as wild)
-                matching_dice = self._count_matching_dice(player_dice, bid_face)
-                
-                # Calculate if bid is definitely possible
-                # If player alone has enough matching dice, bid is DEFINITELY TRUE
-                if matching_dice >= bid_quantity:
-                    evaluation = "✓ DEFINITELY POSSIBLE (you alone have enough!)"
-                    advice = "DO NOT call 'Liar' - you know the bid is true!"
-                # If player has some matches and opponent could have the rest
-                elif matching_dice + num_dice_per_player >= bid_quantity:
-                    evaluation = "✓ LIKELY POSSIBLE (you have some, opponent might have rest)"
-                    advice = "RISKY to call 'Liar' - opponent might have the missing dice"
-                # If even with all opponent dice it's impossible
-                else:
-                    remaining_needed = bid_quantity - matching_dice
-                    evaluation = f"⚠ MIGHT BE IMPOSSIBLE (need {remaining_needed} more from opponent's {num_dice_per_player} dice)"
-                    advice = f"Calling 'Liar' is reasonable IF you think opponent doesn't have {remaining_needed}+ matching dice"
-                
-                state_parts.append(f"\n>>> OPPONENT'S BID: {current_bid} <<<")
-                state_parts.append(f"\n🎲 EVALUATION:")
-                state_parts.append(f"   - Bid claims: {bid_quantity} dice showing {bid_face}")
-                state_parts.append(f"   - You have: {matching_dice} matching dice (including 6s as wild)")
-                state_parts.append(f"   - {evaluation}")
-                state_parts.append(f"\n💡 ADVICE: {advice}")
-                state_parts.append("\nYou can either: (1) Make a higher bid, or (2) Call 'Liar'")
-            else:
-                state_parts.append(f"\n>>> OPPONENT'S BID: {current_bid} <<<")
-                state_parts.append("\nREMEMBER: 6s are WILD! Count your 6s when evaluating this bid.")
-                state_parts.append("You can either: (1) Make a higher bid, or (2) Call 'Liar'")
+            state_parts.append(f"\nCurrent bid: {current_bid}")
+            state_parts.append("You can either: (1) Make a higher bid, or (2) Call 'Liar'")
         else:
             state_parts.append("No bid yet - you must make the first bid")
         
@@ -223,11 +186,27 @@ Winning: If you call Liar and previous bid was false, opponent loses. If bid was
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
         Generate Liar's Dice parameters
-        
-        Config space: 5 variants (1-5 dice per player)
         """
-        dice_var = config_id % 5
         return {
             "players": 2,
-            "numdice": 1 + dice_var  # 1, 2, 3, 4, 5
+            "numdice": 5
         }
+    
+    def get_mcts_config(self) -> tuple:
+        """
+        Get MCTS configuration for Liar's Dice
+        
+        Complexity Analysis:
+        - 2 players, 5 dice each (10 total)
+        - Branching factor: ~15-30 bid options per turn
+        - Average game length: 5-10 moves
+        - Rollout cost: Very low (simple state, no complex calculations)
+        
+        Configuration:
+        - max_simulations: 5000 (very high, game is simple enough)
+        - n_rollouts: 200 (extensive evaluation for maximum strength)
+        
+        Returns:
+            tuple: (max_simulations, n_rollouts)
+        """
+        return (5000, 200)

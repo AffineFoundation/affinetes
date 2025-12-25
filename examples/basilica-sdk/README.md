@@ -2,6 +2,9 @@
 
 Deploy LLM service and affinetes evaluation environment on Basilica GPU.
 
+[![demo](https://github.com/user-attachments/assets/e3a0e71b-d545-4946-8bbc-aa72179b0be4)](https://asciinema.org/a/eCspXmImKzKeSD4yp2itdESlg)
+
+
 ## Prerequisites
 
 1. Basilica API token (set as `BASILICA_API_TOKEN`)
@@ -60,10 +63,11 @@ python basilica_evaluator.py \
 
 | Script | Description |
 |--------|-------------|
-| `basilica_llm_server.py` | Deploy vLLM on Basilica GPU |
-| `basilica_env_server.py` | Deploy affinetes environment on Basilica |
+| `basilica_llm_server.py` | Deploy/delete vLLM on Basilica GPU |
+| `basilica_env_server.py` | Deploy/delete affinetes environment on Basilica |
 | `basilica_evaluator.py` | Run evaluation using Basilica-deployed services |
 | `local_evaluator.py` | Run evaluation with local Docker (requires Docker) |
+| `cleanup.py` | List and delete Basilica deployments |
 
 ## Configuration
 
@@ -169,6 +173,53 @@ Average Score: 0.8500
 
 Deployments auto-delete after TTL (default 1 hour). To delete manually:
 
+### Using the Cleanup Utility
+
 ```bash
-basilica deploy delete <deployment-id>
+# List all active deployments
+python cleanup.py
+
+# Delete a specific deployment
+python cleanup.py --delete <deployment-name>
+
+# Delete all deployments (with confirmation)
+python cleanup.py --delete-all
+```
+
+### Using Deploy Scripts
+
+Each deploy script supports `--delete` flag:
+
+```bash
+# Delete LLM deployment
+python basilica_llm_server.py --delete --name <deployment-name>
+
+# Delete environment deployment
+python basilica_env_server.py --delete --name <deployment-name>
+```
+
+### Using SDK Directly
+
+```python
+from basilica import BasilicaClient
+
+client = BasilicaClient()
+
+# List all deployments
+response = client.list_deployments()
+for dep in response.deployments:
+    print(f"{dep.instance_name}: {dep.state}")
+
+# Delete by name
+client.delete_deployment("your-deployment-name")
+```
+
+### Using CLI
+
+```bash
+# List deployments
+basilica deploy ls
+
+# Delete deployment
+basilica deploy delete <deployment-name>
 ```

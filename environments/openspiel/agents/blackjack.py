@@ -26,13 +26,7 @@ Player turn:
 
 Dealer turn: Must hit on 16 or less, stand on 17 or more.
 
-Winning: Beat dealer's total without exceeding 21. If you exceed 21, you bust and lose immediately.
-
-STRATEGY HINTS:
-- Stand on 17 or higher (dealer must hit on 16 or less)
-- Hit on 11 or lower (safe - cannot bust)
-- On 12-16: depends on dealer's visible card
-- Always consider risk of busting vs potential gain"""
+Winning: Beat dealer's total without exceeding 21. If you exceed 21, you bust and lose immediately."""
     
     def format_state(self, state, player_id: int) -> str:
         """Custom state formatting with point totals calculated"""
@@ -56,14 +50,14 @@ STRATEGY HINTS:
         if player_match:
             cards_str = player_match.group(1).strip()
             total = self._calculate_total(cards_str)
-            result_parts.append(f"\n>>> Your total: {total} points")
+            result_parts.append(f"\nYour total: {total} points")
         
         if dealer_match:
             cards_str = dealer_match.group(1).strip()
             # Only calculate if not hidden
             if '?' not in cards_str:
                 total = self._calculate_total(cards_str)
-                result_parts.append(f">>> Dealer total: {total} points")
+                result_parts.append(f"Dealer total: {total} points")
         
         return ''.join(result_parts)
     
@@ -94,4 +88,8 @@ STRATEGY HINTS:
     
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """Blackjack parameter generation - standard configuration"""
-        return {"players": 2}
+        return {}
+    
+    def get_mcts_config(self) -> tuple[int, int]:
+        """Single player vs dealer. MaxGameLength=12. Simple probability game, no MCTS needed."""
+        return None
