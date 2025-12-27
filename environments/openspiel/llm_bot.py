@@ -1,19 +1,18 @@
 """LLM Bot implementation for OpenSpiel with conversation history support"""
 
+import os
 import pyspiel
 import numpy as np
 import asyncio
 import re
 import concurrent.futures
-import time
-from typing import Callable, Awaitable, Tuple, Optional, Dict, List
+import httpx
+from typing import Tuple, Optional, Dict, List
 
 from base_agent import BaseGameAgent
 
 # Constants
 DEFAULT_MAX_PARSING_RETRIES = 2
-DEFAULT_MAX_API_RETRIES = 10
-API_RETRY_DELAY_SECONDS = 2.0
 
 
 class APIError(Exception):
@@ -38,11 +37,15 @@ class LLMBot(pyspiel.Bot):
         self,
         game: pyspiel.Game,
         player_id: int,
-        llm_chat_fn: Callable[[List[Dict]], Awaitable[Tuple[str, Dict]]],
+        base_url: str,
+        api_key: str,
+        model: str,
+        temperature: float,
         rng_seed: int,
         agent: BaseGameAgent,
+        seed: Optional[int] = None,
+        session_id: Optional[str] = None,
         max_parsing_retries: int = DEFAULT_MAX_PARSING_RETRIES,
-        max_api_retries: int = DEFAULT_MAX_API_RETRIES,
         executor: concurrent.futures.ThreadPoolExecutor = None,
     ):
         """
@@ -51,39 +54,42 @@ class LLMBot(pyspiel.Bot):
         Args:
             game: pyspiel.Game instance
             player_id: Player ID (0 or 1)
-            llm_chat_fn: Async function to call LLM API with messages list
+            base_url: LLM API base URL
+            api_key: API authentication key
+            model: Model name
+            temperature: Sampling temperature
             rng_seed: Random seed for fallback action selection
             agent: BaseGameAgent for game-specific logic (REQUIRED)
+            seed: Random seed for LLM API reproducibility
+            session_id: Session ID for KV cache optimization
             max_parsing_retries: Maximum parsing retry attempts
-            max_api_retries: Maximum API call retry attempts
             executor: Shared ThreadPoolExecutor for concurrent LLM calls
         """
         pyspiel.Bot.__init__(self)
         self._game = game
         self._player_id = player_id
-        self._llm_chat_fn = llm_chat_fn
+        self._base_url = base_url
+        self._api_key = api_key
+        self._model = model
+        self._temperature = temperature
+        self._seed = seed
+        self._session_id = session_id
         self._rng = np.random.RandomState(rng_seed)
         self._max_parsing_retries = max_parsing_retries
-        self._max_api_retries = max_api_retries
         self._agent = agent
         self._executor = executor
 
         self._conversation: List[Dict[str, str]] = []
         self._system_prompt_generated = False
         self._last_error: Optional[str] = None
-        self._total_usage = self._init_usage_dict()
-
-    @staticmethod
-    def _init_usage_dict() -> Dict[str, int]:
-        """Initialize usage statistics dictionary"""
-        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        self._total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def restart_at(self, state):
         """Reset to new game"""
         self._conversation.clear()
         self._system_prompt_generated = False
         self._last_error = None
-        self._total_usage = self._init_usage_dict()
+        self._total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
 
     def inform_action(self, state, player_id, action):
         """Record other players' actions - not used in current implementation"""
@@ -97,7 +103,7 @@ class LLMBot(pyspiel.Bot):
         """
         # Generate system prompt (first time only)
         if not self._system_prompt_generated:
-            system_prompt = self._generate_system_prompt()
+            system_prompt = self._agent.generate_system_prompt()
             self._conversation.append({"role": "system", "content": system_prompt})
             self._system_prompt_generated = True
         
@@ -105,13 +111,26 @@ class LLMBot(pyspiel.Bot):
         legal_actions = state.legal_actions(self._player_id)
         
         # Generate user prompt
-        user_prompt = self._generate_user_prompt(state, legal_actions)
+        user_prompt = self._agent.generate_user_prompt(
+            state=state,
+            player_id=self._player_id,
+            legal_actions=legal_actions
+        )
         self._conversation.append({"role": "user", "content": user_prompt})
         
-        # Retry loop
+        # Retry loop for parsing
         for attempt in range(self._max_parsing_retries + 1):
-            # Call LLM API with full conversation history
-            response, usage = self._call_llm_with_api_retry()
+            try:
+                # Call LLM API with full conversation history
+                response, usage = self._call_llm_api()
+            except Exception as e:
+                # API errors (timeout, rate limit, etc.) are handled by OpenAI SDK
+                # Record error and re-raise
+                import traceback
+                error_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                self._last_error = f"[API_ERROR] {error_msg}"
+                raise APIError(f"LLM API call failed: {error_msg}")
+            
             self._conversation.append({"role": "assistant", "content": response})
             
             # Parse action using the SAME legal_actions from the prompt
@@ -136,61 +155,14 @@ class LLMBot(pyspiel.Bot):
         
         raise RuntimeError("Should not reach here")
 
-    def _generate_system_prompt(self) -> str:
-        """
-        Generate system prompt (called once per game)
-        
-        Uses agent's system prompt
-        """
-        return self._agent.generate_system_prompt()
 
-    def _generate_user_prompt(self, state, legal_actions: List[int]) -> str:
-        """
-        Generate user prompt (called each turn)
-        
-        Uses agent's user prompt, passing legal_actions to ensure consistency
-        """
-        return self._agent.generate_user_prompt(
-            state=state,
-            player_id=self._player_id,
-            legal_actions=legal_actions
-        )
-
-    def _call_llm_with_api_retry(self) -> Tuple[str, Dict]:
-        """Call LLM API with retry mechanism for API failures"""
-        for attempt in range(self._max_api_retries):
-            try:
-                response, usage = self._execute_llm_call()
-                # Store the latest usage (do NOT accumulate, as it's already cumulative)
-                if usage:
-                    self._total_usage = usage.copy()
-                return response, usage
-            except Exception as e:
-                # Check if this is a non-retryable error
-                error_str = str(e)
-                non_retryable_patterns = [
-                    "is longer than the model",  # Context length exceeded
-                ]
-                is_non_retryable = any(pattern in error_str for pattern in non_retryable_patterns)
-                if is_non_retryable:
-                    self._handle_api_failure(e)
-                elif attempt < self._max_api_retries - 1:
-                    print(f"[API Retry {attempt + 1}/{self._max_api_retries}] LLM call failed: {e}, retrying...")
-                    time.sleep(API_RETRY_DELAY_SECONDS)
-                else:
-                    self._handle_api_failure(e)
-
-    def _execute_llm_call(self) -> Tuple[str, Dict]:
-        """Execute LLM API call in thread with event loop management
-        
-        Uses shared global executor to enable concurrent LLM API calls
-        across multiple evaluate() invocations.
-        """
+    def _call_llm_api(self) -> Tuple[str, Dict]:
+        """Call LLM API using httpx with streaming support"""
         def run_async():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                result = loop.run_until_complete(self._llm_chat_fn(self._conversation))
+                result = loop.run_until_complete(self._llm_chat_async())
                 pending = asyncio.all_tasks(loop)
                 if pending:
                     loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
@@ -199,21 +171,133 @@ class LLMBot(pyspiel.Bot):
                 loop.run_until_complete(loop.shutdown_asyncgens())
                 loop.close()
 
-        # Use shared executor if provided, otherwise create temporary one
+        # Execute async call in thread pool
         if self._executor:
-            return self._executor.submit(run_async).result()
+            result = self._executor.submit(run_async).result()
         else:
             # Fallback for backward compatibility
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
-                return executor.submit(run_async).result()
+                result = executor.submit(run_async).result()
+        
+        # Update usage statistics and clean response
+        response, usage = result
+        if usage:
+            self._total_usage = usage.copy()
+        
+        # Remove <think> tags and content from response before storing
+        response = self._remove_think_tags(response)
+        
+        return response, usage
+    
+    async def _llm_chat_async(self) -> Tuple[str, Dict]:
+        """Call LLM API with streaming using httpx
+        
+        Returns:
+            Tuple of (response_text, usage_dict)
+        """
+        # Create httpx client in current event loop context
+        os.environ.pop("SSL_CERT_FILE", None)
+        os.environ.pop("REQUESTS_CA_BUNDLE", None)
+        client = httpx.AsyncClient(
+            base_url=self._base_url.rstrip("/"),
+            headers={"Authorization": f"Bearer {self._api_key}"},
+            timeout=100.0,
+        )
+        
+        try:
+            payload = {
+                "model": self._model,
+                "messages": self._conversation,
+                "temperature": self._temperature,
+                "stream": True,
+                "stream_options": {"include_usage": True},
+            }
 
-    def _handle_api_failure(self, error: Exception):
-        """Handle final API failure after all retries"""
-        import traceback
-        error_msg = f"{type(error).__name__}: {str(error)}\n{traceback.format_exc()}"
-        print(f"[API Error] LLM call failed after {self._max_api_retries} attempts")
-        self._last_error = f"[API_FAILURE] Failed after {self._max_api_retries} attempts: {error_msg}"
-        raise APIError(f"API call failed after {self._max_api_retries} attempts: {error_msg}")
+            if self._seed is not None:
+                payload["seed"] = self._seed
+            
+            if self._session_id is not None:
+                payload["session_id"] = self._session_id
+
+            content_parts = []
+            usage = None
+            
+            # Retry logic (max 10 retries with exponential backoff)
+            max_retries = 10
+            for attempt in range(max_retries):
+                try:
+                    async with client.stream("POST", "/chat/completions", json=payload) as response:
+                        response.raise_for_status()
+                        
+                        async for line in response.aiter_lines():
+                            if not line.strip() or line.strip() == "data: [DONE]":
+                                continue
+                            
+                            if line.startswith("data: "):
+                                import json
+                                chunk_data = json.loads(line[6:])
+                                
+                                # Extract content
+                                if "choices" in chunk_data and chunk_data["choices"]:
+                                    delta = chunk_data["choices"][0].get("delta", {})
+                                    if "content" in delta and delta["content"]:
+                                        content_parts.append(delta["content"])
+                                
+                                # Extract usage
+                                if "usage" in chunk_data:
+                                    usage = chunk_data["usage"]
+                    
+                    break  # Success, exit retry loop
+                    
+                except (httpx.TimeoutException, httpx.NetworkError) as e:
+                    if attempt < max_retries - 1:
+                        wait_time = min(2 ** attempt, 32)  # Exponential backoff, max 32s
+                        await asyncio.sleep(wait_time)
+                    else:
+                        raise ValueError(f"API call failed after {max_retries} retries: {e}")
+                except httpx.HTTPStatusError as e:
+                    # Don't retry on client errors (4xx)
+                    if 400 <= e.response.status_code < 500:
+                        raise ValueError(f"API error: {e.response.status_code} - {e.response.text}")
+                    # Retry on server errors (5xx)
+                    if attempt < max_retries - 1:
+                        wait_time = min(2 ** attempt, 32)
+                        await asyncio.sleep(wait_time)
+                    else:
+                        raise ValueError(f"API call failed after {max_retries} retries: {e}")
+
+            if not content_parts:
+                raise ValueError("LLM API returned empty content stream")
+
+            content = "".join(content_parts)
+            if not content:
+                raise ValueError("LLM API returned None content")
+
+            return content.strip(), usage
+        finally:
+            await client.aclose()
+    
+    @staticmethod
+    def _remove_think_tags(text: str) -> str:
+        """Remove <think>...</think> tags and their content from text
+        
+        This prevents conversation history from being polluted with
+        model's internal reasoning, keeping only the final answer.
+        
+        Args:
+            text: Raw response text potentially containing <think> tags
+            
+        Returns:
+            Cleaned text with <think> blocks removed
+        """
+        # Remove <think>...</think> blocks (non-greedy match, case-insensitive)
+        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Clean up extra whitespace created by removal
+        cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)  # Multiple blank lines -> double newline
+        cleaned = cleaned.strip()
+        
+        return cleaned
 
     def _parse_action(self, response: str, state, legal_actions: List[int]) -> Dict:
         """
@@ -227,24 +311,27 @@ class LLMBot(pyspiel.Bot):
         if match := re.search(r'^\s*(\d+)\s*$', response_clean):
             try:
                 action = int(match.group(1))
-                return self._create_parse_result(
-                    action in legal_actions,
-                    action if action in legal_actions else None,
-                    '' if action in legal_actions else f"Number {action} not in legal actions: {legal_actions}",
-                    'pure_number' if action in legal_actions else 'number_invalid'
-                )
+                if action in legal_actions:
+                    return {'success': True, 'action': action, 'error_message': '', 'matched_method': 'pure_number'}
+                else:
+                    return {
+                        'success': False,
+                        'action': None,
+                        'error_message': f"Number {action} not in legal actions: {legal_actions}",
+                        'matched_method': 'number_invalid'
+                    }
             except ValueError as e:
-                # Model generated invalid number (e.g., too large for int conversion)
-                return self._create_parse_result(
-                    False, None,
-                    f"Cannot convert to integer: {str(e)}. Model generated invalid action.",
-                    'number_conversion_error'
-                )
+                return {
+                    'success': False,
+                    'action': None,
+                    'error_message': f"Cannot convert to integer: {str(e)}. Model generated invalid action.",
+                    'matched_method': 'number_conversion_error'
+                }
         
         # Strategy 2: Find legal action ID in text
         for action in legal_actions:
             if re.search(rf'\b{action}\b', response_clean):
-                return self._create_parse_result(True, action, '', 'number_in_text')
+                return {'success': True, 'action': action, 'error_message': '', 'matched_method': 'number_in_text'}
         
         # Strategy 3: Match action string (exact or simplified)
         action_map = self._build_action_string_map(state, legal_actions)
@@ -254,16 +341,17 @@ class LLMBot(pyspiel.Bot):
         # Try exact match first, then simplified
         for action_str, action_id in action_map.items():
             if action_str in response_lower:
-                return self._create_parse_result(True, action_id, '', 'string_exact')
+                return {'success': True, 'action': action_id, 'error_message': '', 'matched_method': 'string_exact'}
             simplified = re.sub(r'[^a-z0-9]', '', action_str)
             if simplified and simplified in response_simplified:
-                return self._create_parse_result(True, action_id, '', 'string_simplified')
+                return {'success': True, 'action': action_id, 'error_message': '', 'matched_method': 'string_simplified'}
         
-        return self._create_parse_result(
-            False, None,
-            f"Cannot parse action from: '{response_clean}'. Expected format: just the action ID number (e.g., '5').",
-            'failed'
-        )
+        return {
+            'success': False,
+            'action': None,
+            'error_message': f"Cannot parse action from: '{response_clean}'. Expected format: just the action ID number (e.g., '5').",
+            'matched_method': 'failed'
+        }
 
     def _build_action_string_map(self, state, legal_actions: List[int]) -> Dict[str, int]:
         """Build mapping from action strings to action IDs"""
@@ -275,15 +363,6 @@ class LLMBot(pyspiel.Bot):
                 action_map[simplified] = action
         return action_map
 
-    @staticmethod
-    def _create_parse_result(success: bool, action: Optional[int], error_msg: str, method: str) -> Dict:
-        """Create standardized parse result dictionary"""
-        return {
-            'success': success,
-            'action': action,
-            'error_message': error_msg,
-            'matched_method': method
-        }
 
 
     def get_conversation(self):
