@@ -25,6 +25,10 @@ from .quoridor import QuoridorAgent
 # Single-player games
 from .game_2048 import Game2048Agent
 from .solitaire import SolitaireAgent
+# Advanced strategy games (NEW)
+from .bridge import BridgeAgent
+from .amazons import AmazonsAgent
+from .oware import OwareAgent
 
 
 # Game name -> Agent class mapping
@@ -55,6 +59,10 @@ GAME_AGENTS = {
     # Single-player games (high-quality additions)
     "2048": Game2048Agent,
     "solitaire": SolitaireAgent,
+    # Advanced strategy games (NEW)
+    "bridge": BridgeAgent,
+    "amazons": AmazonsAgent,
+    "oware": OwareAgent,
 }
 
 __all__ = ["GAME_AGENTS"]

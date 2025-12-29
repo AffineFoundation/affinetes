@@ -36,6 +36,7 @@ class LocalBackend(AbstractBackend):
         force_recreate: bool = False,
         pull: bool = False,
         mem_limit: Optional[str] = None,
+        cpu_limit: Optional[str] = None,
         auto_cleanup: bool = True,
         connect_only: bool = False,
         host_network: bool = False,
@@ -54,6 +55,7 @@ class LocalBackend(AbstractBackend):
             force_recreate: If True, remove existing container and create new one
             pull: If True, pull image before starting container
             mem_limit: Memory limit (e.g., "512m", "1g", "2g")
+            cpu_limit: CPU limit (e.g., "1.0", "2.0")
             auto_cleanup: If True, automatically stop and remove container on cleanup (default: True)
                          If False, container will continue running after cleanup
             connect_only: If True, only connect to existing container without creating new one
@@ -86,6 +88,7 @@ class LocalBackend(AbstractBackend):
         self._force_recreate = force_recreate
         self._pull = pull
         self._mem_limit = mem_limit
+        self._cpu_limit = cpu_limit
         self._auto_cleanup = auto_cleanup
         self._host_network = host_network
         self._host_port = host_port or 8000
@@ -337,6 +340,7 @@ class LocalBackend(AbstractBackend):
                 "restart_policy": {"Name": "always"},
                 "force_recreate": self._force_recreate,
                 "mem_limit": self._mem_limit,
+                "cpu_limit": self._cpu_limit,
                 **docker_kwargs
             }
             

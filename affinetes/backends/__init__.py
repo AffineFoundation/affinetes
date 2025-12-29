@@ -2,7 +2,7 @@
 
 from .base import AbstractBackend
 from .local import LocalBackend
-from .remote import BasilicaBackend
+from .basilica import BasilicaBackend
 from .url import URLBackend
 
 __all__ = [

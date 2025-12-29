@@ -153,6 +153,7 @@ class DockerManager:
         detach: bool = True,
         force_recreate: bool = False,
         mem_limit: Optional[str] = None,
+        cpu_limit: Optional[str] = None,
         **kwargs
     ) -> Any:
         """
@@ -164,6 +165,7 @@ class DockerManager:
             detach: Run container in background
             force_recreate: If True, remove existing container and create new one
             mem_limit: Memory limit (e.g., "512m", "1g", "2g")
+            cpu_limit: CPU limit (e.g., "1.0", "2.0")
             **kwargs: Additional docker.containers.run() parameters
             
         Returns:
@@ -218,10 +220,20 @@ class DockerManager:
             if name:
                 container_config["name"] = name
             
-            # Add memory limit if specified
+            # Add resource limits if specified
             if mem_limit:
                 container_config["mem_limit"] = mem_limit
                 logger.debug(f"Setting memory limit: {mem_limit}")
+            
+            if cpu_limit:
+                # Docker API uses nano_cpus (1 CPU = 1e9 nano_cpus)
+                # Convert string like "1.0" or "2.5" to nano_cpus
+                try:
+                    cpu_float = float(cpu_limit)
+                    container_config["nano_cpus"] = int(cpu_float * 1e9)
+                    logger.debug(f"Setting CPU limit: {cpu_limit} CPUs ({container_config['nano_cpus']} nano_cpus)")
+                except ValueError:
+                    logger.warning(f"Invalid cpu_limit format: {cpu_limit}, ignoring")
             
             container = self.client.containers.run(**container_config)
             

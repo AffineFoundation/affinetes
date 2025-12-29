@@ -80,19 +80,8 @@ IMPORTANT: Always respond with the action ID number ONLY, never card names."""
         - Branching factor: 10-15 actions per turn (discard + meld options)
         - Average game length: 50-100 moves (MaxGameLength = 300)
         - Rollout cost: Very high (complex meld calculations, huge state space)
-        
-        Token Consumption:
-        - From TEST_REPORT: 167.8k avg tokens (highest among all games)
-        - Indicates very long games with many interactions
-        
-        Configuration:
-        - max_simulations: 500 (reduced due to high complexity)
-        - n_rollouts: 50 (limited due to expensive rollouts)
-        
-        Time Estimate: ~1200 seconds (20 minutes) for typical game
-        Within 30-minute timeout but close to limit.
-        
+
         Returns:
             tuple: (max_simulations, n_rollouts)
         """
-        return (500, 50)
+        return (300, 10)

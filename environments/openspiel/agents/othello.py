@@ -32,5 +32,5 @@ Winning: Player with most discs when game ends wins."""
         return {}
     
     def get_mcts_config(self) -> tuple[int, int]:
-        """8×8 board, 64 actions, MaxGameLength=128. Medium complexity with large branching factor."""
-        return (1000, 100)
+        """8×8 board strategy game. Deterministic, balances exploration and time budget."""
+        return (1000, 20)

@@ -13,51 +13,59 @@ from typing import Dict, List
 REGISTRY = "docker.io/affinefoundation"
 
 ENV_CONFIGS = {
-    "cde": {
-        "path": "environments/primeintellect/cde",
-        "image": "primeintellect:cde",
+    "game": {
+        "path": "environments/openspiel",
+        "image": "game:openspiel",
     },
-    "lgc": {
-        "path": "environments/primeintellect/lgc",
-        "image": "primeintellect:lgc",
-    },
-    "mth": {
-        "path": "environments/primeintellect/mth",
-        "image": "primeintellect:mth",
-    },
-    "sci": {
-        "path": "environments/primeintellect/sci",
-        "image": "primeintellect:sci",
-    },
-    "affine": {
-        "path": "environments/affine",
-        "image": "affine-env:v4",
-    },
-    "agentgym:webshop": {
-        "path": "environments/agentgym",
-        "image": "agentgym:webshop",
-        "buildargs": {"ENV_NAME": "webshop"},
-    },
-    "agentgym:alfworld": {
-        "path": "environments/agentgym",
-        "image": "agentgym:alfworld",
-        "buildargs": {"ENV_NAME": "alfworld"},
-    },
-    "agentgym:babyai": {
-        "path": "environments/agentgym",
-        "image": "agentgym:babyai",
-        "buildargs": {"ENV_NAME": "babyai"},
-    },
-    "agentgym:sciworld": {
-        "path": "environments/agentgym",
-        "image": "agentgym:sciworld",
-        "buildargs": {"ENV_NAME": "sciworld"},
-    },
-    "agentgym:textcraft": {
-        "path": "environments/agentgym",
-        "image": "agentgym:textcraft",
-        "buildargs": {"ENV_NAME": "textcraft"},
-    },
+    # "SWE-PRO": {
+    #     "path": "environments/SWE-bench_Pro-os",
+    #     "image": "swebench:pro",
+    # },
+    # "cde": {
+    #     "path": "environments/primeintellect/cde",
+    #     "image": "cde:pi",
+    # },
+    # "lgc": {
+    #     "path": "environments/primeintellect/lgc",
+    #     "image": "lgc:pi",
+    # },
+    # "mth": {
+    #     "path": "environments/primeintellect/mth",
+    #     "image": "mth:pi",
+    # },
+    # "sci": {
+    #     "path": "environments/primeintellect/sci",
+    #     "image": "sci:pi",
+    # },
+    # "affine": {
+    #     "path": "environments/affine",
+    #     "image": "affine-env:v4",
+    # },
+    # "agentgym:webshop": {
+    #     "path": "environments/agentgym",
+    #     "image": "agentgym:webshop",
+    #     "buildargs": {"ENV_NAME": "webshop"},
+    # },
+    # "agentgym:alfworld": {
+    #     "path": "environments/agentgym",
+    #     "image": "agentgym:alfworld",
+    #     "buildargs": {"ENV_NAME": "alfworld"},
+    # },
+    # "agentgym:babyai": {
+    #     "path": "environments/agentgym",
+    #     "image": "agentgym:babyai",
+    #     "buildargs": {"ENV_NAME": "babyai"},
+    # },
+    # "agentgym:sciworld": {
+    #     "path": "environments/agentgym",
+    #     "image": "agentgym:sciworld",
+    #     "buildargs": {"ENV_NAME": "sciworld"},
+    # },
+    # "agentgym:textcraft": {
+    #     "path": "environments/agentgym",
+    #     "image": "agentgym:textcraft",
+    #     "buildargs": {"ENV_NAME": "textcraft"},
+    # },
 }
 
 

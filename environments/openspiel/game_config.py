@@ -61,6 +61,12 @@ AVAILABLE_GAMES = [
     # High trajectory diversity, excellent for testing spatial/sequential reasoning
     "2048",             # idx=17: Sliding tile puzzle, spatial planning, ~50-200 steps
     "solitaire",        # idx=18: Card sequencing, shuffled deck (high diversity), ~30-100 steps
+    
+    # Tier 7: Advanced strategy games (⭐⭐⭐⭐⭐) - NEW ADDITIONS
+    # High difficulty, complex strategy space, excellent quality
+    "bridge",           # idx=19: 4-player card game, bidding & trick-taking, imperfect info
+    "amazons",          # idx=20: Territorial control, queen-like moves + arrow placement
+    "oware",            # idx=21: Mancala variant, seed counting & capturing strategy
 ]
 
 # Notes on game changes:

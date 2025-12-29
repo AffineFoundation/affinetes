@@ -191,4 +191,4 @@ Hand ranking (high to low): Pair (private + public match) > High card value (K >
         Returns:
             tuple: (max_simulations, n_rollouts)
         """
-        return (5000, 200)
+        return (3000, 200)

@@ -209,4 +209,4 @@ Winning: If you call Liar and previous bid was false, opponent loses. If bid was
         Returns:
             tuple: (max_simulations, n_rollouts)
         """
-        return (5000, 200)
+        return (3000, 200)

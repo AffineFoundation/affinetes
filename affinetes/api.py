@@ -97,6 +97,7 @@ def load_env(
     force_recreate: bool = False,
     pull: bool = False,
     mem_limit: Optional[str] = None,
+    cpu_limit: Optional[str] = None,
     cleanup: bool = True,
     connect_only: bool = False,
     host_network: bool = False,
@@ -121,7 +122,8 @@ def load_env(
         env_type: Override environment type detection ("function_based" or "http_based")
         force_recreate: If True, remove and recreate containers even if they exist (default: False)
         pull: If True, pull the image before deployment (default: False)
-        mem_limit: Memory limit for container (e.g., "512m", "1g", "2g")
+        mem_limit: Memory limit (e.g., "512m", "1g", "2g", "16Gi")
+        cpu_limit: CPU limit (e.g., "1.0", "2.0" for Docker; "1000m", "4000m" for Basilica)
         cleanup: If True, automatically stop and remove container on exit (default: True)
                  If False, container will continue running after program exits
         host_network: If True, use host network mode (network_mode="host")
@@ -190,6 +192,7 @@ def load_env(
                 force_recreate=force_recreate,
                 pull=pull,
                 mem_limit=mem_limit,
+                cpu_limit=cpu_limit,
                 cleanup=cleanup,
                 connect_only=connect_only,
                 host_network=host_network,
@@ -210,6 +213,7 @@ def load_env(
             force_recreate=force_recreate,
             pull=pull,
             mem_limit=mem_limit,
+            cpu_limit=cpu_limit,
             cleanup=cleanup,
             host_network=host_network,
             host_port=host_port,
@@ -231,6 +235,7 @@ def _load_single_instance(
     force_recreate: bool = False,
     pull: bool = False,
     mem_limit: Optional[str] = None,
+    cpu_limit: Optional[str] = None,
     cleanup: bool = True,
     connect_only: bool = False,
     host_network: bool = False,
@@ -250,21 +255,11 @@ def _load_single_instance(
             force_recreate=force_recreate,
             pull=pull,
             mem_limit=mem_limit,
+            cpu_limit=cpu_limit,
             auto_cleanup=cleanup,
             connect_only=connect_only,
             host_network=host_network,
             host_port=host_port,
-            **backend_kwargs
-        )
-    elif mode == "basilica":
-        # Basilica mode for pre-deployed remote environments
-        if "base_url" not in backend_kwargs:
-            raise ValidationError(
-                "Basilica mode requires 'base_url' parameter. "
-                "Example: base_url='http://xx.xx.xx.xx:8080'"
-            )
-        backend = BasilicaBackend(
-            image=image,
             **backend_kwargs
         )
     elif mode == "url":
@@ -275,6 +270,20 @@ def _load_single_instance(
                 "Example: base_url='http://your-service.com:8080'"
             )
         backend = URLBackend(
+            **backend_kwargs
+        )
+    elif mode == "basilica":
+        # Basilica mode - temporary pod per evaluation
+        # Extract mode-specific parameters from backend_kwargs
+        ttl_buffer = backend_kwargs.pop("ttl_buffer", 300)
+        
+        backend = BasilicaBackend(
+            image=image,
+            mem_limit=mem_limit,
+            cpu_limit=cpu_limit,
+            env_vars=env_vars,
+            env_type_override=env_type,
+            ttl_buffer=ttl_buffer,
             **backend_kwargs
         )
     else:
@@ -305,6 +314,7 @@ def _load_multi_instance(
     force_recreate: bool = False,
     pull: bool = False,
     mem_limit: Optional[str] = None,
+    cpu_limit: Optional[str] = None,
     cleanup: bool = True,
     host_network: bool = False,
     host_port: Optional[int] = None,
@@ -343,6 +353,7 @@ def _load_multi_instance(
                     force_recreate=force_recreate,
                     pull=pull,
                     mem_limit=mem_limit,
+                    cpu_limit=cpu_limit,
                     cleanup=cleanup,
                     host_network=host_network,
                     host_port=host_port + i if host_port else None,
@@ -407,6 +418,7 @@ async def _deploy_instance(
     force_recreate: bool = False,
     pull: bool = False,
     mem_limit: Optional[str] = None,
+    cpu_limit: Optional[str] = None,
     cleanup: bool = True,
     host_network: bool = False,
     host_port: Optional[int] = None,
@@ -433,6 +445,7 @@ async def _deploy_instance(
             force_recreate=force_recreate,
             pull=pull,
             mem_limit=mem_limit,
+            cpu_limit=cpu_limit,
             auto_cleanup=cleanup,
             host_network=host_network,
             host_port=host_port,
