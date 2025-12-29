@@ -42,9 +42,15 @@ class LogicTaskV2:
             "class": "GameOf24Generator",
             "default_config": {}  # All parameters derived from seed
         },
+        "operation": {
+            "task_type_id": 2,  # Range: 200,000,000-299,999,999
+            "module": "games.operation.generator",
+            "class": "OperationGenerator",
+            "default_config": {}  # All parameters derived from seed
+        },
         # Add more seed-based tasks here in the future
         # "your_task": {
-        #     "task_type_id": 2,  # Range: 200,000,000-299,999,999
+        #     "task_type_id": 3,  # Range: 300,000,000-399,999,999
         #     "module": "games.your_task.generator",
         #     "class": "YourTaskGenerator",
         #     "default_config": {...}

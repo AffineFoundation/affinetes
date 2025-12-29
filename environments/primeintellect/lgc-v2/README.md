@@ -124,10 +124,13 @@ task_type, seed = LogicTaskV2.decode_task_id(500)  # → ("dyck_language", 500)
 |-----------|----------|----------|
 | dyck_language | 0-99,999,999 | 100M |
 | game_of_24 | 100,000,000-199,999,999 | 100M |
-| Reserved 1 | 200,000,000-299,999,999 | 100M |
+| operation | 200,000,000-299,999,999 | 100M |
+| Reserved 1 | 300,000,000-399,999,999 | 100M |
 
 ## Documentation
-- `games/dyck_language/README.md` - Example task documentation
+- `games/dyck_language/README.md` - Dyck language task documentation
+- `games/game_of_24/README.md` - Game of 24 task documentation
+- `games/operation/README.md` - Operation task documentation
 
 ## TODO: Task Integration Roadmap
 
@@ -141,10 +144,11 @@ Based on analysis of 33 task types from `lgc/i3_logic`, the following tasks are 
    - Supports unsolvable problems (model returns None)
    - Model success rate: ~10%
 
-2. **operation** (Symbol Operations)
+2. ✅ **operation** (Symbol Operations) - COMPLETED
    - Define custom operators (e.g., a△b = 2a+b), then evaluate expressions
-   - Deterministic generation, supports conditional branches
-   - Config: symbol count, complexity, nesting depth
+   - Seed-based generation with conditional branches
+   - Supports 1-3 custom symbols with operator precedence
+   - Multilingual prompts (Chinese/English)
 
 3. **cryptarithm** (Cryptarithmetic Puzzles)
    - SEND + MORE = MONEY (letters represent digits)
@@ -184,6 +188,6 @@ Based on analysis of 33 task types from `lgc/i3_logic`, the following tasks are 
 Recommended sequence based on implementation complexity and value:
 1. ✅ dyck_language (completed)
 2. ✅ game_of_24 (completed)
-3. ⏳ operation
+3. ✅ operation (completed)
 4. ⏳ cryptarithm
 5. ⏳ boolean_expressions
