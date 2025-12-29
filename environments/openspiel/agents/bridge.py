@@ -17,25 +17,25 @@ class BridgeAgent(BaseGameAgent):
     
     def get_rules(self) -> str:
         return """BRIDGE RULES:
-Players: 4 players in 2 partnerships (North-South vs East-West). Uses standard 52-card deck.
-Goal: Win tricks to fulfill your contract bid.
+Players: 4 players in 2 partnerships (North-South vs East-West). 52-card deck.
+Goal: Win tricks to fulfill contract bid.
 
-Game phases:
-1. BIDDING: Players bid to declare contract (level + suit/NT). Bids must be higher than previous.
-   - Level: 1-7 (number of tricks over 6 needed)
-   - Strain: ♣ (Clubs) < ♦ (Diamonds) < ♥ (Hearts) < ♠ (Spades) < NT (No Trump)
-   - Special bids: Pass, Double, Redouble
-   - Bidding ends after 3 consecutive passes
+BIDDING PHASE:
+- Bid format: Level (1-7) + Strain (♣/♦/♥/♠/NT)
+- Level = tricks over 6 required
+- Strain ranking: ♣ < ♦ < ♥ < ♠ < NT
+- Each bid must be higher than previous
+- Special bids: Pass, Double, Redouble
+- Bidding ends after 3 consecutive passes
 
-2. PLAY: Declarer's partner (dummy) reveals cards. Declarer controls both hands.
-   - Must follow suit if possible
-   - Highest card in led suit wins (or highest trump if trump played)
-   - Winner of trick leads next
+PLAY PHASE:
+- Declarer's partner (dummy) reveals all cards
+- Declarer controls both hands
+- Must follow suit if possible
+- Highest card in led suit wins (or highest trump)
+- Winner leads next trick
 
-Scoring: Points based on contract level, suit, and tricks won.
-Win condition: Partnership that fulfills more contracts wins overall.
-
-NOTE: This is a simplified Bridge implementation focusing on bidding strategy and trick-taking."""
+Winning: Fulfill contract (win required tricks). Partnership with most fulfilled contracts wins."""
     
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
@@ -65,6 +65,7 @@ NOTE: This is a simplified Bridge implementation focusing on bidding strategy an
     def get_mcts_config(self) -> tuple[int, int]:
         """
         4-player card game. 52-card deck, complex bidding and play.
-        High strategic depth, imperfect information.
+        Imperfect information. Bidding phase is fast, play phase is moderate.
+        Reduced from (500,50) to balance difficulty vs computation time.
         """
-        return (500, 50)
+        return (200, 30)

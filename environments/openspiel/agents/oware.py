@@ -17,26 +17,21 @@ class OwareAgent(BaseGameAgent):
     
     def get_rules(self) -> str:
         return """OWARE RULES:
-Board: 2 rows of 6 pits (houses), each with 4 seeds initially. Each player owns one row.
-Goal: Capture more seeds than your opponent (>24 seeds to win).
+Board: 2 rows of 6 pits. Each player owns one row. Seeds distributed initially.
+Goal: Capture more than half of all seeds.
 
-Turn structure:
-1. Pick all seeds from one of your pits
-2. Sow seeds counter-clockwise, one per pit (including opponent's pits)
-3. Capture: If last seed lands in opponent's pit with 2 or 3 total seeds, capture those seeds
-4. Continue capturing backwards if previous pits also have 2-3 seeds
+Turn:
+1. Pick all seeds from one of your pits (0-5)
+2. Sow counter-clockwise, one seed per pit (including opponent's pits)
+3. If last seed lands in opponent's pit with 2-3 total seeds, capture them
+4. Continue capturing backwards while pits have 2-3 seeds
 
-Rules:
-- Cannot leave opponent with no seeds (must give them a move)
-- Grand Slam: Capturing all opponent's seeds is forbidden (unless unavoidable)
-- Game ends when one player cannot move, or by mutual agreement
+Constraints:
+- Cannot leave opponent with no seeds
+- Cannot capture all opponent's seeds at once (Grand Slam)
+- Game ends when player cannot move
 
-Scoring: Player with most captured seeds wins.
-
-Strategy: Balance between sowing for position and capturing opportunities.
-Requires counting, planning multiple moves ahead, and denying opponent options.
-
-Move Format: Select pit number (0-5) from your row to sow seeds."""
+Winning: Player with most captured seeds wins."""
     
     def generate_params(self, config_id: int) -> Dict[str, Any]:
         """
@@ -60,8 +55,8 @@ Move Format: Select pit number (0-5) from your row to sow seeds."""
     
     def get_mcts_config(self) -> tuple[int, int]:
         """
-        2-player counting game. Medium complexity.
-        Action space: 6 moves per turn (choose which pit to sow).
-        Requires calculation of sowing patterns and captures.
+        2-player counting game. Action space: 6 moves per turn.
+        Much simpler than Go (5x5) which uses (300,30).
+        Reduced from (1000,100) to match complexity level.
         """
-        return (1000, 100)
+        return (300, 30)
