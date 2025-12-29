@@ -40,13 +40,7 @@ class LogicTaskV2:
             "task_type_id": 1,  # Range: 100,000,000-199,999,999
             "module": "games.game_of_24.generator",
             "class": "GameOf24Generator",
-            "default_config": {
-                "num_of_numbers": 4,
-                "result": 24,
-                "min_candidate": 1,
-                "max_candidate": 9,
-                "operators": ["+", "-", "*", "/"]
-            }
+            "default_config": {}  # All parameters derived from seed
         },
         # Add more seed-based tasks here in the future
         # "your_task": {

@@ -4,97 +4,76 @@ import re
 import uuid
 
 from base.data import Data
+from .config import derive_params_from_seed, format_question
 
 
 class GameOf24Generator:
     """Generate Game of 24 challenges with seed-based determinism"""
 
     def __init__(self):
-        # Prompt templates
-        self.prompts_en = [
-            "Given the numbers {numbers}, apply the arithmetic operations {operators} to get the result of {result}.",
-            "Using the numbers {numbers}, figure out how to combine them with the arithmetic operations {operators} to equal {result}.",
-            "Try to make {result} by performing arithmetic operations {operators} on the numbers {numbers}.",
-            "Can you use the numbers {numbers} and the arithmetic operations {operators} to get {result}?",
-        ]
+        pass
 
-        self.prompts_zh = [
-            "给定数字 {numbers}，使用算术运算 {operators} 得到 {result}。",
-            "用数字 {numbers}，想办法通过算术运算 {operators} 计算出 {result}。",
-            "你能用数字 {numbers} 和算术运算 {operators} 算出 {result} 吗？",
-            "试试用算术运算 {operators} 结合数字 {numbers} 计算出 {result}。",
-        ]
-
-    def generate(
-        self,
-        seed: int = None,
-        num_of_numbers: int = 4,
-        result: int = 24,
-        min_candidate: int = 1,
-        max_candidate: int = 9,
-        operators: list = None,
-        max_attempts: int = 1000
-    ):
+    def generate(self, seed: int = None, **kwargs):
         """
-        Generate a single Game of 24 challenge
+        Generate a single Game of 24 challenge based on seed
+
+        All parameters are derived from seed, so config kwargs are ignored
 
         Args:
             seed: Random seed for deterministic generation
-            num_of_numbers: Number of numbers to use (default: 4)
-            result: Target result (default: 24)
-            min_candidate: Minimum number value (default: 1)
-            max_candidate: Maximum number value (default: 9)
-            operators: List of allowed operators (default: ["+", "-", "*", "/"])
-            max_attempts: Maximum attempts to find valid challenge
+            **kwargs: Config parameters (ignored, for compatibility)
 
         Returns:
             Data object containing question, answer, and metadata
         """
-        if operators is None:
-            operators = ["+", "-", "*", "/"]
+        if seed is None:
+            seed = random.randint(0, 99999999)
 
-        rng = random.Random(seed) if seed is not None else random.Random()
+        # Derive all parameters from seed
+        params = derive_params_from_seed(seed)
 
-        for attempt in range(max_attempts):
-            # Generate attempt seed
-            attempt_seed = seed + attempt if seed is not None else None
-            if attempt_seed is not None:
-                rng.seed(attempt_seed)
+        # Create RNG for number generation
+        rng = random.Random(seed)
 
-            # Generate random numbers
-            numbers = [
-                rng.randint(min_candidate, max_candidate)
-                for _ in range(num_of_numbers)
-            ]
-            numbers = sorted(numbers)
+        # Generate numbers using derived parameters
+        numbers = [
+            rng.randint(params['min_val'], params['max_val'])
+            for _ in range(params['num_count'])
+        ]
+        numbers = sorted(numbers)
 
-            # Check if solvable
-            solutions = self._find_all_solutions(numbers, operators, result)
-            if not solutions:
-                continue
+        # Find all solutions (for metadata, not filtering)
+        solutions = self._find_all_solutions(
+            numbers,
+            params['operators'],
+            params['target']
+        )
 
-            # Generate question
-            question = self._format_question(numbers, operators, result, rng)
+        # Format question using config
+        question, lang = format_question(
+            numbers,
+            params['operators'],
+            params['target'],
+            params['prompt_idx']
+        )
 
-            # Build metadata
-            metadata = {
-                "seed": seed,
-                "trace_id": str(uuid.uuid4()),
-                "numbers": numbers,
-                "solutions_count": len(solutions),
-                "operators": operators,
-                "result": result,
-                "num_of_numbers": num_of_numbers,
-            }
+        # Build metadata
+        metadata = {
+            "seed": seed,
+            "trace_id": str(uuid.uuid4()),
+            "numbers": numbers,
+            "solutions_count": len(solutions),
+            "operators": params['operators'],
+            "target": params['target'],
+            "num_of_numbers": params['num_count'],
+            "language": lang,
+            "is_solvable": len(solutions) > 0,
+        }
 
-            return Data(
-                question=question,
-                answer="",  # No reference answer needed, verification is by evaluation
-                metadata=metadata
-            )
-
-        raise ValueError(
-            f"Failed to generate valid Game of 24 challenge after {max_attempts} attempts"
+        return Data(
+            question=question,
+            answer="",  # No reference answer needed
+            metadata=metadata
         )
 
     def _find_all_solutions(self, numbers, operators, target_result):
@@ -124,36 +103,18 @@ class GameOf24Generator:
 
         return list(solutions)
 
-    def _format_question(self, numbers, operators, result, rng):
-        """Format the question prompt"""
-        # Randomly choose language
-        use_chinese = rng.choice([True, False])
-
-        if use_chinese:
-            prompt = rng.choice(self.prompts_zh)
-            instruction = "在回答的最后，请输出一个 ```python 代码块。代码块中仅包含一个代表答案的表达式，并且该表达式可以直接被 Python 中的 eval() 函数求值。"
-        else:
-            prompt = rng.choice(self.prompts_en)
-            instruction = " At the end of your response, please output a ```python code block. The code block should contain only a single expression representing the answer, which can be directly evaluated using Python's eval() function."
-
-        prompt = prompt.format(
-            numbers=numbers,
-            operators=operators,
-            result=result
-        )
-
-        return prompt + instruction
-
     def extract_answer(self, test_solution: str) -> str:
         """
         Extract answer from model response
 
         Looks for ```python code block and extracts the expression
+        Returns the extracted expression or None string
         """
         regex_pattern = "```python.*?```"
         matches = re.findall(regex_pattern, test_solution, re.DOTALL)
 
         if matches:
-            return matches[-1].replace("```python", "").replace("```", "").strip()
+            answer = matches[-1].replace("```python", "").replace("```", "").strip()
+            return answer
 
         return ""

@@ -31,8 +31,15 @@ class GameOf24Verifier(Verifier):
             # Get metadata
             numbers = data.metadata["numbers"]
             operators = data.metadata["operators"]
-            target_result = data.metadata["result"]
+            target_result = data.metadata["target"]
+            is_solvable = data.metadata.get("is_solvable", True)
 
+            # Check if model claims no solution
+            if test_answer.strip() == "None":
+                # Model says no solution - verify this is correct
+                return not is_solvable
+
+            # Model provided an expression - verify it
             # Extract numbers from answer
             input_numbers = [str(num) for num in numbers]
             answer_numbers_str = re.sub("[^0-9]", " ", test_answer)
