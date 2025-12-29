@@ -135,10 +135,11 @@ Based on analysis of 33 task types from `lgc/i3_logic`, the following tasks are 
 
 ### High Priority (Ready for Integration)
 
-1. **game_of_24** (24 Game)
-   - Given 4 numbers, use arithmetic operations to get 24
-   - Simple generation, clear verification, unique solutions
-   - Config: number range, operator complexity
+1. ✅ **game_of_24** (24 Game) - COMPLETED
+   - Given 4-6 numbers, use arithmetic operations to reach target (24/36/48/60/72/100)
+   - Seed-based generation with multilingual prompts (Chinese/English)
+   - Supports unsolvable problems (model returns None)
+   - Model success rate: ~10%
 
 2. **operation** (Symbol Operations)
    - Define custom operators (e.g., a△b = 2a+b), then evaluate expressions
@@ -182,7 +183,7 @@ Based on analysis of 33 task types from `lgc/i3_logic`, the following tasks are 
 
 Recommended sequence based on implementation complexity and value:
 1. ✅ dyck_language (completed)
-2. 🔄 game_of_24 (in progress)
+2. ✅ game_of_24 (completed)
 3. ⏳ operation
 4. ⏳ cryptarithm
 5. ⏳ boolean_expressions
