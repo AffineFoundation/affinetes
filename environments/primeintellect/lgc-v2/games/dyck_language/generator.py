@@ -57,8 +57,8 @@ class DyckLanguageGenerator:
         # Determine lengths
         current_total_length = total_length
         if current_total_length <= 0:
-            # Random length between 50-90 (always even)
-            current_total_length = rng.randint(25, 45) * 2
+            # Random length between 40-60 (always even)
+            current_total_length = rng.randint(20, 30) * 2
         elif current_total_length % 2 != 0:
             current_total_length -= 1
 
