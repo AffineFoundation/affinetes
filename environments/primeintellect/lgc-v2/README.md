@@ -125,12 +125,14 @@ task_type, seed = LogicTaskV2.decode_task_id(500)  # → ("dyck_language", 500)
 | dyck_language | 0-99,999,999 | 100M |
 | game_of_24 | 100,000,000-199,999,999 | 100M |
 | operation | 200,000,000-299,999,999 | 100M |
-| Reserved 1 | 300,000,000-399,999,999 | 100M |
+| cryptarithm | 300,000,000-399,999,999 | 100M |
+| Reserved 1 | 400,000,000-499,999,999 | 100M |
 
 ## Documentation
 - `games/dyck_language/README.md` - Dyck language task documentation
 - `games/game_of_24/README.md` - Game of 24 task documentation
 - `games/operation/README.md` - Operation task documentation
+- `games/cryptarithm/README.md` - Cryptarithm task documentation
 
 ## TODO: Task Integration Roadmap
 
@@ -150,10 +152,11 @@ Based on analysis of 33 task types from `lgc/i3_logic`, the following tasks are 
    - Supports 1-3 custom symbols with operator precedence
    - Multilingual prompts (Chinese/English)
 
-3. **cryptarithm** (Cryptarithmetic Puzzles)
+3. ✅ **cryptarithm** (Cryptarithmetic Puzzles) - COMPLETED
    - SEND + MORE = MONEY (letters represent digits)
    - Pure logic reasoning with unique solution verification
-   - Config: letter count (1-9), operators (+,-,*), operation count
+   - Seed-based generation with multilingual prompts (Chinese/English)
+   - Backtracking ensures exactly one unique solution
 
 4. **boolean_expressions** (Boolean Logic)
    - Evaluate nested logical statements with true/false facts

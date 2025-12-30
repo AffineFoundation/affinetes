@@ -48,9 +48,15 @@ class LogicTaskV2:
             "class": "OperationGenerator",
             "default_config": {}  # All parameters derived from seed
         },
+        "cryptarithm": {
+            "task_type_id": 3,  # Range: 300,000,000-399,999,999
+            "module": "games.cryptarithm.generator",
+            "class": "CryptarithmGenerator",
+            "default_config": {}  # All parameters derived from seed
+        },
         # Add more seed-based tasks here in the future
         # "your_task": {
-        #     "task_type_id": 3,  # Range: 300,000,000-399,999,999
+        #     "task_type_id": 4,  # Range: 400,000,000-499,999,999
         #     "module": "games.your_task.generator",
         #     "class": "YourTaskGenerator",
         #     "default_config": {...}
