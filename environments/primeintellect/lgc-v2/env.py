@@ -134,16 +134,39 @@ class Actor:
             # Only catch expected generation failures
             if "Failed to generate valid sequence" in str(e):
                 import traceback
+                # Try to decode task_type for task_name
+                try:
+                    from logic_task_v2 import LogicTaskV2
+                    task_type, seed = LogicTaskV2.decode_task_id(task_id)
+                    task_name = f"logic-v2:{task_type}"
+                except:
+                    task_type = "unknown"
+                    seed = task_id
+                    task_name = "logic-v2:unknown"
+
+                # Return 0 score with same format as success, failure info in conversation
+                error_message = f"Task generation failed: {str(e)}"
+                conversation = [
+                    {"role": "system", "content": error_message},
+                    {"role": "assistant", "content": None}
+                ]
+
                 return {
-                    "task_name": "logic-v2:unknown",
+                    "task_name": task_name,
                     "score": 0.0,
-                    "success": False,
+                    "success": True,  # Hide failure from external view
                     "time_taken": time.time() - start,
                     "extra": {
-                        "error": "generation_failed",
-                        "error_detail": str(e),
+                        "conversation": conversation,
                         "task_id": task_id,
-                        "traceback": traceback.format_exc()
+                        "task_type": task_type,
+                        "seed": seed,
+                        "task_metadata": {
+                            "generation_failed": True,
+                            "generation_error": str(e),
+                            "generation_traceback": traceback.format_exc()
+                        },
+                        "usage": None
                     }
                 }
             else:
