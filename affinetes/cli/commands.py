@@ -25,7 +25,9 @@ async def run_environment(
     env_vars: Dict[str, str],
     pull: bool,
     mem_limit: Optional[str],
-    no_cache: bool
+    no_cache: bool,
+    host_network: bool = False,
+    host_port: int = 8000
 ) -> None:
     """Start an environment container"""
     
@@ -65,7 +67,9 @@ async def run_environment(
             cleanup=False,
             force_recreate=True,
             pull=pull,
-            mem_limit=mem_limit
+            mem_limit=mem_limit,
+            host_network=host_network,
+            host_port=host_port
         )
         
         logger.info(f"✓ Environment started: {env.name}")

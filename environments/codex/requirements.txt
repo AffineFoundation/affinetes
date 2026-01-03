@@ -1,0 +1,13 @@
+# Codex Django Bug-Fix Environment Dependencies
+
+# API clients
+openai>=1.0.0
+httpx
+
+# Data handling
+pydantic>=2.0
+
+# Utilities
+psutil
+pyyaml
+
