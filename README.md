@@ -376,6 +376,8 @@ afs validate ENV_DIR [OPTIONS]
 **Parameters:**
 - `ENV_DIR`: Environment directory path
 - `--num-tests N`: Number of tests to run (default: 100)
+- `--task-id-start N`: Starting task_id (default: 1)
+- `--task-id-end N`: Ending task_id (default: start + num_tests - 1)
 - `--output DIR`: Output directory for test results (default: rollouts/)
 - `--api-key KEY`: API key for LLM service (default: CHUTES_API_TOKEN env var)
 - `--base-url URL`: Base URL for LLM API (default: auto-detect from MINER_SLUG)
@@ -396,6 +398,12 @@ afs validate environments/my-env
 export CHUTES_API_TOKEN=your_token
 export MINER_SLUG=your_slug
 afs validate environments/my-env --num-tests 50
+
+# Test specific task_id range
+afs validate environments/my-env --task-id-start 100 --task-id-end 199
+
+# Test starting from specific task_id
+afs validate environments/my-env --task-id-start 1000 --num-tests 50
 
 # Custom parameters
 afs validate environments/my-env \
@@ -427,13 +435,17 @@ Seed diversity: 100/100 unique questions (100.0%)
 ```
 
 **Generated Files:**
-- `test_001.json` ~ `test_N.json`: Individual test results with full conversation
+- `test_task00001.json` ~ `test_taskNNNNN.json`: Individual test results (filename includes task_id)
 - `summary.json`: Aggregated statistics
 
 **Summary Format:**
 ```json
 {
   "total_tests": 100,
+  "task_id_range": {
+    "start": 1,
+    "end": 100
+  },
   "success_count": 45,
   "success_rate": 0.45,
   "seed_consistency_failures": 0,
