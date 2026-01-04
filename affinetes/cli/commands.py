@@ -3,6 +3,7 @@
 import asyncio
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Optional, Dict, Any
 
@@ -245,11 +246,249 @@ def _create_function_based_env(env_path: Path, use_actor: bool = False) -> None:
 
 def _create_http_based_env(env_path: Path) -> None:
     """Create HTTP-based environment files with FastAPI"""
-    
+
     # env.py
     (env_path / "env.py").write_text(FASTAPI_ENV_PY)
     logger.info(f"  Created: env.py (HTTP-based)")
-    
+
     # Dockerfile
     (env_path / "Dockerfile").write_text(FASTAPI_DOCKERFILE)
     logger.info(f"  Created: Dockerfile")
+
+
+async def test_environment(
+    env_dir: str,
+    num_tests: int,
+    output_dir: str,
+    api_key: Optional[str],
+    base_url: Optional[str],
+    temperature: float,
+    timeout: int
+) -> None:
+    """Validate environment seed consistency and generate test rollouts"""
+
+    try:
+        env_path = Path(env_dir).resolve()
+
+        # Validate environment directory
+        if not env_path.exists():
+            logger.error(f"Environment directory not found: {env_dir}")
+            return
+
+        if not (env_path / "env.py").exists():
+            logger.error(f"Missing env.py in {env_dir}")
+            return
+
+        # Build and run environment in container
+        logger.info("Building environment image...")
+
+        # Generate image tag
+        dir_name = env_path.name
+        image_tag = f"affinetes-validate-{dir_name}:latest"
+
+        try:
+            from ..api import build_image_from_env, load_env
+
+            # Build image
+            build_image_from_env(
+                env_path=str(env_path),
+                image_tag=image_tag,
+                nocache=False,
+                quiet=True
+            )
+
+            logger.info(f"✓ Image built: {image_tag}")
+
+        except Exception as e:
+            logger.error(f"Failed to build image: {e}")
+            return
+
+        # Prepare environment variables
+        env_vars = {}
+        if api_key:
+            env_vars["CHUTES_API_KEY"] = api_key
+        elif os.getenv("CHUTES_API_TOKEN"):
+            env_vars["CHUTES_API_KEY"] = os.getenv("CHUTES_API_TOKEN")
+        elif os.getenv("CHUTES_API_KEY"):
+            env_vars["CHUTES_API_KEY"] = os.getenv("CHUTES_API_KEY")
+
+        if os.getenv("MINER_SLUG"):
+            env_vars["MINER_SLUG"] = os.getenv("MINER_SLUG")
+
+        # Start environment
+        logger.info("Starting environment container...")
+        try:
+            env = load_env(
+                image=image_tag,
+                container_name=f"affinetes-validate-{dir_name}",
+                env_vars=env_vars,
+                cleanup=False,
+                force_recreate=True
+            )
+
+            logger.info(f"✓ Environment started: {env.name}")
+
+        except Exception as e:
+            logger.error(f"Failed to start environment: {e}")
+            return
+
+        logger.info("="*80)
+        logger.info("Environment Validation Suite")
+        logger.info("="*80)
+
+        results = []
+
+        # Test: Generate tests with seed consistency validation
+        logger.info(f"\nRunning {num_tests} tests (each test runs twice to validate seed consistency)")
+        logger.info("-"*80)
+
+        try:
+            # Determine base_url
+            use_base_url = base_url
+            if not use_base_url:
+                miner_slug = os.getenv("MINER_SLUG")
+                if miner_slug:
+                    use_base_url = f"https://{miner_slug}.chutes.ai/v1"
+                else:
+                    use_base_url = "https://llm.chutes.ai/v1"
+
+            # Create output directory
+            output_path = Path(output_dir)
+            output_path.mkdir(parents=True, exist_ok=True)
+
+            rollouts = []
+            success_count = 0
+            seed_consistency_failures = 0
+            all_prompts = {}  # Track all prompts to verify diversity
+
+            for i in range(num_tests):
+                task_id = i + 1
+
+                try:
+                    # Run same task_id twice to validate seed consistency
+                    # First evaluation
+                    result1 = await env.evaluate(
+                        task_id=task_id,
+                        base_url=use_base_url,
+                        temperature=temperature,
+                        timeout=timeout,
+                        _timeout=timeout + 10
+                    )
+
+                    # Second evaluation with same task_id
+                    result2 = await env.evaluate(
+                        task_id=task_id,
+                        base_url=use_base_url,
+                        temperature=temperature,
+                        timeout=timeout,
+                        _timeout=timeout + 10
+                    )
+
+                    # Check seed consistency (same question should be generated)
+                    conv1 = result1.get("extra", {}).get("conversation", [])
+                    conv2 = result2.get("extra", {}).get("conversation", [])
+
+                    prompt1 = conv1[0].get("content", "") if len(conv1) > 0 else ""
+                    prompt2 = conv2[0].get("content", "") if len(conv2) > 0 else ""
+
+                    seed_consistent = prompt1 == prompt2
+
+                    if not seed_consistent:
+                        seed_consistency_failures += 1
+                        logger.warning(f"Test {task_id}: Seed inconsistency detected!")
+
+                    # Track prompt for diversity check
+                    all_prompts[task_id] = prompt1
+
+                    # Use first result for rollout, but add seed consistency info
+                    result = result1
+                    result["seed_consistent"] = seed_consistent
+                    result["extra"]["second_run"] = {
+                        "score": result2.get("score"),
+                        "success": result2.get("success")
+                    }
+
+                    if result.get("success"):
+                        success_count += 1
+
+                    rollouts.append(result)
+
+                    if (i + 1) % 10 == 0:
+                        logger.info(f"Progress: {i + 1}/{num_tests} tests completed")
+
+                except Exception as e:
+                    logger.warning(f"Error on test {i + 1}: {e}")
+                    rollouts.append({
+                        "task_id": task_id,
+                        "error": str(e),
+                        "success": False,
+                        "seed_consistent": False
+                    })
+                    seed_consistency_failures += 1
+
+            # Check seed diversity (different seeds should generate different questions)
+            unique_prompts = len(set(all_prompts.values()))
+            total_prompts = len(all_prompts)
+            seed_diversity_rate = unique_prompts / total_prompts if total_prompts > 0 else 0
+
+            # Save individual rollouts
+            for i, rollout in enumerate(rollouts):
+                output_file = output_path / f"test_{i+1:03d}.json"
+                with open(output_file, 'w', encoding='utf-8') as f:
+                    json.dump(rollout, f, indent=2, ensure_ascii=False)
+
+            # Save summary
+            summary = {
+                "total_tests": num_tests,
+                "success_count": success_count,
+                "success_rate": success_count / num_tests if num_tests > 0 else 0,
+                "seed_consistency_failures": seed_consistency_failures,
+                "seed_consistency_rate": (num_tests - seed_consistency_failures) / num_tests if num_tests > 0 else 0,
+                "seed_diversity": {
+                    "unique_prompts": unique_prompts,
+                    "total_prompts": total_prompts,
+                    "diversity_rate": seed_diversity_rate
+                },
+                "rollouts": rollouts
+            }
+
+            summary_file = output_path / "summary.json"
+            with open(summary_file, 'w', encoding='utf-8') as f:
+                json.dump(summary, f, indent=2, ensure_ascii=False)
+
+            logger.info(f"\n✓ Completed {num_tests} tests")
+            logger.info(f"Output directory: {output_dir}/")
+            logger.info(f"Success rate: {success_count}/{num_tests} ({success_count/num_tests*100:.1f}%)")
+            logger.info(f"Seed consistency: {num_tests - seed_consistency_failures}/{num_tests} ({(num_tests - seed_consistency_failures)/num_tests*100:.1f}%)")
+            logger.info(f"Seed diversity: {unique_prompts}/{total_prompts} unique questions ({seed_diversity_rate*100:.1f}%)")
+
+            if seed_consistency_failures > 0:
+                logger.warning(f"\n⚠️  {seed_consistency_failures} tests had seed inconsistency!")
+
+            if seed_diversity_rate < 1.0:
+                duplicate_count = total_prompts - unique_prompts
+                logger.warning(f"\n⚠️  {duplicate_count} duplicate questions detected (different seeds generated same question)!")
+
+            # Pass validation if both consistency and diversity are perfect
+            validation_passed = (seed_consistency_failures == 0 and seed_diversity_rate == 1.0)
+            results.append(validation_passed)
+
+        except Exception as e:
+            logger.error(f"Validation failed with error: {e}")
+            import traceback
+            logger.debug(traceback.format_exc())
+            results.append(False)
+
+        # Summary
+        logger.info("\n" + "="*80)
+        logger.info("Validation Summary")
+        logger.info("="*80)
+
+        if all(results):
+            logger.info("✓ All validations passed!")
+        else:
+            logger.error("✗ Validation failed - check seed consistency")
+
+    except Exception as e:
+        logger.error(f"Failed to run tests: {e}")
+        raise

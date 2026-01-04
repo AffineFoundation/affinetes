@@ -8,7 +8,7 @@ from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 from ..utils.logger import logger
-from .commands import run_environment, call_method, build_and_push, init_environment
+from .commands import run_environment, call_method, build_and_push, init_environment, test_environment
 
 load_dotenv(override=True)
 
@@ -169,7 +169,48 @@ Examples:
         type=int,
         help='Timeout in seconds'
     )
-    
+
+    # === validate command ===
+    validate_parser = subparsers.add_parser(
+        'validate',
+        help='Validate environment seed consistency and generate rollouts'
+    )
+    validate_parser.add_argument(
+        'env_dir',
+        help='Environment directory path'
+    )
+    validate_parser.add_argument(
+        '--num-tests',
+        type=int,
+        default=100,
+        help='Number of tests to run (default: 100)'
+    )
+    validate_parser.add_argument(
+        '--output',
+        default='rollouts',
+        help='Output directory for rollouts (default: rollouts/)'
+    )
+    validate_parser.add_argument(
+        '--api-key',
+        help='API key for LLM service (default: CHUTES_API_TOKEN env var)'
+    )
+    validate_parser.add_argument(
+        '--base-url',
+        help='Base URL for LLM API (default: auto-detect from MINER_SLUG)'
+    )
+    validate_parser.add_argument(
+        '--temperature',
+        type=float,
+        default=0.7,
+        help='Temperature for LLM generation (default: 0.7)'
+    )
+    validate_parser.add_argument(
+        '--timeout',
+        type=int,
+        default=60,
+        help='Timeout for each evaluation in seconds (default: 60)'
+    )
+
     return parser
 
 
@@ -268,14 +309,25 @@ def main():
         
         elif args.command == 'call':
             method_args = parse_method_args(args.args, args.json_args)
-            
+
             asyncio.run(call_method(
                 name=args.name,
                 method=args.method,
                 args=method_args,
                 timeout=args.timeout
             ))
-        
+
+        elif args.command == 'validate':
+            asyncio.run(test_environment(
+                env_dir=args.env_dir,
+                num_tests=args.num_tests,
+                output_dir=args.output,
+                api_key=args.api_key,
+                base_url=args.base_url,
+                temperature=args.temperature,
+                timeout=args.timeout
+            ))
+
         else:
             parser.print_help()
             sys.exit(1)
