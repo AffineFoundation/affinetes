@@ -78,8 +78,12 @@ class Actor:
         num_train: int = 3,
     ):
         """Run evaluation on a single ARC-GEN task."""
+        # Use task_id as seed for deterministic generation if seed not provided
         if seed is None:
-            seed = random.randint(0, 2**32 - 1)
+            if task_id is not None:
+                seed = task_id
+            else:
+                seed = random.randint(0, 2**32 - 1)
 
         current_api_key = api_key or self.api_key
 
