@@ -70,18 +70,5 @@ IMPORTANT: Always respond with the action ID number ONLY, never card names."""
         }
     
     def get_mcts_config(self) -> tuple:
-        """
-        Get MCTS configuration for Gin Rummy
-        
-        Complexity Analysis:
-        - 52-card deck, 7-10 cards per hand
-        - State space: >10^85 information states (astronomical!)
-        - Opponent hand combinations: 41C10 = 1,121,099,408 possibilities
-        - Branching factor: 10-15 actions per turn (discard + meld options)
-        - Average game length: 50-100 moves (MaxGameLength = 300)
-        - Rollout cost: Very high (complex meld calculations, huge state space)
-
-        Returns:
-            tuple: (max_simulations, n_rollouts)
-        """
-        return (300, 10)
+        """Hidden information game. Modest rollouts sufficient for sampling opponent possibilities."""
+        return (500, 10)

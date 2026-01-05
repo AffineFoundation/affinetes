@@ -77,6 +77,7 @@ class DyckLanguageGenerator:
         )
 
         question_sequence = sequence[:cut_point]
+        closing_sequence = sequence[cut_point:]  # Only the closing brackets
 
         # Format question
         question = self._format_question(question_sequence)
@@ -84,12 +85,13 @@ class DyckLanguageGenerator:
         # Create Data object
         return Data(
             question=question,
-            answer=sequence,
+            answer=closing_sequence,  # Store only closing brackets, not full sequence
             metadata={
                 "seed": seed,
                 "trace_id": str(uuid.uuid4()),
                 "full_sequence": sequence,
                 "question_sequence": question_sequence,
+                "closing_sequence": closing_sequence,  # Add this for clarity
                 "n_types": n_types,
                 "total_length": current_total_length,
                 "fill_length": current_fill_length,

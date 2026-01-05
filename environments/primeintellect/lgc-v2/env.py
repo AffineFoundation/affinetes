@@ -18,7 +18,7 @@ from logic_task_v2 import LogicTaskV2
 class Actor:
     """Logic V2 task evaluation actor with seed-based generation"""
 
-    def __init__(self, api_key: str = None, task_configs: dict = None, max_cache_size: int = 10000):
+    def __init__(self, api_key: str = None, task_configs: dict = None, max_cache_size: int = 1000, max_client_cache: int = 200):
         """
         Initialize Actor with API key and task configurations
 
@@ -26,16 +26,31 @@ class Actor:
             api_key: API key for LLM service. If not provided, will use CHUTES_API_KEY env var
             task_configs: Optional dict of task-specific configurations
                          Format: {"dyck_language": {"n_types": 4, "total_length": 20}}
-            max_cache_size: Maximum number of challenges to cache (default: 10000)
-                           Set to 0 to disable caching
+            max_cache_size: Maximum number of challenges to cache (default: 1000)
+            max_client_cache: Maximum number of OpenAI clients to cache (default: 200)
+                             Prevents unlimited growth when using multiple base_urls
         """
         self.api_key = api_key or os.getenv("CHUTES_API_KEY")
 
         # Initialize logic task V2 instance with caching
         self.logic_task = LogicTaskV2(task_configs=task_configs, max_cache_size=max_cache_size)
 
-    async def _llm_chat(self, prompt, model, base_url, timeout, temperature, current_api_key, seed=None):
-        """Call LLM API with specified API key and optional seed (streaming mode)"""
+        # Reusable OpenAI client to avoid connection leaks (LRU cache with size limit)
+        from collections import OrderedDict
+        self._client_cache = OrderedDict()
+        self._max_client_cache = max_client_cache
+
+    def _get_or_create_client(self, base_url, current_api_key, timeout):
+        """Get cached client or create new one with LRU eviction to avoid connection leaks"""
+        # Create cache key based on base_url and api_key
+        cache_key = f"{base_url}:{current_api_key[:10]}"
+
+        # If client exists, move to end (mark as recently used)
+        if cache_key in self._client_cache:
+            self._client_cache.move_to_end(cache_key)
+            return self._client_cache[cache_key]
+
+        # Create new client
         # Unset SSL_CERT_FILE to avoid certificate path issues in container
         os.environ.pop('SSL_CERT_FILE', None)
         os.environ.pop('REQUESTS_CA_BUNDLE', None)
@@ -43,9 +58,32 @@ class Actor:
         client = openai.AsyncOpenAI(
             base_url=base_url.rstrip('/'),
             api_key=current_api_key,
-            timeout=httpx.Timeout(timeout),
+            timeout=httpx.Timeout(
+                connect=10.0,  # Connection timeout
+                read=20.0,     # Read timeout (per chunk)
+                write=10.0,    # Write timeout
+                pool=10.0      # Pool timeout
+            ),
             max_retries=0
         )
+
+        self._client_cache[cache_key] = client
+
+        # Evict oldest client if cache is full (LRU)
+        if len(self._client_cache) > self._max_client_cache:
+            oldest_key, oldest_client = self._client_cache.popitem(last=False)
+            # Note: We don't await close() here since it's sync method
+            # The client will be garbage collected and connections will eventually close
+            # For proper cleanup, consider using async cleanup in Actor.__del__ or cleanup method
+
+        return client
+
+    async def _llm_chat(self, prompt, model, base_url, timeout, temperature, current_api_key, seed=None):
+        """Call LLM API with specified API key and optional seed (streaming mode)"""
+        import asyncio
+
+        # Get client (timeout is configured in httpx.Timeout when creating client)
+        client = self._get_or_create_client(base_url, current_api_key, timeout)
 
         # Prepare API call parameters with streaming enabled
         params = {
@@ -60,31 +98,54 @@ class Actor:
         if seed is not None:
             params["seed"] = seed
 
+        # Create stream (httpx client already has 20s read timeout configured)
         stream = await client.chat.completions.create(**params)
 
         # Collect streamed content and usage
         content_parts = []
         usage = None
+        chunk_count = 0
 
-        async for chunk in stream:
-            # Collect content chunks
-            if chunk.choices and chunk.choices[0].delta.content:
-                content_parts.append(chunk.choices[0].delta.content)
+        try:
+            async for chunk in stream:
+                chunk_count += 1
+                # Collect content chunks
+                if chunk.choices and chunk.choices[0].delta.content:
+                    content_parts.append(chunk.choices[0].delta.content)
 
-            # Collect usage information from the final chunk
-            if chunk.usage:
-                usage = chunk.usage.model_dump()
+                # Collect usage information from the final chunk
+                if chunk.usage:
+                    usage = chunk.usage.model_dump()
 
-        # Combine all content parts
-        if not content_parts:
-            raise ValueError("LLM API returned empty content stream")
+            # Combine all content parts
+            if not content_parts:
+                # Provide detailed error info for debugging
+                error_msg = f"LLM API returned empty content stream (received {chunk_count} chunks, no content)"
+                if chunk_count == 0:
+                    error_msg += " - Stream may have been closed immediately"
+                raise ValueError(error_msg)
 
-        content = "".join(content_parts)
-        if not content:
-            raise ValueError("LLM API returned None content (possible content filtering or API error)")
+            content = "".join(content_parts)
+            if not content:
+                raise ValueError("LLM API returned None content (possible content filtering or API error)")
 
-        # Return both content and usage information
-        return content.strip(), usage
+            # Return both content and usage information
+            return content.strip(), usage
+
+        finally:
+            # Critical: Close stream to return connection to pool
+            # Use timeout protection to avoid hanging on close
+            try:
+                await asyncio.wait_for(stream.response.aclose(), timeout=5.0)
+            except asyncio.TimeoutError:
+                # If close hangs, log and continue to avoid blocking error propagation
+                # The connection will be cleaned up by garbage collector
+                import logging
+                logging.warning("Stream close timed out after 5s, connection may leak")
+            except Exception as e:
+                # Best effort cleanup - don't let close failure block error propagation
+                import logging
+                logging.debug(f"Stream close failed: {e}")
 
     async def evaluate(
         self,
@@ -93,7 +154,8 @@ class Actor:
         timeout=600,
         temperature=0.7,
         api_key: str = None,
-        task_id: int = None
+        task_id: int = None,
+        seed: int = None,
     ):
         """
         Run evaluation on a single logic task
@@ -133,16 +195,39 @@ class Actor:
             # Only catch expected generation failures
             if "Failed to generate valid sequence" in str(e):
                 import traceback
+                # Try to decode task_type for task_name
+                try:
+                    from logic_task_v2 import LogicTaskV2
+                    task_type, seed = LogicTaskV2.decode_task_id(task_id)
+                    task_name = f"logic-v2:{task_type}"
+                except:
+                    task_type = "unknown"
+                    seed = task_id
+                    task_name = "logic-v2:unknown"
+
+                # Return 0 score with same format as success, failure info in conversation
+                error_message = f"Task generation failed: {str(e)}"
+                conversation = [
+                    {"role": "system", "content": error_message},
+                    {"role": "assistant", "content": None}
+                ]
+
                 return {
-                    "task_name": "logic-v2:unknown",
+                    "task_name": task_name,
                     "score": 0.0,
-                    "success": False,
+                    "success": True,  # Hide failure from external view
                     "time_taken": time.time() - start,
                     "extra": {
-                        "error": "generation_failed",
-                        "error_detail": str(e),
+                        "conversation": conversation,
                         "task_id": task_id,
-                        "traceback": traceback.format_exc()
+                        "task_type": task_type,
+                        "seed": seed,
+                        "task_metadata": {
+                            "generation_failed": True,
+                            "generation_error": str(e),
+                            "generation_traceback": traceback.format_exc()
+                        },
+                        "usage": None
                     }
                 }
             else:

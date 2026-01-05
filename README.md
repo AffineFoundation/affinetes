@@ -170,7 +170,7 @@ source .venv/bin/activate
 
 ## Command-Line Interface
 
-The `afs` CLI follows the **init → build → run → call** workflow.
+The `afs` CLI follows the **init → build → run → call** workflow, with `validate` for testing.
 
 ### Workflow Overview
 
@@ -361,6 +361,108 @@ afs call agentgym evaluate \
 - Container must be running (started via `afs run` or verify with `docker ps`)
 - Method must exist in environment's `env.py`
 - Results output as JSON
+
+---
+
+### `afs validate` - Validate Environment
+
+Validate environment seed consistency and generate test rollouts.
+
+**Syntax:**
+```bash
+afs validate ENV_DIR [OPTIONS]
+```
+
+**Parameters:**
+- `ENV_DIR`: Environment directory path
+- `--num-tests N`: Number of tests to run (default: 100)
+- `--task-id-start N`: Starting task_id (default: 1)
+- `--task-id-end N`: Ending task_id (default: start + num_tests - 1)
+- `--output DIR`: Output directory for test results (default: rollouts/)
+- `--api-key KEY`: API key for LLM service (default: CHUTES_API_TOKEN env var)
+- `--base-url URL`: Base URL for LLM API (default: auto-detect from MINER_SLUG)
+- `--temperature T`: Temperature for LLM generation (default: 0.7)
+- `--timeout SECS`: Timeout for each evaluation in seconds (default: 60)
+
+**What it validates:**
+1. **Seed Consistency**: Same seed generates identical questions
+2. **Seed Diversity**: Different seeds generate different questions
+3. Each test runs twice to verify deterministic behavior
+
+**Examples:**
+```bash
+# Basic validation (no model calls, only seed consistency)
+afs validate environments/my-env
+
+# Run 50 tests with real model
+export CHUTES_API_TOKEN=your_token
+export MINER_SLUG=your_slug
+afs validate environments/my-env --num-tests 50
+
+# Test specific task_id range
+afs validate environments/my-env --task-id-start 100 --task-id-end 199
+
+# Test starting from specific task_id
+afs validate environments/my-env --task-id-start 1000 --num-tests 50
+
+# Custom parameters
+afs validate environments/my-env \
+  --num-tests 100 \
+  --output validation_results \
+  --temperature 0.8 \
+  --timeout 300
+
+# Use custom API endpoint
+afs validate environments/my-env \
+  --api-key your_key \
+  --base-url https://custom-api.com/v1 \
+  --num-tests 20
+```
+
+**Output:**
+```
+Running 100 tests (each test runs twice to validate seed consistency)
+--------------------------------------------------------------------------------
+Progress: 10/100 tests completed
+Progress: 20/100 tests completed
+...
+
+✓ Completed 100 tests
+Output directory: rollouts/
+Success rate: 45/100 (45.0%)
+Seed consistency: 100/100 (100.0%)
+Seed diversity: 100/100 unique questions (100.0%)
+```
+
+**Generated Files:**
+- `test_task00001.json` ~ `test_taskNNNNN.json`: Individual test results (filename includes task_id)
+- `summary.json`: Aggregated statistics
+
+**Summary Format:**
+```json
+{
+  "total_tests": 100,
+  "task_id_range": {
+    "start": 1,
+    "end": 100
+  },
+  "success_count": 45,
+  "success_rate": 0.45,
+  "seed_consistency_failures": 0,
+  "seed_consistency_rate": 1.0,
+  "seed_diversity": {
+    "unique_prompts": 100,
+    "total_prompts": 100,
+    "diversity_rate": 1.0
+  }
+}
+```
+
+**Use Cases:**
+- Test environment before deployment
+- Verify seed-based task generation works correctly
+- Generate rollouts for manual review
+- Debug environment implementation
 
 ---
 

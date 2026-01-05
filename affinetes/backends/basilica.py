@@ -189,7 +189,7 @@ class BasilicaBackend(AbstractBackend):
             
             # Use shorter timeout for waiting (max 10 minutes)
             wait_timeout = min(ttl_seconds, 600)
-            deployment.wait_until_ready(timeout=wait_timeout)
+            deployment.wait_until_ready(timeout=wait_timeout, silent=True)
             deployment.refresh()
             
             logger.info(f"Deployment ready: {deployment.url}")

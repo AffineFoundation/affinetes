@@ -22,29 +22,33 @@ class DyckLanguageVerifier(Verifier):
         Returns:
             bool: True if correct and minimal, False otherwise
         """
-        # Extract user answer
+        # Extract user answer (should be complete valid sequence)
         from .generator import DyckLanguageGenerator
 
         generator = DyckLanguageGenerator()
-        user_answer = generator.extract_answer(test_solution)
+        user_full_sequence = generator.extract_answer(test_solution)
 
         # Get question sequence from metadata
         question_sequence = data.metadata.get("question_sequence", "")
 
-        if not question_sequence:
+        if not question_sequence or not user_full_sequence:
             return False
 
-        # Combine question + user answer
-        full_sequence = question_sequence + user_answer
-
-        # 1. Check if full sequence is valid Dyck language
-        if not self._is_valid_dyck(full_sequence):
+        # 1. Check if user's answer is valid Dyck language
+        if not self._is_valid_dyck(user_full_sequence):
             return False
 
-        # 2. Check if user answer is minimal (only necessary closing brackets)
+        # 2. Check if user's answer starts with the question sequence
+        if not user_full_sequence.startswith(question_sequence):
+            return False
+
+        # 3. Extract the added part (should be only closing brackets)
+        user_added_part = user_full_sequence[len(question_sequence):]
+
+        # 4. Check if added part matches required closing brackets
         required_closing = self._calculate_required_closing(question_sequence)
 
-        return user_answer == required_closing
+        return user_added_part == required_closing
 
     def _is_valid_dyck(self, sequence: str) -> bool:
         """Check if a sequence is valid Dyck language"""
