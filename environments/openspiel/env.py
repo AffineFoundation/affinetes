@@ -12,7 +12,11 @@ from open_spiel.python.bots import uniform_random
 from open_spiel.python.algorithms import mcts
 import pyspiel
 
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 from llm_bot import LLMBot
+from local_llm_bot import LocalLLMBot
 from game_config import create_game
 from agents import GAME_AGENTS
 
@@ -553,6 +557,257 @@ class Actor:
             result["extra"]["mcts_timing"] = mcts_stats
 
         # Add error to top-level (consistent with other environments)
+        if error:
+            result["error"] = str(error)
+
+        return result
+
+    async def local_evaluate(
+        self,
+        model: AutoModelForCausalLM,
+        tokenizer: AutoTokenizer,
+        task_id: int = None,
+        seed: int = None,
+        timeout: int = 1800,
+        opponent: str = "mcts",
+    ):
+        """
+        Run single game evaluation using local model
+
+        Args:
+            model: Loaded AutoModelForCausalLM instance
+            tokenizer: Loaded AutoTokenizer instance
+            task_id: Task identifier (12-digit format: GGGGCCCCCCCC)
+            seed: Random seed for reproducibility
+            timeout: Overall task timeout in seconds (default 1800s = 30min)
+            opponent: Opponent type ("random" or "mcts")
+        """
+        if task_id is None:
+            task_id = random.randint(0, 10**11 - 1)
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+
+        start_time = time.time()
+
+        return await asyncio.wait_for(
+            self._run_local_evaluation(
+                task_id,
+                seed,
+                model,
+                tokenizer,
+                opponent,
+                start_time,
+                timeout,
+            ),
+            timeout=timeout,
+        )
+
+    async def _run_local_evaluation(
+        self,
+        task_id,
+        seed,
+        model,
+        tokenizer,
+        opponent,
+        start_time,
+        task_timeout,
+    ):
+        """Internal method to run local evaluation with unified error handling"""
+        from local_llm_bot import ParsingError
+
+        llm_player_id = seed % 2
+        game_name = "unknown"
+        llm_bot = None
+        mcts_bots = []
+
+        internal_timeout = max(task_timeout - 20, task_timeout * 0.9)
+
+        try:
+            game, game_config = create_game(task_id)
+            game_name = game_config["game_name"]
+            num_players = game.num_players()
+            llm_player_id = llm_player_id % num_players
+
+            agent_class = GAME_AGENTS.get(game_name)
+            if not agent_class:
+                raise ValueError(f"No agent found for game: {game_name}")
+
+            agent = agent_class()
+
+            llm_bot = LocalLLMBot(
+                game=game,
+                player_id=llm_player_id,
+                model=model,
+                tokenizer=tokenizer,
+                rng_seed=seed + 1,
+                agent=agent,
+                seed=seed,
+            )
+
+            bots = []
+            for player_id in range(num_players):
+                if player_id == llm_player_id:
+                    bots.append(llm_bot)
+                else:
+                    opponent_bot = self._create_opponent_bot(
+                        opponent, player_id, seed + 2 + player_id, game, agent
+                    )
+                    if isinstance(opponent_bot, TimedMCTSBot):
+                        mcts_bots.append(opponent_bot)
+                    bots.append(opponent_bot)
+
+            loop = asyncio.get_event_loop()
+
+            try:
+                returns = await asyncio.wait_for(
+                    loop.run_in_executor(
+                        self.executor,
+                        evaluate_bots.evaluate_bots,
+                        game.new_initial_state(),
+                        bots,
+                        np.random.RandomState(seed),
+                    ),
+                    timeout=internal_timeout
+                )
+            except asyncio.TimeoutError:
+                elapsed = time.time() - start_time
+                return self._build_local_result(
+                    game_name=game_name,
+                    llm_player_id=llm_player_id,
+                    task_id=task_id,
+                    seed=seed,
+                    opponent=opponent,
+                    start_time=start_time,
+                    error=f"Game incomplete: timeout after {elapsed:.1f}s (limit: {task_timeout}s)",
+                    llm_bot=llm_bot,
+                    mcts_bots=mcts_bots,
+                )
+
+            llm_return = returns[llm_player_id]
+            score = self._compute_score(returns, llm_player_id, game)
+
+            return self._build_local_result(
+                game_name=game_name,
+                llm_player_id=llm_player_id,
+                task_id=task_id,
+                seed=seed,
+                opponent=opponent,
+                start_time=start_time,
+                score=score,
+                llm_return=llm_return,
+                all_returns=returns,
+                error=llm_bot.get_last_error() if llm_bot else None,
+                llm_bot=llm_bot,
+                mcts_bots=mcts_bots,
+            )
+
+        except asyncio.TimeoutError:
+            return self._build_local_result(
+                game_name=game_name,
+                llm_player_id=llm_player_id,
+                task_id=task_id,
+                seed=seed,
+                opponent=opponent,
+                start_time=start_time,
+                error=f"Task timeout exceeded ({task_timeout}s)",
+                llm_bot=llm_bot,
+                mcts_bots=mcts_bots,
+            )
+
+        except Exception as e:
+            import traceback
+
+            if isinstance(e, ParsingError):
+                return self._build_local_result(
+                    game_name=game_name,
+                    llm_player_id=llm_player_id,
+                    task_id=task_id,
+                    seed=seed,
+                    opponent=opponent,
+                    start_time=start_time,
+                    score=0.0,
+                    error=None,
+                    llm_bot=llm_bot,
+                    mcts_bots=mcts_bots,
+                )
+
+            if llm_bot and llm_bot.get_last_error():
+                error_msg = llm_bot.get_last_error()
+            else:
+                error_msg = f"[{type(e).__name__}] {str(e)}\n{traceback.format_exc()}"
+
+            return self._build_local_result(
+                game_name=game_name,
+                llm_player_id=llm_player_id,
+                task_id=task_id,
+                seed=seed,
+                opponent=opponent,
+                start_time=start_time,
+                error=error_msg,
+                llm_bot=llm_bot,
+                mcts_bots=mcts_bots,
+            )
+
+    def _build_local_result(
+        self,
+        game_name,
+        llm_player_id,
+        task_id,
+        seed,
+        opponent,
+        start_time,
+        score=0.0,
+        llm_return=None,
+        all_returns=None,
+        error=None,
+        llm_bot=None,
+        mcts_bots=None,
+    ):
+        """Build result dictionary for local evaluation"""
+        conversation = []
+        action_history = []
+        observation = None
+        if llm_bot is not None:
+            try:
+                conversation = llm_bot.get_conversation()
+                action_history = llm_bot.get_action_history()
+                observation = llm_bot.get_observation()
+            except:
+                pass
+
+        mcts_stats = None
+        if mcts_bots:
+            total_time = sum(bot.total_mcts_time for bot in mcts_bots)
+            total_calls = sum(bot.mcts_call_count for bot in mcts_bots)
+            mcts_stats = {
+                'total_mcts_time': total_time,
+                'total_mcts_calls': total_calls,
+                'avg_mcts_time_per_call': total_time / total_calls if total_calls > 0 else 0.0,
+                'num_mcts_bots': len(mcts_bots)
+            }
+
+        result = {
+            "task_name": f"openspiel:{game_name}",
+            "score": score,
+            "success": score > 0.5,
+            "time_taken": time.time() - start_time,
+            "extra": {
+                "conversation": conversation,
+                "action_history": action_history,
+                "observation": observation,
+                "game_name": game_name,
+                "task_id": task_id,
+                "seed": seed,
+                "opponent_type": opponent,
+                "llm_player_id": llm_player_id,
+                "final_return": llm_return,
+                "all_returns": all_returns,
+            },
+        }
+
+        if mcts_stats:
+            result["extra"]["mcts_timing"] = mcts_stats
+
         if error:
             result["error"] = str(error)
 
