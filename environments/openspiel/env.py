@@ -812,3 +812,356 @@ class Actor:
             result["error"] = str(error)
 
         return result
+
+
+def play_game(
+    bot,
+    task_id: int = None,
+    seed: int = None,
+    opponent: str = "mcts",
+    player_id: int = 0,
+) -> dict:
+    """
+    Play a game with any pyspiel.Bot (synchronous version).
+
+    This function is designed for:
+    - Human play via CLI (with HumanBot)
+    - Trajectory generation for LLM training (with AlgorithmBot)
+
+    Args:
+        bot: Your pyspiel.Bot instance (HumanBot, AlgorithmBot, etc.)
+        task_id: Task identifier for game configuration. If None, random.
+        seed: Random seed for reproducibility. If None, random.
+        opponent: Opponent type ("random" or "mcts")
+        player_id: Which position your bot plays (0, 1, ...)
+
+    Returns:
+        dict with:
+            - conversation: List of messages in LLM format (if bot supports it)
+            - action_history: List of all actions taken
+            - score: Normalized score [0.0, 1.0] for your bot
+            - returns: Raw returns for all players
+            - game_name: Name of the game
+            - task_id, seed: For reproducibility
+    """
+    import time
+
+    if task_id is None:
+        task_id = random.randint(0, 10**11 - 1)
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    start_time = time.time()
+
+    try:
+        # Create game from task_id
+        game, game_config = create_game(task_id)
+        game_name = game_config["game_name"]
+        num_players = game.num_players()
+        player_id = player_id % num_players
+
+        # Get agent for this game
+        agent_class = GAME_AGENTS.get(game_name)
+        if not agent_class:
+            raise ValueError(f"No agent found for game: {game_name}")
+        agent = agent_class()
+
+        # Create bots for all players
+        bots = []
+        for pid in range(num_players):
+            if pid == player_id:
+                bots.append(bot)
+            else:
+                # Create opponent using same logic as Actor
+                opponent_bot = _create_opponent_bot(
+                    opponent, pid, seed + 2 + pid, game, agent
+                )
+                bots.append(opponent_bot)
+
+        # Run game
+        returns = evaluate_bots.evaluate_bots(
+            game.new_initial_state(),
+            bots,
+            np.random.RandomState(seed),
+        )
+
+        # Compute score
+        score = _compute_score(returns, player_id, game)
+
+        # Extract data from bot if available
+        conversation = []
+        action_history = []
+        observation = None
+
+        if hasattr(bot, 'get_conversation'):
+            conversation = bot.get_conversation()
+        if hasattr(bot, 'get_action_history'):
+            action_history = bot.get_action_history()
+        if hasattr(bot, 'get_observation'):
+            observation = bot.get_observation()
+
+        return {
+            "task_name": f"openspiel:{game_name}",
+            "score": score,
+            "success": score > 0.5,
+            "time_taken": time.time() - start_time,
+            "conversation": conversation,
+            "action_history": action_history,
+            "observation": observation,
+            "game_name": game_name,
+            "task_id": task_id,
+            "seed": seed,
+            "opponent_type": opponent,
+            "player_id": player_id,
+            "returns": list(returns),
+            "player_return": returns[player_id],
+        }
+
+    except Exception as e:
+        import traceback
+        return {
+            "task_name": f"openspiel:unknown",
+            "score": 0.0,
+            "success": False,
+            "time_taken": time.time() - start_time,
+            "error": f"[{type(e).__name__}] {str(e)}\n{traceback.format_exc()}",
+            "task_id": task_id,
+            "seed": seed,
+        }
+
+
+def _create_opponent_bot(opponent: str, player_id: int, seed: int, game, agent):
+    """Create opponent bot based on type (standalone version for play_game)"""
+    game_type = game.get_type()
+
+    # For simultaneous move games, MCTS doesn't work - fallback to random
+    if game_type.dynamics == pyspiel.GameType.Dynamics.SIMULTANEOUS:
+        return uniform_random.UniformRandomBot(
+            player_id=player_id, rng=np.random.RandomState(seed)
+        )
+
+    if opponent == "random":
+        return uniform_random.UniformRandomBot(
+            player_id=player_id, rng=np.random.RandomState(seed)
+        )
+    elif opponent == "mcts":
+        mcts_config = agent.get_mcts_config()
+
+        if mcts_config is None:
+            return uniform_random.UniformRandomBot(
+                player_id=player_id, rng=np.random.RandomState(seed)
+            )
+
+        max_simulations, n_rollouts = mcts_config
+
+        evaluator = SafeRandomRolloutEvaluator(
+            n_rollouts=n_rollouts, random_state=np.random.RandomState(seed + 1)
+        )
+        return mcts.MCTSBot(
+            game=game,
+            uct_c=1.414,
+            max_simulations=max_simulations,
+            evaluator=evaluator,
+            random_state=np.random.RandomState(seed + 2),
+        )
+    else:
+        raise ValueError(f"Unknown opponent type: {opponent}")
+
+
+def _compute_score(returns, player_idx: int, game) -> float:
+    """Compute normalized score [0.0, 1.0] (standalone version for play_game)"""
+    num_players = len(returns)
+    player_return = returns[player_idx]
+    game_type = game.get_type()
+
+    # Zero-sum games
+    if game_type.utility == pyspiel.GameType.Utility.ZERO_SUM:
+        min_utility = game.min_utility()
+        max_utility = game.max_utility()
+        if max_utility > min_utility:
+            return float((player_return - min_utility) / (max_utility - min_utility))
+        return 0.5
+
+    # Multi-player games: ranking-based
+    if num_players > 2:
+        sorted_returns = sorted(returns, reverse=True)
+        rank = sorted_returns.index(player_return)
+        return float(1.0 - (rank / (num_players - 1)))
+
+    # 2-player non-zero-sum
+    if num_players == 2:
+        opponent_return = returns[1 - player_idx]
+        if player_return > opponent_return:
+            return 1.0
+        elif player_return < opponent_return:
+            return 0.0
+        return 0.5
+
+    # Fallback
+    min_utility = game.min_utility()
+    max_utility = game.max_utility()
+    if max_utility > min_utility:
+        return float((player_return - min_utility) / (max_utility - min_utility))
+    return 0.5
+
+
+def _play_game_worker(args: dict) -> dict:
+    """
+    Worker function for parallel game execution.
+
+    Creates bot internally to avoid pickling issues with pyspiel objects.
+
+    Args:
+        args: dict with task_id, seed, algorithm, opponent, player_id, mcts_simulations
+
+    Returns:
+        Game result dict
+    """
+    task_id = args["task_id"]
+    seed = args.get("seed") or random.randint(0, 2**32 - 1)
+    algorithm = args.get("algorithm", "mcts")
+    opponent = args.get("opponent", "mcts")
+    player_id = args.get("player_id", 0)
+    mcts_simulations = args.get("mcts_simulations")
+
+    # Import here to avoid issues in subprocess
+    from algorithm_bot import AlgorithmBot
+
+    try:
+        # Create game
+        game, game_config = create_game(task_id)
+        game_name = game_config["game_name"]
+        num_players = game.num_players()
+        player_id = player_id % num_players
+
+        # Get agent
+        agent_class = GAME_AGENTS.get(game_name)
+        if not agent_class:
+            raise ValueError(f"No agent found for game: {game_name}")
+        agent = agent_class()
+
+        # Create AlgorithmBot
+        bot = AlgorithmBot(
+            game=game,
+            player_id=player_id,
+            agent=agent,
+            algorithm=algorithm,
+            seed=seed,
+            mcts_simulations=mcts_simulations,
+        )
+
+        # Play game
+        result = play_game(
+            bot=bot,
+            task_id=task_id,
+            seed=seed,
+            opponent=opponent,
+            player_id=player_id,
+        )
+        return result
+
+    except Exception as e:
+        import traceback
+        return {
+            "task_id": task_id,
+            "seed": seed,
+            "score": 0.0,
+            "success": False,
+            "error": f"[{type(e).__name__}] {str(e)}\n{traceback.format_exc()}",
+        }
+
+
+def play_games_parallel(
+    task_ids: list,
+    seeds: list = None,
+    algorithm: str = "mcts",
+    opponent: str = "mcts",
+    player_id: int = 0,
+    max_workers: int = None,
+    mcts_simulations: int = None,
+    show_progress: bool = True,
+) -> dict:
+    """
+    Play multiple games in parallel and compute average score.
+
+    Args:
+        task_ids: List of task IDs to play
+        seeds: List of seeds (same length as task_ids). If None, random seeds.
+        algorithm: Algorithm for your bot ("mcts", "random")
+        opponent: Opponent type ("mcts", "random")
+        player_id: Which position your bot plays
+        max_workers: Number of parallel workers (default: CPU count)
+        mcts_simulations: Override MCTS simulations (for faster testing)
+        show_progress: Print progress updates
+
+    Returns:
+        dict with:
+            - results: List of individual game results
+            - avg_score: Average score across all games
+            - win_rate: Percentage of games with score > 0.5
+            - total_time: Total execution time
+            - num_games: Number of games played
+            - num_errors: Number of games with errors
+    """
+    from multiprocessing import Pool, cpu_count
+
+    n_games = len(task_ids)
+    if seeds is None:
+        seeds = [random.randint(0, 2**32 - 1) for _ in range(n_games)]
+
+    if len(seeds) != n_games:
+        raise ValueError(f"seeds length ({len(seeds)}) must match task_ids length ({n_games})")
+
+    if max_workers is None:
+        max_workers = cpu_count()
+
+    # Prepare arguments for workers
+    worker_args = [
+        {
+            "task_id": task_id,
+            "seed": seed,
+            "algorithm": algorithm,
+            "opponent": opponent,
+            "player_id": player_id,
+            "mcts_simulations": mcts_simulations,
+        }
+        for task_id, seed in zip(task_ids, seeds)
+    ]
+
+    start_time = time.time()
+    results = []
+
+    if show_progress:
+        print(f"Running {n_games} games with {max_workers} workers...")
+
+    # Run in parallel
+    with Pool(processes=max_workers) as pool:
+        for i, result in enumerate(pool.imap_unordered(_play_game_worker, worker_args)):
+            results.append(result)
+            if show_progress and (i + 1) % max(1, n_games // 10) == 0:
+                print(f"  Progress: {i + 1}/{n_games} games completed")
+
+    total_time = time.time() - start_time
+
+    # Compute statistics
+    scores = [r.get("score", 0.0) for r in results]
+    errors = [r for r in results if "error" in r]
+
+    avg_score = sum(scores) / len(scores) if scores else 0.0
+    win_rate = sum(1 for s in scores if s > 0.5) / len(scores) if scores else 0.0
+
+    if show_progress:
+        print(f"\nCompleted {n_games} games in {total_time:.1f}s")
+        print(f"Average score: {avg_score:.3f}")
+        print(f"Win rate: {win_rate:.1%}")
+        if errors:
+            print(f"Errors: {len(errors)}")
+
+    return {
+        "results": results,
+        "avg_score": avg_score,
+        "win_rate": win_rate,
+        "total_time": total_time,
+        "num_games": n_games,
+        "num_errors": len(errors),
+    }
