@@ -15,72 +15,7 @@ if '/app' not in sys.path:
 from logic_task_v2 import LogicTaskV2
 
 # Import shared logging utilities
-try:
-    from affinetes.utils.request_logger import RequestLogger, log_event
-except ImportError:
-    # Fallback for environments where affinetes is not installed
-    import logging
-    import structlog
-    from contextvars import ContextVar
-
-    structlog.configure(
-        processors=[
-            structlog.contextvars.merge_contextvars,
-            structlog.processors.add_log_level,
-            structlog.processors.StackInfoRenderer(),
-            structlog.dev.set_exc_info,
-            structlog.processors.TimeStamper(fmt="%Y-%m-%d %H:%M:%S.%f", utc=False),
-            structlog.dev.ConsoleRenderer(colors=False)
-        ],
-        wrapper_class=structlog.make_filtering_bound_logger(logging.INFO),
-        context_class=dict,
-        logger_factory=structlog.PrintLoggerFactory(),
-        cache_logger_on_first_use=True,
-    )
-
-    base_logger = structlog.get_logger("lgc-v2")
-    _request_logger: ContextVar = ContextVar('request_logger', default=None)
-
-    class RequestLogger:
-        def __init__(self, **context):
-            import re
-            self.start_time = time.time()
-
-            # Extract fields
-            task_id = context.get('task_id')
-            task_type = context.get('task_type')
-            seed = context.get('seed')
-            model = context.get('model')
-            base_url = context.get('base_url', '')
-
-            # Extract miner from base_url
-            slug_match = re.search(r'https?://([^./]+)\.chutes\.ai', base_url)
-            miner_slug = slug_match.group(1) if slug_match else base_url[:40]
-
-            ctx_parts = [f"task_id:{task_id}", f"type:{task_type}", f"seed:{seed}", f"miner:{miner_slug}", f"model:{model}"]
-            self.logger = base_logger.bind(req_ctx="|".join(ctx_parts))
-
-        def log(self, event, level='info', **details):
-            elapsed_ms = int((time.time() - self.start_time) * 1000)
-            details['elapsed_ms'] = elapsed_ms
-            getattr(self.logger, level, self.logger.info)(event, **details)
-
-        def __enter__(self):
-            self.token = _request_logger.set(self)
-            self.log("request_start")
-            return self
-
-        def __exit__(self, exc_type, exc_val, exc_tb):
-            if exc_type:
-                self.log("request_error", level='error', error=str(exc_val), error_type=exc_type.__name__)
-            _request_logger.reset(self.token)
-
-    def log_event(event, level='info', **details):
-        logger_instance = _request_logger.get()
-        if logger_instance:
-            logger_instance.log(event, level=level, **details)
-        else:
-            base_logger.info(event, **details)
+from request_logger import RequestLogger, log_event
 
 
 class Actor:

@@ -15,19 +15,7 @@ if '/app' not in sys.path:
 from trace_task import TraceTask
 
 # Import shared logging utilities
-try:
-    from affinetes.utils.request_logger import RequestLogger, log_event
-except ImportError:
-    # Fallback: minimal logging if shared module not available
-    class RequestLogger:
-        def __init__(self, **kwargs):
-            self.start_time = time.time()
-        def __enter__(self):
-            return self
-        def __exit__(self, *args):
-            pass
-    def log_event(event, **details):
-        pass
+from request_logger import RequestLogger, log_event
 
 
 class Actor:
