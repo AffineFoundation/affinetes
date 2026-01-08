@@ -213,10 +213,15 @@ class ImageBuilder:
             
             # Get template directory
             template_dir = Path(__file__).parent.parent / "templates"
-            
+
             # Copy HTTP server template
             server_template = template_dir / "http_server.py"
             shutil.copy2(server_template, tmpdir_path / "http_server.py")
+
+            # Copy shared request_logger template
+            request_logger_template = template_dir / "request_logger.py"
+            if request_logger_template.exists():
+                shutil.copy2(request_logger_template, tmpdir_path / "request_logger.py")
             
             # Generate Dockerfile with metadata label
             wrapper_dockerfile = template_dir / "http_wrapper.Dockerfile"
