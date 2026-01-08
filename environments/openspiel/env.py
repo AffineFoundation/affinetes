@@ -569,6 +569,7 @@ class Actor:
         task_id: int = None,
         seed: int = None,
         timeout: int = 1800,
+        temperature: float = 0.7,
         opponent: str = "mcts",
     ):
         """
@@ -598,6 +599,7 @@ class Actor:
                 opponent,
                 start_time,
                 timeout,
+                temperature,
             ),
             timeout=timeout,
         )
@@ -611,6 +613,7 @@ class Actor:
         opponent,
         start_time,
         task_timeout,
+        temperature,
     ):
         """Internal method to run local evaluation with unified error handling"""
         from local_llm_bot import ParsingError
@@ -638,6 +641,7 @@ class Actor:
                 game=game,
                 player_id=llm_player_id,
                 model=model,
+                temperature=temperature,
                 tokenizer=tokenizer,
                 rng_seed=seed + 1,
                 agent=agent,

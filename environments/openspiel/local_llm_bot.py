@@ -31,9 +31,12 @@ class LocalLLMBot(pyspiel.Bot):
         game: pyspiel.Game,
         player_id: int,
         model: AutoModelForCausalLM,
+        temperature: float,
         tokenizer: AutoTokenizer,
         rng_seed: int,
         agent: BaseGameAgent,
+        max_new_tokens: int = 4096,
+        max_length: int = 8192,
         seed: Optional[int] = None,
         max_parsing_retries: int = DEFAULT_MAX_PARSING_RETRIES,
     ):
@@ -44,6 +47,7 @@ class LocalLLMBot(pyspiel.Bot):
             game: pyspiel.Game instance
             player_id: Player ID (0 or 1)
             model: Loaded AutoModelForCausalLM instance
+            temperature: Sampling temperature
             tokenizer: Loaded AutoTokenizer instance
             rng_seed: Random seed for fallback action selection
             agent: BaseGameAgent for game-specific logic (REQUIRED)
@@ -54,6 +58,9 @@ class LocalLLMBot(pyspiel.Bot):
         self._game = game
         self._player_id = player_id
         self._model = model
+        self._temperature = temperature
+        self._max_new_tokens = max_new_tokens
+        self._max_length = max_length
         self._tokenizer = tokenizer
         self._seed = seed
         self._rng = np.random.RandomState(rng_seed)
@@ -166,7 +173,9 @@ class LocalLLMBot(pyspiel.Bot):
             outputs = self._model.generate(
                 **inputs,
                 eos_token_id=self._tokenizer.eos_token_id,
-                max_new_tokens=4096
+                max_new_tokens=self._max_new_tokens,
+                max_length=self._max_length,
+                temperature=self._temperature
             )
 
         output_ids = outputs[0][len(inputs.input_ids[0]):].tolist()
