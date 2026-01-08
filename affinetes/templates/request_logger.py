@@ -2,14 +2,13 @@
 Request-scoped structured logging utility for affinetes environments
 
 This module provides a reusable logging system for tracking requests across
-different environments (lgc-v2, game, trace, etc.)
+different environments (lgc-v2, openspiel, trace, etc.)
 """
 
 import time
 import logging
 import structlog
 from contextvars import ContextVar
-from datetime import datetime
 import re
 
 

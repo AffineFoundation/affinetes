@@ -121,8 +121,6 @@ class Actor:
         chunk_timeout = 30.0  # Max time between chunks
 
         first_chunk_received = False
-        last_chunk_time = time.time()
-        max_chunk_interval = 0.0
 
         try:
             # Create async iterator from stream
@@ -140,11 +138,6 @@ class Actor:
                         ttfb_ms = int((chunk_receive_time - stream_start) * 1000)
                         log_event("first_chunk_received", ttfb_ms=ttfb_ms)
                         first_chunk_received = True
-
-                    # Track chunk interval
-                    chunk_interval = chunk_receive_time - last_chunk_time
-                    max_chunk_interval = max(max_chunk_interval, chunk_interval)
-                    last_chunk_time = chunk_receive_time
 
                 except StopAsyncIteration:
                     break
@@ -192,8 +185,7 @@ class Actor:
             log_event("stream_complete",
                      total_chunks=chunk_count,
                      content_length=len(content),
-                     stream_duration_ms=stream_duration_ms,
-                     max_chunk_interval_ms=int(max_chunk_interval * 1000))
+                     stream_duration_ms=stream_duration_ms)
 
             # Return both content and usage information
             return content.strip(), usage
