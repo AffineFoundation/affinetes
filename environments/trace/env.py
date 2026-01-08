@@ -134,71 +134,74 @@ class Actor:
 
         start = time.time()
 
-        # Create request logger context
-        with RequestLogger(
+        # Setup request logger
+        logger = RequestLogger(
             task_id=task_id if task_id is not None else "random",
             task_type="trace",
             seed=seed,
             model=model,
             base_url=base_url
-        ):
-            # Generate challenge
-            challenge = await self.trace_task.generate(task_id=task_id)
-            log_event("challenge_generated", dataset_index=challenge.extra.get("dataset_index"))
+        )
+        logger.__enter__()
 
-            # Add model and base_url info to challenge.extra for logging
-            challenge.extra["model"] = model
-            challenge.extra["base_url"] = base_url
+        # Generate challenge
+        challenge = await self.trace_task.generate(task_id=task_id)
+        log_event("challenge_generated", dataset_index=challenge.extra.get("dataset_index"))
 
-            # Call LLM
-            log_event("llm_call_start")
-            usage = None
-            try:
-                resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, seed)
-                error = None
-                log_event("llm_call_complete", response_length=len(resp) if resp else 0)
-            except Exception as e:
-                import traceback
-                resp = None
-                error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-                log_event("llm_call_failed", level='error', error=str(e), error_type=type(e).__name__)
+        # Add model and base_url info to challenge.extra for logging
+        challenge.extra["model"] = model
+        challenge.extra["base_url"] = base_url
 
-            # Evaluate
-            log_event("evaluation_start")
-            score = 0.0
-            test_result = "0/1"
-            if resp:
-                score, test_result = await self.trace_task.evaluate(resp, challenge)
-                log_event("evaluation_complete", score=score, test_result=test_result)
+        # Call LLM
+        log_event("llm_call_start")
+        usage = None
+        try:
+            resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, seed)
+            error = None
+            log_event("llm_call_complete", response_length=len(resp) if resp else 0)
+        except Exception as e:
+            import traceback
+            resp = None
+            error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+            log_event("llm_call_failed", level='error', error=str(e), error_type=type(e).__name__)
 
-            conversation = [
-                {"role": "user", "content": challenge.prompt},
-                {"role": "assistant", "content": resp}
-            ]
+        # Evaluate
+        log_event("evaluation_start")
+        score = 0.0
+        test_result = "0/1"
+        if resp:
+            score, test_result = await self.trace_task.evaluate(resp, challenge)
+            log_event("evaluation_complete", score=score, test_result=test_result)
 
-            result = {
-                "task_name": "Trace",
-                "score": score,
-                "success": score > 0,
-                "time_taken": time.time() - start,
-                "extra": {
-                    "conversation": conversation,
-                    "seed": seed,
-                    "test_result": test_result,
-                    "dataset_index": challenge.extra.get("dataset_index"),
-                    "usage": usage
-                }
+        conversation = [
+            {"role": "user", "content": challenge.prompt},
+            {"role": "assistant", "content": resp}
+        ]
+
+        result = {
+            "task_name": "Trace",
+            "score": score,
+            "success": score > 0,
+            "time_taken": time.time() - start,
+            "extra": {
+                "conversation": conversation,
+                "seed": seed,
+                "test_result": test_result,
+                "dataset_index": challenge.extra.get("dataset_index"),
+                "usage": usage
             }
+        }
 
-            # Add error info if present
-            if error:
-                result["error"] = error
-                result["error_type"] = "llm_failure"
+        # Add error info if present
+        if error:
+            result["error"] = error
+            result["error_type"] = "llm_failure"
 
-            log_event("request_complete", score=score, success=score > 0, total_time_ms=int((time.time() - start) * 1000))
+        log_event("request_complete", score=score, success=score > 0, total_time_ms=int((time.time() - start) * 1000))
 
-            # Force garbage collection to free memory immediately
-            gc.collect()
+        # Force garbage collection to free memory immediately
+        gc.collect()
 
-            return result
+        logger.__exit__(None, None, None)
+        return result
 

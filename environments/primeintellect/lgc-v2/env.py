@@ -255,118 +255,123 @@ class Actor:
 
         start = time.time()
 
-        # Create request logger context
-        with RequestLogger(
+        # Setup request logger
+        logger = RequestLogger(
             task_id=task_id,
             task_type=task_type,
             seed=actual_seed,
             model=model,
             base_url=base_url
-        ):
-            # Generate challenge using task_id (auto-detects task type)
-            try:
-                challenge = await self.logic_task.generate(task_id=task_id)
-                log_event("challenge_generated")
-            except ValueError as e:
-                # Only catch expected generation failures
-                if "Failed to generate valid sequence" in str(e):
-                    import traceback
-                    log_event("challenge_generation_failed", level='error', error=str(e))
+        )
+        logger.__enter__()
 
-                    # Try to decode task_type for task_name
-                    try:
-                        from logic_task_v2 import LogicTaskV2
-                        task_type, seed = LogicTaskV2.decode_task_id(task_id)
-                        task_name = f"logic-v2:{task_type}"
-                    except:
-                        task_type = "unknown"
-                        seed = task_id
-                        task_name = "logic-v2:unknown"
+        # Generate challenge using task_id (auto-detects task type)
+        try:
+            challenge = await self.logic_task.generate(task_id=task_id)
+            log_event("challenge_generated")
+        except ValueError as e:
+            # Only catch expected generation failures
+            if "Failed to generate valid sequence" in str(e):
+                import traceback
+                log_event("challenge_generation_failed", level='error', error=str(e))
 
-                    # Return 0 score with same format as success, failure info in conversation
-                    error_message = f"Task generation failed: {str(e)}"
-                    conversation = [
-                        {"role": "system", "content": error_message},
-                        {"role": "assistant", "content": None}
-                    ]
+                # Try to decode task_type for task_name
+                try:
+                    from logic_task_v2 import LogicTaskV2
+                    task_type, seed = LogicTaskV2.decode_task_id(task_id)
+                    task_name = f"logic-v2:{task_type}"
+                except:
+                    task_type = "unknown"
+                    seed = task_id
+                    task_name = "logic-v2:unknown"
 
-                    return {
-                        "task_name": task_name,
-                        "score": 0.0,
-                        "success": True,  # Hide failure from external view
-                        "time_taken": time.time() - start,
-                        "extra": {
-                            "conversation": conversation,
-                            "task_id": task_id,
-                            "task_type": task_type,
-                            "seed": seed,
-                            "task_metadata": {
-                                "generation_failed": True,
-                                "generation_error": str(e),
-                                "generation_traceback": traceback.format_exc()
-                            },
-                            "usage": None
-                        }
+                # Return 0 score with same format as success, failure info in conversation
+                error_message = f"Task generation failed: {str(e)}"
+                conversation = [
+                    {"role": "system", "content": error_message},
+                    {"role": "assistant", "content": None}
+                ]
+
+                result = {
+                    "task_name": task_name,
+                    "score": 0.0,
+                    "success": True,  # Hide failure from external view
+                    "time_taken": time.time() - start,
+                    "extra": {
+                        "conversation": conversation,
+                        "task_id": task_id,
+                        "task_type": task_type,
+                        "seed": seed,
+                        "task_metadata": {
+                            "generation_failed": True,
+                            "generation_error": str(e),
+                            "generation_traceback": traceback.format_exc()
+                        },
+                        "usage": None
                     }
-                else:
-                    # Other ValueErrors are unexpected, let them propagate
-                    raise
+                }
+                logger.__exit__(None, None, None)
+                return result
+            else:
+                # Other ValueErrors are unexpected, let them propagate
+                raise
 
-            # Call LLM using task_id as seed
-            log_event("llm_call_start")
-            usage = None
+        # Call LLM using task_id as seed
+        log_event("llm_call_start")
+        usage = None
+        try:
+            resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, task_id)
+            error = None
+            log_event("llm_call_complete", response_length=len(resp) if resp else 0)
+        except Exception as e:
+            import traceback
+            resp = None
+            error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+            log_event("llm_call_failed", level='error', error=str(e), error_type=type(e).__name__)
+
+        # Evaluate
+        log_event("evaluation_start")
+        score = 0.0
+        if resp:
             try:
-                resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, task_id)
-                error = None
-                log_event("llm_call_complete", response_length=len(resp) if resp else 0)
+                score = await self.logic_task.evaluate(resp, challenge)
+                log_event("evaluation_complete", score=score)
             except Exception as e:
                 import traceback
-                resp = None
-                error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-                log_event("llm_call_failed", level='error', error=str(e), error_type=type(e).__name__)
+                error = f"Evaluation error: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                log_event("evaluation_failed", level='error', error=str(e))
 
-            # Evaluate
-            log_event("evaluation_start")
-            score = 0.0
-            if resp:
-                try:
-                    score = await self.logic_task.evaluate(resp, challenge)
-                    log_event("evaluation_complete", score=score)
-                except Exception as e:
-                    import traceback
-                    error = f"Evaluation error: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-                    log_event("evaluation_failed", level='error', error=str(e))
+        conversation = [
+            {"role": "user", "content": challenge.prompt},
+            {"role": "assistant", "content": resp}
+        ]
 
-            conversation = [
-                {"role": "user", "content": challenge.prompt},
-                {"role": "assistant", "content": resp}
-            ]
+        task_type = challenge.extra.get("task_type")
 
-            task_type = challenge.extra.get("task_type")
-
-            result = {
-                "task_name": f"logic-v2:{task_type}",
-                "score": score,
-                "success": score > 0,
-                "time_taken": time.time() - start,
-                "extra": {
-                    "conversation": conversation,
-                    "task_id": task_id,
-                    "task_type": task_type,
-                    "seed": challenge.extra.get("seed"),
-                    "task_metadata": challenge.extra.get("metadata", {}),
-                    "usage": usage
-                }
+        result = {
+            "task_name": f"logic-v2:{task_type}",
+            "score": score,
+            "success": score > 0,
+            "time_taken": time.time() - start,
+            "extra": {
+                "conversation": conversation,
+                "task_id": task_id,
+                "task_type": task_type,
+                "seed": challenge.extra.get("seed"),
+                "task_metadata": challenge.extra.get("metadata", {}),
+                "usage": usage
             }
+        }
 
-            # Add error info if present
-            if error:
-                result["error"] = error
-                result["error_type"] = "llm_failure"
+        # Add error info if present
+        if error:
+            result["error"] = error
+            result["error_type"] = "llm_failure"
 
-            log_event("request_complete", score=score, success=score > 0, total_time_ms=int((time.time() - start) * 1000))
+        log_event("request_complete", score=score, success=score > 0, total_time_ms=int((time.time() - start) * 1000))
 
-            # Force garbage collection to free memory immediately
-            gc.collect()
+        # Force garbage collection to free memory immediately
+        gc.collect()
 
-            return result
+        logger.__exit__(None, None, None)
+        return result
