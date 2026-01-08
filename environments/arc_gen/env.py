@@ -50,19 +50,33 @@ class Actor:
         stream = await client.chat.completions.create(**params)
 
         content_parts = []
+        reasoning_parts = []  # Collect reasoning content for o1-style models
         usage = None
         async for chunk in stream:
-            if chunk.choices and chunk.choices[0].delta.content:
-                content_parts.append(chunk.choices[0].delta.content)
+            # Collect content chunks and reasoning chunks
+            if chunk.choices and chunk.choices[0].delta:
+                delta = chunk.choices[0].delta
+
+                # Collect regular content
+                if delta.content:
+                    content_parts.append(delta.content)
+
+                # Collect reasoning content (for o1-style reasoning models)
+                if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
+                    reasoning_parts.append(delta.reasoning_content)
+
             if chunk.usage:
                 usage = chunk.usage.model_dump()
 
         if not content_parts:
-            raise ValueError("LLM API returned empty content stream")
+            # Return None for empty content (e.g., token limit exhausted during reasoning)
+            # This will result in 0 score rather than raising an error
+            return None, usage
 
         content = "".join(content_parts)
         if not content:
-            raise ValueError("LLM API returned None content (possible content filtering or API error)")
+            # Return None for empty content (e.g., token limit exhausted during reasoning)
+            return None, usage
 
         return content.strip(), usage
 

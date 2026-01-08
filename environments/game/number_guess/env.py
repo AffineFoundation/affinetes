@@ -43,14 +43,17 @@ class Actor:
             params["seed"] = seed
         
         response = await client.chat.completions.create(**params)
-        
+
         if not response.choices:
-            raise ValueError("LLM API returned empty choices list")
-        
+            # Return None for empty choices (will result in 0 score)
+            return None
+
         content = response.choices[0].message.content
         if content is None:
-            raise ValueError("LLM API returned None content")
-        
+            # Return None for empty content (e.g., token limit exhausted during reasoning)
+            # This will result in 0 score rather than raising an error
+            return None
+
         return content.strip()
     
     def _parse_guess(self, response: str) -> Optional[int]:

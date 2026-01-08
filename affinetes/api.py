@@ -102,6 +102,9 @@ def load_env(
     connect_only: bool = False,
     host_network: bool = False,
     host_port: Optional[int] = None,
+    enable_logging: bool = False,
+    log_file: Optional[str] = None,
+    log_console: bool = True,
     **backend_kwargs
 ) -> EnvironmentWrapper:
     """
@@ -128,6 +131,9 @@ def load_env(
                  If False, container will continue running after program exits
         host_network: If True, use host network mode (network_mode="host")
         host_port: Port to use when host_network=True (default: 8000). Useful to avoid port conflicts.
+        enable_logging: If True, automatically start log streaming (Docker mode only, default: False)
+        log_file: Log file path (optional, Docker mode only)
+        log_console: Whether to print logs to console (default: True, Docker mode only)
         **backend_kwargs: Additional backend-specific parameters
         
     Returns:
@@ -197,6 +203,9 @@ def load_env(
                 connect_only=connect_only,
                 host_network=host_network,
                 host_port=host_port,
+                enable_logging=enable_logging,
+                log_file=log_file,
+                log_console=log_console,
                 **backend_kwargs
             )
         
@@ -240,6 +249,9 @@ def _load_single_instance(
     connect_only: bool = False,
     host_network: bool = False,
     host_port: Optional[int] = None,
+    enable_logging: bool = False,
+    log_file: Optional[str] = None,
+    log_console: bool = True,
     **backend_kwargs
 ) -> EnvironmentWrapper:
     """Load a single instance"""
@@ -297,6 +309,10 @@ def _load_single_instance(
     # Register in global registry
     registry = get_registry()
     registry.register(backend.name, wrapper)
+    
+    # Start logging if enabled (Docker mode only)
+    if enable_logging and mode == "docker":
+        wrapper.start_logging(file=log_file, console=log_console)
     
     logger.debug(f"Single instance '{backend.name}' loaded successfully")
     return wrapper

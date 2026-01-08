@@ -260,6 +260,9 @@ class EnvironmentWrapper:
         Performs cleanup if auto_cleanup is enabled.
         Note: This is a synchronous method, so we need to handle async cleanup properly.
         """
+        # Stop logging first
+        self.stop_logging()
+        
         # Only cleanup if auto_cleanup is enabled
         if hasattr(self._backend, '_auto_cleanup') and self._backend._auto_cleanup:
             # Run async cleanup in a new event loop if needed
@@ -296,6 +299,31 @@ class EnvironmentWrapper:
                 except Exception as e:
                     logger.warning(f"Error during automatic cleanup in __del__: {e}")
 
+    def start_logging(
+        self,
+        file: Optional[str] = None,
+        console: bool = True,
+        **kwargs
+    ) -> None:
+        """Start log streaming (Docker mode only)
+        
+        Args:
+            file: Log file path
+            console: Whether to print logs to console
+            **kwargs: Additional parameters (tail, timestamps, etc.)
+        """
+        if hasattr(self._backend, 'start_logging'):
+            self._backend.start_logging(file=file, console=console, **kwargs)
+        else:
+            logger.warning(
+                f"Logging not supported for backend type: {type(self._backend).__name__}"
+            )
+    
+    def stop_logging(self) -> None:
+        """Stop log streaming"""
+        if hasattr(self._backend, 'stop_logging'):
+            self._backend.stop_logging()
+    
     def get_stats(self) -> Optional[dict]:
         """
         Get statistics for multi-instance pools

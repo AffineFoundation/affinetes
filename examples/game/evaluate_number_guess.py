@@ -28,12 +28,33 @@ async def main():
     )
     
     print("Loading environment...")
+    # Method 1: Auto-enable logging on load
+    # Pass enable_logging=True to load_env() to automatically start log streaming
     env = af.load_env(
         image=image_tag,
         mode="docker",
         env_vars={"CHUTES_API_KEY": api_key},
+        enable_logging=True,
+        log_file="number_guess_evaluation.log",
+        log_console=True
     )
     print("Environment loaded\n")
+    
+    # Method 2: Manual logging control (alternative approach)
+    # Load environment without auto-logging, then manually start/stop logging:
+    # env = af.load_env(
+    #     image=image_tag,
+    #     mode="docker",
+    #     env_vars={"CHUTES_API_KEY": api_key}
+    # )
+    # env.start_logging(
+    #     file="number_guess_evaluation.log",  # Optional: log file path
+    #     console=True,                         # Optional: print to console (default: True)
+    #     tail="all",                           # Optional: "all" or number of lines (default: "all")
+    #     timestamps=True                       # Optional: include timestamps (default: True)
+    # )
+    # # ... do your work ...
+    # env.stop_logging()  # Stop logging when done (or use context manager)
     
     result = await env.evaluate(
         model="deepseek-ai/DeepSeek-V3",

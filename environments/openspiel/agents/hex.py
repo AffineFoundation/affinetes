@@ -35,5 +35,5 @@ No draws possible: Someone must win."""
         return {"board_size": board_size}
     
     def get_mcts_config(self) -> tuple[int, int]:
-        """11×11 board (default), 121 actions, MaxGameLength=121. High complexity connection game."""
-        return (800, 80)
+        """Connection game with variable board sizes. Deterministic, prioritizes search depth."""
+        return (1000, 50)

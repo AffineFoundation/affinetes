@@ -7,6 +7,7 @@ import asyncio
 import re
 import concurrent.futures
 import httpx
+import openai
 from typing import Tuple, Optional, Dict, List, Any
 
 from base_agent import BaseGameAgent
@@ -44,7 +45,6 @@ class LLMBot(pyspiel.Bot):
         rng_seed: int,
         agent: BaseGameAgent,
         seed: Optional[int] = None,
-        session_id: Optional[str] = None,
         max_parsing_retries: int = DEFAULT_MAX_PARSING_RETRIES,
         executor: concurrent.futures.ThreadPoolExecutor = None,
     ):
@@ -61,7 +61,6 @@ class LLMBot(pyspiel.Bot):
             rng_seed: Random seed for fallback action selection
             agent: BaseGameAgent for game-specific logic (REQUIRED)
             seed: Random seed for LLM API reproducibility
-            session_id: Session ID for KV cache optimization
             max_parsing_retries: Maximum parsing retry attempts
             executor: Shared ThreadPoolExecutor for concurrent LLM calls
         """
@@ -73,7 +72,6 @@ class LLMBot(pyspiel.Bot):
         self._model = model
         self._temperature = temperature
         self._seed = seed
-        self._session_id = session_id
         self._rng = np.random.RandomState(rng_seed)
         self._max_parsing_retries = max_parsing_retries
         self._agent = agent
@@ -215,35 +213,41 @@ class LLMBot(pyspiel.Bot):
         return response, usage
     
     async def _llm_chat_async(self) -> Tuple[str, Dict]:
-        """Call LLM API with streaming using httpx
+        """Call LLM API with streaming using AsyncOpenAI
         
         Returns:
             Tuple of (response_text, usage_dict)
         """
-        # Create httpx client in current event loop context
+        # Unset SSL cert environment variables to avoid container issues
         os.environ.pop("SSL_CERT_FILE", None)
         os.environ.pop("REQUESTS_CA_BUNDLE", None)
-        client = httpx.AsyncClient(
+        
+        # Create OpenAI client
+        client = openai.AsyncOpenAI(
             base_url=self._base_url.rstrip("/"),
-            headers={"Authorization": f"Bearer {self._api_key}"},
-            timeout=100.0,
+            api_key=self._api_key,
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=20.0,  # Per-chunk timeout
+                write=10.0,
+                pool=10.0
+            ),
+            max_retries=0  # Handle retries manually
         )
         
         try:
-            payload = {
+            # Prepare API parameters
+            params = {
                 "model": self._model,
                 "messages": self._conversation,
                 "temperature": self._temperature,
                 "stream": True,
-                "stream_options": {"include_usage": True},
+                "stream_options": {"include_usage": True}
             }
-
-            if self._seed is not None:
-                payload["seed"] = self._seed
             
-            if self._session_id is not None:
-                payload["session_id"] = self._session_id
-
+            if self._seed is not None:
+                params["seed"] = self._seed
+            
             content_parts = []
             usage = None
             
@@ -251,60 +255,99 @@ class LLMBot(pyspiel.Bot):
             max_retries = 10
             for attempt in range(max_retries):
                 try:
-                    async with client.stream("POST", "/chat/completions", json=payload) as response:
-                        response.raise_for_status()
+                    content_parts.clear()
+                    chunk_count = 0
+                    max_chunks = 32000  # ~32k token limit
+                    chunk_timeout = 30.0  # Max time between chunks
+                    
+                    # Create stream
+                    stream = await client.chat.completions.create(**params)
+                    
+                    # Create async iterator from stream
+                    chunk_iter = stream.__aiter__()
+                    
+                    while True:
+                        try:
+                            # Wait for next chunk with timeout
+                            chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=chunk_timeout)
+                        except StopAsyncIteration:
+                            break
+                        except asyncio.TimeoutError:
+                            raise TimeoutError(f"Stream timeout: no chunk received for {chunk_timeout}s")
                         
-                        async for line in response.aiter_lines():
-                            if not line.strip() or line.strip() == "data: [DONE]":
-                                continue
+                        chunk_count += 1
+                        
+                        # Collect content chunks
+                        if chunk.choices and chunk.choices[0].delta.content:
+                            content_parts.append(chunk.choices[0].delta.content)
                             
-                            if line.startswith("data: "):
-                                import json
-                                chunk_data = json.loads(line[6:])
-                                
-                                # Extract content
-                                if "choices" in chunk_data and chunk_data["choices"]:
-                                    delta = chunk_data["choices"][0].get("delta", {})
-                                    if "content" in delta and delta["content"]:
-                                        content_parts.append(delta["content"])
-                                
-                                # Extract usage
-                                if "usage" in chunk_data:
-                                    usage = chunk_data["usage"]
+                            # Apply chunk limit
+                            if chunk_count >= max_chunks:
+                                break
+                        
+                        # Collect usage information
+                        if chunk.usage:
+                            usage = chunk.usage.model_dump()
+                    
+                    # Close stream
+                    try:
+                        await asyncio.wait_for(stream.response.aclose(), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        pass  # Best effort cleanup
+                    except Exception:
+                        pass
+                    
+                    # Validate content
+                    if not content_parts:
+                        raise ValueError("LLM API returned empty content stream")
+                    
+                    content = "".join(content_parts)
+                    if not content:
+                        raise ValueError("LLM API returned None content")
                     
                     break  # Success, exit retry loop
                     
-                except (httpx.TimeoutException, httpx.NetworkError) as e:
-                    if attempt < max_retries - 1:
-                        wait_time = min(2 ** attempt, 32)  # Exponential backoff, max 32s
-                        await asyncio.sleep(wait_time)
-                    else:
-                        raise ValueError(f"API call failed after {max_retries} retries: {e}")
-                except httpx.HTTPStatusError as e:
-                    error_text = str(e)
-                    # Don't retry on context length errors (contains "is longer than the model")
-                    if "is longer than the model" in error_text:
-                        raise ValueError(f"Context length exceeded: {error_text}") from e
-                    # Don't retry on other client errors (4xx)
-                    if 400 <= e.response.status_code < 500:
-                        raise ValueError(f"API error: {e.response.status_code} - {error_text}") from e
-                    # Retry on server errors (5xx)
+                except (TimeoutError, openai.APITimeoutError, openai.APIConnectionError) as e:
+                    # Retry on timeout and connection errors
                     if attempt < max_retries - 1:
                         wait_time = min(2 ** attempt, 32)
                         await asyncio.sleep(wait_time)
                     else:
-                        raise ValueError(f"API call failed after {max_retries} retries: {e}") from e
-
-            if not content_parts:
-                raise ValueError("LLM API returned empty content stream")
-
-            content = "".join(content_parts)
-            if not content:
-                raise ValueError("LLM API returned None content")
-
+                        raise ValueError(f"API call failed after {max_retries} retries: {e}")
+                        
+                except openai.BadRequestError as e:
+                    # Don't retry on context length or other client errors
+                    error_msg = str(e)
+                    if "is longer than the model" in error_msg or "context_length_exceeded" in error_msg:
+                        raise ValueError(f"Context length exceeded: {error_msg}") from e
+                    raise ValueError(f"API error: {error_msg}") from e
+                    
+                except openai.APIStatusError as e:
+                    # Retry on server errors (5xx), fail on client errors (4xx)
+                    if e.status_code >= 500:
+                        if attempt < max_retries - 1:
+                            wait_time = min(2 ** attempt, 32)
+                            await asyncio.sleep(wait_time)
+                        else:
+                            raise ValueError(f"API call failed after {max_retries} retries: {e}")
+                    else:
+                        raise ValueError(f"API error {e.status_code}: {e.message}") from e
+                        
+                except ValueError as e:
+                    # Retry on empty content errors
+                    if "empty content stream" in str(e) or "None content" in str(e):
+                        if attempt < max_retries - 1:
+                            wait_time = min(2 ** attempt, 32)
+                            await asyncio.sleep(wait_time)
+                        else:
+                            raise ValueError(f"API call failed after {max_retries} retries: {e}")
+                    else:
+                        raise
+            
             return content.strip(), usage
+            
         finally:
-            await client.aclose()
+            await client.close()
     
     @staticmethod
     def _remove_think_tags(text: str) -> str:
@@ -313,14 +356,24 @@ class LLMBot(pyspiel.Bot):
         This prevents conversation history from being polluted with
         model's internal reasoning, keeping only the final answer.
         
+        Handles truncated outputs where closing </think> tag may be missing.
+        
         Args:
             text: Raw response text potentially containing <think> tags
             
         Returns:
             Cleaned text with <think> blocks removed
         """
-        # Remove <think>...</think> blocks (non-greedy match, case-insensitive)
+        # Remove complete <think>...</think> blocks (non-greedy match, case-insensitive)
         cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        
+        # Handle truncated <think> blocks (opening tag without closing tag)
+        # This can happen when output is cut off at 32k chunks
+        # After removing complete blocks, if there's still a <think> tag, it must be unclosed
+        match = re.search(r'<think>', cleaned, flags=re.IGNORECASE)
+        if match:
+            # Remove everything from the unclosed <think> tag onwards
+            cleaned = cleaned[:match.start()]
         
         # Clean up extra whitespace created by removal
         cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)  # Multiple blank lines -> double newline

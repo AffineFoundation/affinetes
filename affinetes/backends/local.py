@@ -2,8 +2,10 @@
 
 import time
 import asyncio
+import threading
 from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
+from pathlib import Path
 
 import nest_asyncio
 nest_asyncio.apply()
@@ -102,6 +104,11 @@ class LocalBackend(AbstractBackend):
         
         # Cache runtime environment to avoid repeated detection
         self._runtime_env: Optional[str] = None
+        
+        # Logging support
+        self._logging_thread: Optional[threading.Thread] = None
+        self._logging_stop_event = threading.Event()
+        self._log_file = None
         
         # Connect to existing container or start new one
         if connect_only:
@@ -615,9 +622,134 @@ class LocalBackend(AbstractBackend):
         except Exception as e:
             raise BackendError(f"Failed to list methods: {e}")
     
+    def start_logging(
+        self,
+        file: Optional[str] = None,
+        console: bool = True,
+        tail: str = "all",
+        timestamps: bool = True
+    ) -> None:
+        """Start container log streaming
+        
+        Args:
+            file: Log file path (None to disable file logging)
+            console: Whether to print logs to console (default: True)
+            tail: Where to start reading logs ("all" or number of lines, default: "all")
+            timestamps: Whether to include timestamps (default: True)
+        """
+        if self._logging_thread and self._logging_thread.is_alive():
+            logger.warning(f"Logging already started for '{self.name}'")
+            return
+        
+        if not self._container:
+            raise BackendError("Container not started")
+        
+        # Open log file if specified
+        if file:
+            log_path = Path(file)
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            self._log_file = open(log_path, 'a', buffering=1)  # Line buffering
+        
+        # Reset stop event
+        self._logging_stop_event.clear()
+        
+        # Start log streaming thread
+        self._logging_thread = threading.Thread(
+            target=self._log_streamer,
+            args=(console, tail, timestamps),
+            daemon=True,
+            name=f"LogStreamer-{self.name}"
+        )
+        self._logging_thread.start()
+        logger.info(f"Started logging for container '{self.name}'")
+    
+    def stop_logging(self) -> None:
+        """Stop container log streaming"""
+        if not self._logging_thread:
+            return
+        
+        logger.debug(f"Stopping logging for container '{self.name}'")
+        self._logging_stop_event.set()
+        
+        # Wait for thread to finish
+        if self._logging_thread.is_alive():
+            self._logging_thread.join(timeout=2)
+        
+        # Close log file
+        if self._log_file:
+            try:
+                self._log_file.close()
+            except Exception as e:
+                logger.warning(f"Error closing log file: {e}")
+            self._log_file = None
+        
+        self._logging_thread = None
+        logger.info(f"Stopped logging for container '{self.name}'")
+    
+    def _log_streamer(
+        self,
+        console: bool,
+        tail: str,
+        timestamps: bool
+    ) -> None:
+        """Log streaming worker (runs in separate thread)"""
+        try:
+            # Get container log stream (as generator)
+            log_generator = self._container.logs(
+                stream=True,
+                follow=True,
+                tail=tail,
+                timestamps=timestamps
+            )
+            
+            # Buffer to accumulate bytes until we have a complete line
+            buffer = b''
+            
+            # Process log chunks (Docker returns 1 byte at a time in stream mode)
+            for log_chunk in log_generator:
+                if self._logging_stop_event.is_set():
+                    break
+                
+                # Accumulate bytes
+                if isinstance(log_chunk, bytes):
+                    buffer += log_chunk
+                else:
+                    buffer += str(log_chunk).encode('utf-8')
+                
+                # Check if we have complete lines (ending with \n or \r\n)
+                while b'\n' in buffer:
+                    # Split at first newline
+                    line, buffer = buffer.split(b'\n', 1)
+                    
+                    # Decode to string
+                    log_str = line.decode('utf-8', errors='replace').rstrip('\r')
+                    
+                    # Print to console
+                    if console and log_str:
+                        print(log_str)
+                    
+                    # Write to file (with newline)
+                    if self._log_file and log_str:
+                        self._log_file.write(log_str + '\n')
+            
+            # Flush any remaining content in buffer when stream ends
+            if buffer:
+                log_str = buffer.decode('utf-8', errors='replace').rstrip('\r\n')
+                if console and log_str:
+                    print(log_str)
+                if self._log_file and log_str:
+                    self._log_file.write(log_str + '\n')
+        
+        except Exception as e:
+            if not self._logging_stop_event.is_set():
+                logger.error(f"Error in log streaming for '{self.name}': {e}")
+    
     async def cleanup(self) -> None:
         """Stop container and close HTTP client (async)"""
         logger.debug(f"Cleaning up backend for container {self.name}")
+        
+        # Stop logging first
+        self.stop_logging()
         
         # Close HTTP client
         if self._http_executor:

@@ -223,9 +223,6 @@ class Actor:
         # This allows us to gracefully finish and return partial results
         internal_timeout = max(task_timeout - 20, task_timeout * 0.9)
         
-        # Generate unique session_id for this evaluation (for KV cache optimization)
-        session_id = f"openspiel_{uuid.uuid4().hex[:16]}"
-        
         try:
             game, game_config = create_game(task_id)
             game_name = game_config["game_name"]
@@ -249,7 +246,6 @@ class Actor:
                 rng_seed=seed + 1,
                 agent=agent,
                 seed=seed,
-                session_id=session_id,
                 executor=self.executor,
             )
 
