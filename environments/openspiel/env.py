@@ -819,7 +819,6 @@ def play_game(
     task_id: int = None,
     seed: int = None,
     opponent: str = "mcts",
-    player_id: int = 0,
 ) -> dict:
     """
     Play a game with any pyspiel.Bot (synchronous version).
@@ -833,7 +832,6 @@ def play_game(
         task_id: Task identifier for game configuration. If None, random.
         seed: Random seed for reproducibility. If None, random.
         opponent: Opponent type ("random" or "mcts")
-        player_id: Which position your bot plays (0, 1, ...)
 
     Returns:
         dict with:
@@ -858,7 +856,8 @@ def play_game(
         game, game_config = create_game(task_id)
         game_name = game_config["game_name"]
         num_players = game.num_players()
-        player_id = player_id % num_players
+        player_id = seed % 2
+        bot._player_id = player_id
 
         # Get agent for this game
         agent_class = GAME_AGENTS.get(game_name)
@@ -1005,6 +1004,212 @@ def _compute_score(returns, player_idx: int, game) -> float:
     return 0.5
 
 
+def play_game_dual(
+    task_id: int = None,
+    seed: int = None,
+    algorithm: str = "mcts",
+    mcts_simulations: int = None,
+) -> list:
+    """
+    Play a game with 2 AlgorithmBots and return both trajectories.
+
+    Doubles training data efficiency by generating 2 trajectories from 1 game.
+    Scores sum to 1.0, one player wins (success=True), other loses (success=False).
+
+    Args:
+        task_id: Task identifier for game configuration. If None, random.
+        seed: Random seed for reproducibility. If None, random.
+        algorithm: Algorithm for both bots ("mcts", "random")
+        mcts_simulations: Override MCTS simulations (for speed)
+
+    Returns:
+        List of 2 trajectory dicts, one per player:
+        [
+            {"conversation": [...], "score": 0.8, "success": True, ...},
+            {"conversation": [...], "score": 0.2, "success": False, ...},
+        ]
+    """
+    from algorithm_bot import AlgorithmBot
+
+    if task_id is None:
+        task_id = random.randint(0, 10**11 - 1)
+    if seed is None:
+        seed = random.randint(0, 2**32 - 1)
+
+    start_time = time.time()
+
+    try:
+        # Create game
+        game, game_config = create_game(task_id)
+        game_name = game_config["game_name"]
+        num_players = game.num_players()
+
+        if num_players != 2:
+            raise ValueError(f"play_game_dual only supports 2-player games, got {num_players}")
+
+        # Get agent
+        agent_class = GAME_AGENTS.get(game_name)
+        if not agent_class:
+            raise ValueError(f"No agent found for game: {game_name}")
+        agent = agent_class()
+
+        # Create 2 AlgorithmBots
+        bots = []
+        for player_id in range(2):
+            bot = AlgorithmBot(
+                game=game,
+                player_id=player_id,
+                agent=agent,
+                algorithm=algorithm,
+                seed=seed + player_id,
+                mcts_simulations=mcts_simulations,
+            )
+            bots.append(bot)
+
+        # Play game
+        returns = evaluate_bots.evaluate_bots(
+            game.new_initial_state(),
+            bots,
+            np.random.RandomState(seed),
+        )
+
+        # Build trajectories for both players
+        trajectories = []
+        for player_id in range(2):
+            bot = bots[player_id]
+            score = _compute_score(returns, player_id, game)
+
+            trajectory = {
+                "task_name": f"openspiel:{game_name}",
+                "score": score,
+                "success": score > 0.5,
+                "time_taken": time.time() - start_time,
+                "conversation": bot.get_conversation(),
+                "action_history": bot.get_action_history(),
+                "observation": bot.get_observation(),
+                "game_name": game_name,
+                "task_id": task_id,
+                "seed": seed,
+                "player_id": player_id,
+                "returns": list(returns),
+                "player_return": returns[player_id],
+            }
+            trajectories.append(trajectory)
+
+        return trajectories
+
+    except Exception as e:
+        import traceback
+        error_result = {
+            "task_name": "openspiel:unknown",
+            "score": 0.0,
+            "success": False,
+            "time_taken": time.time() - start_time,
+            "error": f"[{type(e).__name__}] {str(e)}\n{traceback.format_exc()}",
+            "task_id": task_id,
+            "seed": seed,
+        }
+        return [error_result, error_result]
+
+
+def _play_game_dual_worker(args: dict) -> list:
+    """Worker function for parallel dual game execution."""
+    return play_game_dual(
+        task_id=args["task_id"],
+        seed=args.get("seed"),
+        algorithm=args.get("algorithm", "mcts"),
+        mcts_simulations=args.get("mcts_simulations"),
+    )
+
+
+def play_games_dual_parallel(
+    task_ids: list,
+    seeds: list = None,
+    algorithm: str = "mcts",
+    max_workers: int = None,
+    mcts_simulations: int = None,
+    show_progress: bool = True,
+) -> dict:
+    """
+    Play multiple games in parallel, generating 2 trajectories per game.
+
+    Args:
+        task_ids: List of task IDs to play
+        seeds: List of seeds (same length as task_ids). If None, random seeds.
+        algorithm: Algorithm for bots ("mcts", "random")
+        max_workers: Number of parallel workers (default: CPU count)
+        mcts_simulations: Override MCTS simulations (for faster testing)
+        show_progress: Print progress updates
+
+    Returns:
+        dict with:
+            - trajectories: List of all trajectories (2 per game)
+            - avg_score: Average score (should be ~0.5)
+            - num_games: Number of games played
+            - num_trajectories: Total trajectories (2 * num_games)
+            - total_time: Total execution time
+    """
+    from multiprocessing import Pool, cpu_count
+
+    n_games = len(task_ids)
+    if seeds is None:
+        seeds = [random.randint(0, 2**32 - 1) for _ in range(n_games)]
+
+    if len(seeds) != n_games:
+        raise ValueError(f"seeds length ({len(seeds)}) must match task_ids length ({n_games})")
+
+    if max_workers is None:
+        max_workers = cpu_count()
+
+    # Prepare arguments
+    worker_args = [
+        {
+            "task_id": task_id,
+            "seed": seed,
+            "algorithm": algorithm,
+            "mcts_simulations": mcts_simulations,
+        }
+        for task_id, seed in zip(task_ids, seeds)
+    ]
+
+    start_time = time.time()
+    all_trajectories = []
+
+    if show_progress:
+        print(f"Running {n_games} games with {max_workers} workers (2 trajectories per game)...")
+
+    # Run in parallel
+    with Pool(processes=max_workers) as pool:
+        for i, trajectories in enumerate(pool.imap_unordered(_play_game_dual_worker, worker_args)):
+            all_trajectories.extend(trajectories)
+            if show_progress and (i + 1) % max(1, n_games // 10) == 0:
+                print(f"  Progress: {i + 1}/{n_games} games completed")
+
+    total_time = time.time() - start_time
+
+    # Compute statistics
+    scores = [t.get("score", 0.0) for t in all_trajectories]
+    errors = [t for t in all_trajectories if "error" in t]
+    wins = sum(1 for t in all_trajectories if t.get("success", False))
+
+    if show_progress:
+        print(f"\nCompleted {n_games} games in {total_time:.1f}s")
+        print(f"Generated {len(all_trajectories)} trajectories")
+        print(f"Wins: {wins}, Losses: {len(all_trajectories) - wins}")
+        if errors:
+            print(f"Errors: {len(errors)}")
+
+    return {
+        "trajectories": all_trajectories,
+        "avg_score": sum(scores) / len(scores) if scores else 0.0,
+        "num_games": n_games,
+        "num_trajectories": len(all_trajectories),
+        "num_wins": wins,
+        "num_errors": len(errors),
+        "total_time": total_time,
+    }
+
+
 def _play_game_worker(args: dict) -> dict:
     """
     Worker function for parallel game execution.
@@ -1021,7 +1226,7 @@ def _play_game_worker(args: dict) -> dict:
     seed = args.get("seed") or random.randint(0, 2**32 - 1)
     algorithm = args.get("algorithm", "mcts")
     opponent = args.get("opponent", "mcts")
-    player_id = args.get("player_id", 0)
+    player_id = seed % 2
     mcts_simulations = args.get("mcts_simulations")
 
     # Import here to avoid issues in subprocess
@@ -1031,8 +1236,6 @@ def _play_game_worker(args: dict) -> dict:
         # Create game
         game, game_config = create_game(task_id)
         game_name = game_config["game_name"]
-        num_players = game.num_players()
-        player_id = player_id % num_players
 
         # Get agent
         agent_class = GAME_AGENTS.get(game_name)
@@ -1056,7 +1259,6 @@ def _play_game_worker(args: dict) -> dict:
             task_id=task_id,
             seed=seed,
             opponent=opponent,
-            player_id=player_id,
         )
         return result
 
@@ -1076,7 +1278,6 @@ def play_games_parallel(
     seeds: list = None,
     algorithm: str = "mcts",
     opponent: str = "mcts",
-    player_id: int = 0,
     max_workers: int = None,
     mcts_simulations: int = None,
     show_progress: bool = True,
@@ -1089,7 +1290,6 @@ def play_games_parallel(
         seeds: List of seeds (same length as task_ids). If None, random seeds.
         algorithm: Algorithm for your bot ("mcts", "random")
         opponent: Opponent type ("mcts", "random")
-        player_id: Which position your bot plays
         max_workers: Number of parallel workers (default: CPU count)
         mcts_simulations: Override MCTS simulations (for faster testing)
         show_progress: Print progress updates
@@ -1122,7 +1322,6 @@ def play_games_parallel(
             "seed": seed,
             "algorithm": algorithm,
             "opponent": opponent,
-            "player_id": player_id,
             "mcts_simulations": mcts_simulations,
         }
         for task_id, seed in zip(task_ids, seeds)

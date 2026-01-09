@@ -18,8 +18,8 @@ class HumanBot(pyspiel.Bot):
     def __init__(
         self,
         game: pyspiel.Game,
-        player_id: int,
         agent: BaseGameAgent,
+        player_id: int = 0,
         seed: Optional[int] = None,
     ):
         """
