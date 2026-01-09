@@ -77,6 +77,17 @@ Examples:
         action='store_true',
         help='Do not use cache when building (only with --dir)'
     )
+    run_parser.add_argument(
+        '--host-network',
+        action='store_true',
+        help='Use host network mode (required for Docker Desktop on macOS)'
+    )
+    run_parser.add_argument(
+        '--port',
+        type=int,
+        default=8000,
+        help='Port to use with --host-network (default: 8000)'
+    )
     
     # === build command ===
     build_parser = subparsers.add_parser(
@@ -295,7 +306,9 @@ def main():
                 env_vars=env_vars,
                 pull=args.pull,
                 mem_limit=args.mem_limit,
-                no_cache=args.no_cache
+                no_cache=args.no_cache,
+                host_network=args.host_network,
+                host_port=args.port
             ))
         
         elif args.command == 'build':
