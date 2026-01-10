@@ -195,7 +195,7 @@ Rules:
 Provide only the complete valid sequence."""
 
     def extract_answer(self, test_solution: str) -> str:
-        """Extract bracket sequence from model response"""
+        """Extract bracket sequence from model response - O(n) algorithm"""
         if not test_solution:
             return ""
 
@@ -209,39 +209,71 @@ Provide only the complete valid sequence."""
                (text.startswith("'") and text.endswith("'")):
                 text = text[1:-1]
 
-        # Validate and find longest valid sequence
-        def is_valid_sequence(s):
+        bracket_chars = set("()[]{}<>⟨⟩⟦⟧⦃⦄⦅⦆")
+        opening_chars = set("([{<⟨⟦⦃⦅")
+        bracket_pairs = {
+            ")": "(", "]": "[", "}": "{", ">": "<",
+            "⟩": "⟨", "⟧": "⟦", "⦄": "⦃", "⦆": "⦅"
+        }
+
+        def find_longest_valid_in_segment(s):
+            """Find longest valid Dyck substring in a pure bracket string - O(n)"""
             if not s:
-                return False
-            bracket_chars = set("()[]{}<>⟨⟩⟦⟧⦃⦄⦅⦆")
-            if not all(c in bracket_chars for c in s):
-                return False
+                return ""
 
-            stack = []
-            bracket_pairs = {
-                ")": "(", "]": "[", "}": "{", ">": "<",
-                "⟩": "⟨", "⟧": "⟦", "⦄": "⦃", "⦆": "⦅"
-            }
+            n = len(s)
+            stack = []  # stores indices of unmatched brackets
 
-            for char in s:
-                if char in "([{<⟨⟦⦃⦅":
-                    stack.append(char)
-                elif char in ")]}>⟩⟧⦄⦆":
-                    if stack and stack[-1] == bracket_pairs[char]:
+            for i, char in enumerate(s):
+                if char in opening_chars:
+                    stack.append(i)
+                else:
+                    # closing bracket
+                    if stack and s[stack[-1]] == bracket_pairs.get(char):
                         stack.pop()
                     else:
-                        return False
+                        stack.append(i)  # unmatched closing bracket
 
-            return len(stack) == 0
+            if not stack:
+                return s  # entire string is valid
 
-        max_length = 0
+            # Find longest valid substring between unmatched positions
+            unmatched = [-1] + stack + [n]
+
+            max_len = 0
+            best_start = 0
+
+            for i in range(len(unmatched) - 1):
+                length = unmatched[i + 1] - unmatched[i] - 1
+                if length > max_len:
+                    max_len = length
+                    best_start = unmatched[i] + 1
+
+            if max_len == 0:
+                return ""
+
+            return s[best_start:best_start + max_len]
+
+        # Extract contiguous bracket segments and find longest valid sequence
         best_sequence = ""
+        current_segment = []
 
-        for i in range(len(text)):
-            for j in range(i + 2, len(text) + 1):
-                potential = text[i:j]
-                if is_valid_sequence(potential) and len(potential) > max_length:
-                    max_length = len(potential)
-                    best_sequence = potential
+        for char in text:
+            if char in bracket_chars:
+                current_segment.append(char)
+            else:
+                if current_segment:
+                    segment = "".join(current_segment)
+                    valid = find_longest_valid_in_segment(segment)
+                    if len(valid) > len(best_sequence):
+                        best_sequence = valid
+                    current_segment = []
+
+        # Don't forget the last segment
+        if current_segment:
+            segment = "".join(current_segment)
+            valid = find_longest_valid_in_segment(segment)
+            if len(valid) > len(best_sequence):
+                best_sequence = valid
 
         return best_sequence

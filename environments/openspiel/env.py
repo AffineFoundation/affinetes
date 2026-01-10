@@ -16,6 +16,9 @@ from llm_bot import LLMBot
 from game_config import create_game
 from agents import GAME_AGENTS
 
+# Import shared logging utilities
+from request_logger import RequestLogger, log_event
+
 
 class SafeRandomRolloutEvaluator(mcts.Evaluator):
     """
@@ -214,14 +217,27 @@ class Actor:
         game_name = "unknown"
         llm_bot = None
         mcts_bots = []  # Track MCTS bots for timing stats
-        
+        logger = None
+
         # Set internal timeout to be 20 seconds earlier than task timeout
         # This allows us to gracefully finish and return partial results
         internal_timeout = max(task_timeout - 20, task_timeout * 0.9)
-        
+
         try:
             game, game_config = create_game(task_id)
             game_name = game_config["game_name"]
+
+            # Setup logging after game_name is determined
+            logger = RequestLogger(
+                task_id=task_id,
+                task_type=game_name,
+                seed=seed,
+                model=model,
+                base_url=base_url,
+                opponent=opponent
+            )
+            logger.__enter__()
+            log_event("game_created", game_name=game_name)
             num_players = game.num_players()
             llm_player_id = llm_player_id % num_players
 
@@ -260,7 +276,8 @@ class Actor:
                     bots.append(opponent_bot)
 
             loop = asyncio.get_event_loop()
-            
+            log_event("game_start", num_players=num_players, llm_player_id=llm_player_id)
+
             # Run game evaluation with internal timeout (20s buffer before task timeout)
             try:
                 returns = await asyncio.wait_for(
@@ -273,10 +290,12 @@ class Actor:
                     ),
                     timeout=internal_timeout
                 )
+                log_event("game_complete", returns=str(returns))
             except asyncio.TimeoutError:
                 # Internal timeout - game didn't complete in time
+                log_event("game_timeout", level='warning', timeout_seconds=internal_timeout)
                 elapsed = time.time() - start_time
-                return self._build_result(
+                result = self._build_result(
                     game_name=game_name,
                     llm_player_id=llm_player_id,
                     task_id=task_id,
@@ -287,12 +306,16 @@ class Actor:
                     llm_bot=llm_bot,
                     mcts_bots=mcts_bots,
                 )
+                if logger:
+                    logger.__exit__(None, None, None)
+                return result
 
             # Game completed successfully
             llm_return = returns[llm_player_id]
             score = self._compute_score(returns, llm_player_id, game)
-            
-            return self._build_result(
+            log_event("request_complete", score=score, llm_return=llm_return)
+
+            result = self._build_result(
                 game_name=game_name,
                 llm_player_id=llm_player_id,
                 task_id=task_id,
@@ -306,10 +329,13 @@ class Actor:
                 llm_bot=llm_bot,
                 mcts_bots=mcts_bots,
             )
+            if logger:
+                logger.__exit__(None, None, None)
+            return result
 
         except asyncio.TimeoutError:
             # Task timeout
-            return self._build_result(
+            result = self._build_result(
                 game_name=game_name,
                 llm_player_id=llm_player_id,
                 task_id=task_id,
@@ -320,6 +346,9 @@ class Actor:
                 llm_bot=llm_bot,
                 mcts_bots=mcts_bots,
             )
+            if logger:
+                logger.__exit__(None, None, None)
+            return result
 
         except Exception as e:
             import traceback
@@ -327,7 +356,7 @@ class Actor:
 
             # ParsingError: treat as valid sample with 0 score (no error field)
             if isinstance(e, ParsingError):
-                return self._build_result(
+                result = self._build_result(
                     game_name=game_name,
                     llm_player_id=llm_player_id,
                     task_id=task_id,
@@ -339,7 +368,10 @@ class Actor:
                     llm_bot=llm_bot,
                     mcts_bots=mcts_bots,
                 )
-            
+                if logger:
+                    logger.__exit__(None, None, None)
+                return result
+
             # APIError or other exceptions: record as error
             if isinstance(e, APIError):
                 error_msg = llm_bot.get_last_error() if llm_bot and llm_bot.get_last_error() else str(e)
@@ -348,7 +380,7 @@ class Actor:
             else:
                 error_msg = f"[{type(e).__name__}] {str(e)}\n{traceback.format_exc()}"
 
-            return self._build_result(
+            result = self._build_result(
                 game_name=game_name,
                 llm_player_id=llm_player_id,
                 task_id=task_id,
@@ -359,6 +391,9 @@ class Actor:
                 llm_bot=llm_bot,
                 mcts_bots=mcts_bots,
             )
+            if logger:
+                logger.__exit__(None, None, None)
+            return result
 
     def _compute_score(self, returns, llm_player_idx, game):
         """

@@ -13,6 +13,7 @@ RUN pip install --no-cache-dir fastapi uvicorn[standard] httpx pydantic
 # Create affinetes directory and copy server
 RUN mkdir -p /app/_affinetes
 COPY http_server.py /app/_affinetes/server.py
+COPY request_logger.py /app/request_logger.py
 RUN echo "" > /app/_affinetes/__init__.py
 
 # Make directory world-writable to avoid permission issues
