@@ -127,23 +127,28 @@ class LocalLLMBot(pyspiel.Bot):
         # Retry loop for parsing
         for attempt in range(self._max_parsing_retries + 1):
             try:
-                response = self._call_local_llm()
+                reasoning_content, content = self._call_local_llm()
             except Exception as e:
                 import traceback
                 error_msg = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
                 self._last_error = f"[LLM_ERROR] {error_msg}"
                 raise RuntimeError(f"Local LLM call failed: {error_msg}")
-            
-            self._conversation.append({"role": "assistant", "content": response})
-            
-            # Parse action using the SAME legal_actions from the prompt
-            result = self._parse_action(response, state, legal_actions)
-            
+
+            # Store reasoning_content and content separately in conversation history
+            self._conversation.append({
+                "role": "assistant",
+                "reasoning_content": reasoning_content,
+                "content": content
+            })
+
+            # Parse action using content (without <think> tags)
+            result = self._parse_action(content, state, legal_actions)
+
             if result['success']:
                 action = result['action']
                 self.inform_action(state, self._player_id, action)
                 return action
-            
+
             error_msg = (
                 f"Invalid response format. "
                 f"You must respond with ONLY the action ID number (e.g., '5'). "
@@ -153,13 +158,20 @@ class LocalLLMBot(pyspiel.Bot):
             if attempt >= self._max_parsing_retries:
                 raise ParsingError(
                     f"Failed to parse valid action after {self._max_parsing_retries + 1} retries. "
-                    f"Last response: '{response}'. Error: {result['error_message']}"
+                    f"Last response: '{content}'. Error: {result['error_message']}"
                 )
 
         raise RuntimeError("Should not reach here")
 
-    def _call_local_llm(self) -> str:
-        """Call local LLM model for inference"""
+    def _call_local_llm(self) -> Tuple[str, str]:
+        """
+        Call local LLM model for inference
+
+        Returns:
+            Tuple of (reasoning_content, content):
+                - reasoning_content: Content inside <think> tags (reasoning/thinking)
+                - content: Content outside <think> tags (actual response)
+        """
         text = self._tokenizer.apply_chat_template(
             self._conversation,
             tokenize=False,
@@ -179,20 +191,36 @@ class LocalLLMBot(pyspiel.Bot):
             )
 
         output_ids = outputs[0][len(inputs.input_ids[0]):].tolist()
-        response = self._tokenizer.decode(output_ids, skip_special_tokens=True)
+        full_response = self._tokenizer.decode(output_ids, skip_special_tokens=True)
 
-        # Remove <think> tags and content from response
-        response = self._remove_think_tags(response)
+        # Extract reasoning content and content separately
+        reasoning_content, content = self._extract_reasoning_and_content(full_response)
 
-        return response
+        return reasoning_content, content
 
     @staticmethod
-    def _remove_think_tags(text: str) -> str:
-        """Remove <think>...</think> tags and their content from text"""
-        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-        cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)
-        cleaned = cleaned.strip()
-        return cleaned
+    def _extract_reasoning_and_content(text: str) -> Tuple[str, str]:
+        """
+        Extract reasoning content and main content from response
+
+        Args:
+            text: Full response text potentially containing <think> tags
+
+        Returns:
+            Tuple of (reasoning_content, content):
+                - reasoning_content: Text inside <think> tags (empty string if none)
+                - content: Text outside <think> tags
+        """
+        # Extract content inside <think> tags
+        think_matches = re.findall(r'<think>(.*?)</think>', text, flags=re.DOTALL | re.IGNORECASE)
+        reasoning_content = '\n'.join(match.strip() for match in think_matches)
+
+        # Remove <think> tags and content to get main content
+        content = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
+        content = re.sub(r'\n\s*\n\s*\n', '\n\n', content)
+        content = content.strip()
+
+        return reasoning_content, content
 
     def _parse_action(self, response: str, state, legal_actions: List[int]) -> Dict:
         """Robust action parsing with multiple strategies"""

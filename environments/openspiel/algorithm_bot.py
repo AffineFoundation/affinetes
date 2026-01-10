@@ -113,10 +113,10 @@ class AlgorithmBot(pyspiel.Bot):
                 )
             
             max_sims, n_rollouts = mcts_config
-            if mcts_simulations is not None:
-                max_sims = mcts_simulations
-            if mcts_rollouts != 1:
-                n_rollouts = mcts_rollouts
+            # if mcts_simulations is not None:
+            #     max_sims = mcts_simulations
+            # if mcts_rollouts != 1:
+            #     n_rollouts = mcts_rollouts
             
             evaluator = SafeRandomRolloutEvaluator(
                 n_rollouts=n_rollouts,
