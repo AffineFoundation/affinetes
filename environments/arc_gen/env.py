@@ -8,6 +8,9 @@ import time
 
 import httpx
 import openai
+import torch
+
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 # Add /app to path to import local modules
 if "/app" not in sys.path:
@@ -154,6 +157,99 @@ class Actor:
             result["error"] = error
             result["error_type"] = "llm_failure"
 
+        gc.collect()
+
+        return result
+
+    async def _llm_chat_local(self, prompt, model: AutoModelForCausalLM, tokenizer: AutoTokenizer):
+        """Call local LLM model for inference"""
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True
+        )
+
+        inputs = tokenizer([text], return_tensors="pt").to(model.device)
+
+        with torch.inference_mode():
+            outputs = model.generate(**inputs, eos_token_id=tokenizer.eos_token_id, max_new_tokens=4096)
+
+        output_ids = outputs[0][len(inputs.input_ids[0]):].tolist()
+        return tokenizer.decode(output_ids, skip_special_tokens=True)
+
+    async def local_evaluate(
+        self,
+        model: AutoModelForCausalLM,
+        tokenizer: AutoTokenizer,
+        seed: int = None,
+        task_id: int = None,
+        num_train: int = 3,
+    ):
+        """
+        Run evaluation on a single trace task using local model
+
+        Args:
+            model: Model to use for evaluation
+            tokenizer: Tokenizer to use for evaluation
+            seed: Random seed for LLM generation. Used to ensure reproducible results. If not provided, a random seed will be generated.
+            task_id: Optional task ID for deterministic task selection.
+                     If provided, used as index into dataset.
+                     If not provided, random sample is selected.
+        """
+        # Generate random seed if not provided
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+
+        start = time.time()
+
+        # Generate challenge
+        challenge = await self.arc_task.generate(task_id=task_id, num_train=num_train)
+
+        # Call LLM
+        try:
+            resp = await self._llm_chat_local(challenge.prompt, model, tokenizer)
+            error = None
+        except Exception as e:
+            import traceback
+            resp = None
+            error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+            print(error)
+
+        # Evaluate
+        score = 0.0
+        cell_accuracy = None
+        if resp:
+            score, cell_accuracy, _ = await self.arc_task.evaluate(resp, challenge)
+
+        conversation = [
+            {"role": "user", "content": challenge.prompt},
+            {"role": "assistant", "content": resp}
+        ]
+
+        result = {
+            "task_name": "affine:arc-gen",
+            "score": score,
+            "success": score > 0,
+            "time_taken": time.time() - start,
+            "extra": {
+                "conversation": conversation,
+                "seed": seed,
+                "task_id": task_id,
+                "task_num": challenge.extra.get("task_num"),
+                "task_uid": challenge.extra.get("task_uid"),
+                "cell_accuracy": cell_accuracy,
+                "expected_output": challenge.extra.get("expected_output"),
+            },
+        }
+
+        # Add error info if present
+        if error:
+            result["error"] = error
+            result["error_type"] = "llm_failure"
+
+        # Force garbage collection to free memory immediately
         gc.collect()
 
         return result
