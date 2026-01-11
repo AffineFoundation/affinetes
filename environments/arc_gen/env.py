@@ -8,6 +8,7 @@ import time
 
 import httpx
 import openai
+import torch
 
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -183,7 +184,8 @@ class Actor:
         model: AutoModelForCausalLM,
         tokenizer: AutoTokenizer,
         seed: int = None,
-        task_id: int = None
+        task_id: int = None,
+        num_train: int = 3,
     ):
         """
         Run evaluation on a single trace task using local model
@@ -203,7 +205,7 @@ class Actor:
         start = time.time()
 
         # Generate challenge
-        challenge = await self.arc_task.generate(task_id=task_id)
+        challenge = await self.arc_task.generate(task_id=task_id, num_train=num_train)
 
         # Call LLM
         try:
@@ -213,12 +215,13 @@ class Actor:
             import traceback
             resp = None
             error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+            print(error)
 
         # Evaluate
         score = 0.0
-        test_result = "0/1"
+        cell_accuracy = None
         if resp:
-            score, test_result = await self.arc_task.evaluate(resp, challenge)
+            score, cell_accuracy, _ = await self.arc_task.evaluate(resp, challenge)
 
         conversation = [
             {"role": "user", "content": challenge.prompt},
@@ -226,16 +229,19 @@ class Actor:
         ]
 
         result = {
-            "task_name": "ArcGen",
+            "task_name": "affine:arc-gen",
             "score": score,
             "success": score > 0,
             "time_taken": time.time() - start,
             "extra": {
                 "conversation": conversation,
                 "seed": seed,
-                "test_result": test_result,
-                "dataset_index": challenge.extra.get("dataset_index")
-            }
+                "task_id": task_id,
+                "task_num": challenge.extra.get("task_num"),
+                "task_uid": challenge.extra.get("task_uid"),
+                "cell_accuracy": cell_accuracy,
+                "expected_output": challenge.extra.get("expected_output"),
+            },
         }
 
         # Add error info if present
