@@ -60,6 +60,12 @@ class LogicTaskV2:
             "class": "DyckLanguage2Generator",
             "default_config": {}  # n_types and length derived from seed
         },
+        "boolean_expressions": {
+            "task_type_id": 6,  # Range: 600,000,000-699,999,999
+            "module": "games.boolean_expressions.generator",
+            "class": "BooleanExpressionsGenerator",
+            "default_config": {}  # All parameters derived from seed
+        },
     }
 
     # Reverse mapping: task_type_id -> task_type_name
