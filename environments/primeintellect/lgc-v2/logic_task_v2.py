@@ -66,6 +66,12 @@ class LogicTaskV2:
             "class": "BooleanExpressionsGenerator",
             "default_config": {}  # All parameters derived from seed
         },
+        "sudoku": {
+            "task_type_id": 7,  # Range: 700,000,000-799,999,999
+            "module": "games.sudoku.generator",
+            "class": "SudokuGenerator",
+            "default_config": {}  # All parameters derived from seed
+        },
     }
 
     # Reverse mapping: task_type_id -> task_type_name

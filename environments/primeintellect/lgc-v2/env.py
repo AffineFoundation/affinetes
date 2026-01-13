@@ -171,27 +171,25 @@ class Actor:
                     usage = chunk.usage.model_dump()
 
             # Combine all content parts
-            if not content_parts:
-                # Return None for empty content (e.g., token limit exhausted during reasoning)
-                # This will result in 0 score rather than raising an error
-                log_event("stream_empty_content", level='warning', chunks=chunk_count)
-                return None, usage
+            content = "".join(content_parts) if content_parts else None
+            reasoning = "".join(reasoning_parts) if reasoning_parts else None
 
-            content = "".join(content_parts)
             if not content:
                 # Return None for empty content (e.g., token limit exhausted during reasoning)
-                log_event("stream_empty_content", level='warning', chunks=chunk_count)
-                return None, usage
+                # This will result in 0 score rather than raising an error
+                log_event("stream_empty_content", level='warning', chunks=chunk_count, has_reasoning=bool(reasoning))
+                return None, reasoning, usage
 
             # Log stream completion stats
             stream_duration_ms = int((time.time() - stream_start) * 1000)
             log_event("stream_complete",
                      total_chunks=chunk_count,
                      content_length=len(content),
+                     reasoning_length=len(reasoning) if reasoning else 0,
                      stream_duration_ms=stream_duration_ms)
 
-            # Return both content and usage information
-            return content.strip(), usage
+            # Return content, reasoning, and usage information
+            return content.strip(), reasoning, usage
 
         finally:
             # Critical: Close stream to return connection to pool
@@ -322,10 +320,11 @@ class Actor:
         # Call LLM using task_id as seed
         log_event("llm_call_start")
         usage = None
+        reasoning = None
         try:
-            resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, task_id)
+            resp, reasoning, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, task_id)
             error = None
-            log_event("llm_call_complete", response_length=len(resp) if resp else 0)
+            log_event("llm_call_complete", response_length=len(resp) if resp else 0, reasoning_length=len(reasoning) if reasoning else 0)
         except Exception as e:
             import traceback
             resp = None
@@ -344,9 +343,14 @@ class Actor:
                 error = f"Evaluation error: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
                 log_event("evaluation_failed", level='error', error=str(e))
 
+        # Build assistant message with optional reasoning
+        assistant_message = {"role": "assistant", "content": resp}
+        if reasoning:
+            assistant_message["reasoning_content"] = reasoning
+
         conversation = [
             {"role": "user", "content": challenge.prompt},
-            {"role": "assistant", "content": resp}
+            assistant_message
         ]
 
         task_type = challenge.extra.get("task_type")

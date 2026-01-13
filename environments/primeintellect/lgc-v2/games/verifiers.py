@@ -10,6 +10,7 @@ from games.game_of_24.verifier import GameOf24Verifier
 from games.operation.verifier import OperationVerifier
 from games.cryptarithm.verifier import CryptarithmVerifier
 from games.boolean_expressions.verifier import BooleanExpressionsVerifier
+from games.sudoku.verifier import SudokuVerifier
 
 # Add your verifiers here:
 # from games.your_task.verifier import YourTaskVerifier
@@ -21,6 +22,7 @@ verifier_classes = {
     "operation": OperationVerifier,
     "cryptarithm": CryptarithmVerifier,
     "boolean_expressions": BooleanExpressionsVerifier,
+    "sudoku": SudokuVerifier,
     # Add your verifiers here:
     # "your_task": YourTaskVerifier,
 }
