@@ -26,7 +26,7 @@ class DyckLanguage2Generator:
         ]
 
         # Multiple prompt templates for diversity
-        # All templates require answer in \boxed{}
+        # All templates require answer in backticks
         self.prompt_templates = [
             # Template 0: Direct instruction
             {
@@ -39,7 +39,7 @@ Rules:
 - The opening brackets should be prepended to form a valid sequence
 - Do not add any extra bracket pairs beyond what is required
 
-Please fill your final answer (the complete valid sequence) in \\boxed{{}}.""",
+Please provide your final answer (the complete valid sequence) in backticks like `answer`.""",
                 "name": "direct"
             },
             # Template 1: Reverse perspective
@@ -53,7 +53,7 @@ Your task:
 - The result must be a valid, balanced bracket sequence
 - Use the minimum number of opening brackets necessary
 
-Please fill your final answer (the complete sequence) in \\boxed{{}}.""",
+Please provide your final answer (the complete sequence) in backticks like `answer`.""",
                 "name": "reverse_perspective"
             },
             # Template 2: Puzzle format
@@ -67,7 +67,7 @@ Solve:
 2. Add the minimal opening brackets to the left
 3. The final sequence must be properly nested
 
-Please fill your final answer (the full balanced sequence) in \\boxed{{}}.""",
+Please provide your final answer (the full balanced sequence) in backticks like `answer`.""",
                 "name": "puzzle"
             },
             # Template 3: Technical format
@@ -82,7 +82,7 @@ CONSTRAINTS:
 - Result must be valid Dyck word
 - Preserve input as suffix
 
-Please fill your final answer in \\boxed{{}}.""",
+Please provide your final answer in backticks like `answer`.""",
                 "name": "technical"
             },
             # Template 4: Story format
@@ -96,7 +96,7 @@ Restore the missing beginning so that:
 - No extra brackets are added
 - The sequence is properly nested
 
-Please fill your final answer (the restored complete sequence) in \\boxed{{}}.""",
+Please provide your final answer (the restored complete sequence) in backticks like `answer`.""",
                 "name": "story"
             },
             # Template 5: Mathematical format
@@ -105,7 +105,7 @@ Please fill your final answer (the restored complete sequence) in \\boxed{{}}.""
 
 Find the minimal prefix P such that P + S forms a valid Dyck word.
 
-Please fill your final answer (P + S, the complete Dyck word) in \\boxed{{}}.""",
+Please provide your final answer (P + S, the complete Dyck word) in backticks like `answer`.""",
                 "name": "mathematical"
             },
             # Template 6: Q&A format
@@ -116,7 +116,7 @@ Requirements:
 - Use exactly the brackets needed (no more, no less)
 - Maintain proper nesting order
 
-Please fill your final answer (the entire resulting sequence) in \\boxed{{}}.""",
+Please provide your final answer (the entire resulting sequence) in backticks like `answer`.""",
                 "name": "qa"
             },
             # Template 7: Fill-in format
@@ -129,7 +129,7 @@ Rules:
 - The blank contains only opening brackets
 - Use the minimum required
 
-Please fill your final answer (the complete filled sequence) in \\boxed{{}}.""",
+Please provide your final answer (the complete filled sequence) in backticks like `answer`.""",
                 "name": "fill_in"
             },
         ]
@@ -342,52 +342,31 @@ Please fill your final answer (the complete filled sequence) in \\boxed{{}}.""",
         template_info = self.prompt_templates[variant]
         return template_info["template"].format(suffix=suffix)
 
-    def _extract_from_boxed(self, text: str) -> str:
-        """Extract content from \\boxed{} or \\box{} using bracket matching"""
-        # Find all possible start positions
-        markers = ['\\boxed{', '\\box{', 'boxed{']
-
-        results = []
-        for marker in markers:
-            start = 0
-            while True:
-                pos = text.find(marker, start)
-                if pos == -1:
-                    break
-
-                # Find matching closing brace using bracket counting
-                content_start = pos + len(marker)
-                brace_count = 1
-                i = content_start
-
-                while i < len(text) and brace_count > 0:
-                    if text[i] == '{':
-                        brace_count += 1
-                    elif text[i] == '}':
-                        brace_count -= 1
-                    i += 1
-
-                if brace_count == 0:
-                    content = text[content_start:i-1]
-                    results.append(content.strip())
-
-                start = i
-
-        # Return the last match (most likely the final answer)
-        return results[-1] if results else ""
-
-    def _clean_bracket_sequence(self, text: str) -> str:
-        """Clean text to extract only bracket characters"""
-        bracket_chars = set("()[]{}<>⟨⟩⟦⟧⦃⦄⦅⦆")
-        return "".join(c for c in text if c in bracket_chars)
-
     def extract_answer(self, test_solution: str) -> str:
-        """Extract bracket sequence from \\boxed{} in model response"""
+        """Extract bracket sequence from backticks in model response"""
         if not test_solution:
             return ""
 
-        boxed_content = self._extract_from_boxed(test_solution)
-        if boxed_content:
-            return self._clean_bracket_sequence(boxed_content)
+        bracket_chars = set("()[]{}<>⟨⟩⟦⟧⦃⦄⦅⦆")
 
-        return ""
+        # Find all backtick-enclosed content, return the last valid one
+        results = []
+        i = 0
+        while i < len(test_solution):
+            if test_solution[i] == '`':
+                # Find closing backtick
+                j = i + 1
+                while j < len(test_solution) and test_solution[j] != '`':
+                    j += 1
+                if j < len(test_solution):
+                    content = test_solution[i+1:j].strip()
+                    # Only accept if content is pure brackets
+                    if content and all(c in bracket_chars for c in content):
+                        results.append(content)
+                    i = j + 1
+                else:
+                    break
+            else:
+                i += 1
+
+        return results[-1] if results else ""
