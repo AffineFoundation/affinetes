@@ -75,34 +75,15 @@ async def call_method(call: MethodCall):
     else:
         raise HTTPException(404, f"Method not found: {call.method}")
     
-    # Extract timeout parameter if present (only used for wait_for, not passed to method)
-    timeout = call.kwargs.get("timeout", None)
-    
-    # Execute with optional timeout enforcement
+    # Execute method directly - timeout is handled by caller via _timeout parameter
+    # The 'timeout' kwarg is passed through to the method for its internal use (e.g., LLM API timeout)
     try:
-        # Create the execution coroutine
         if inspect.iscoroutinefunction(func):
-            exec_coro = func(*call.args, **call.kwargs)
+            result = await func(*call.args, **call.kwargs)
         else:
             loop = asyncio.get_event_loop()
-            exec_coro = loop.run_in_executor(None, lambda: func(*call.args, **call.kwargs))
-        
-        # Apply timeout only if specified
-        if timeout is not None:
-            try:
-                result = await asyncio.wait_for(exec_coro, timeout=timeout)
-            except asyncio.TimeoutError:
-                # Task was cancelled, return error result
-                return MethodResponse(
-                    status="failed",
-                    result={
-                        "error": f"Task execution exceeded timeout of {timeout}s",
-                    }
-                )
-        else:
-            # No timeout specified, execute normally
-            result = await exec_coro
-        
+            result = await loop.run_in_executor(None, lambda: func(*call.args, **call.kwargs))
+
         return MethodResponse(status="success", result=result)
     except Exception as e:
         tb = traceback.format_exc()
