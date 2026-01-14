@@ -72,6 +72,16 @@ class LogicTaskV2:
             "class": "SudokuGenerator",
             "default_config": {}  # All parameters derived from seed
         },
+        "dyck_language_reasoning_errors": {
+            "task_type_id": 8,  # Range: 800,000,000-899,999,999
+            "module": "games.dyck_language_reasoning_errors.generator",
+            "class": "DyckLanguageReasoningErrorsGenerator",
+            "default_config": {
+                "n_types": 0,       # 0 = random (2-4)
+                "total_length": 0,  # 0 = random (10-30)
+                "n_errors": 0       # 0 = random (1-5)
+            }
+        },
     }
 
     # Reverse mapping: task_type_id -> task_type_name
