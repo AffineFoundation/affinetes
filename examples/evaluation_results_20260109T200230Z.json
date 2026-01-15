@@ -1,0 +1,50 @@
+{
+  "image": "affinefoundation/mth:pi",
+  "model": "Qwen/Qwen3-32B",
+  "base_url": "https://llm.chutes.ai/v1",
+  "task_ids": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "total_time": 10.666645050048828,
+  "total_tasks": 5,
+  "successful_tasks": 0,
+  "failed_tasks": 5,
+  "average_score": 0,
+  "total_score": 0,
+  "results": [
+    {
+      "task_id": 1,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988940': BackendError: Method execution failed: Deployment creation failed: Request failed with status 504 Gateway Timeout: <html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n<center><h1>504 Gateway Time-out</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 10.666290044784546
+    },
+    {
+      "task_id": 2,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988940': BackendError: Method execution failed: Deployment creation failed: Request failed with status 504 Gateway Timeout: <html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n<center><h1>504 Gateway Time-out</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 10.66632890701294
+    },
+    {
+      "task_id": 3,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988940': BackendError: Method execution failed: Deployment creation failed: Request failed with status 504 Gateway Timeout: <html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n<center><h1>504 Gateway Time-out</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 10.64665699005127
+    },
+    {
+      "task_id": 4,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988940': BackendError: Method execution failed: Deployment creation failed: Request failed with status 504 Gateway Timeout: <html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n<center><h1>504 Gateway Time-out</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 10.666341066360474
+    },
+    {
+      "task_id": 5,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988940': BackendError: Method execution failed: Deployment creation failed: Request failed with status 504 Gateway Timeout: <html>\r\n<head><title>504 Gateway Time-out</title></head>\r\n<body>\r\n<center><h1>504 Gateway Time-out</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 10.66630506515503
+    }
+  ]
+}

@@ -1,0 +1,715 @@
+{
+  "image": "affinefoundation/mth:pi",
+  "model": "Qwen/Qwen3-32B",
+  "base_url": "https://llm.chutes.ai/v1",
+  "task_ids": [
+    1,
+    2,
+    3,
+    4,
+    5,
+    6,
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    41,
+    42,
+    43,
+    44,
+    45,
+    46,
+    47,
+    48,
+    49,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    57,
+    58,
+    59,
+    60,
+    61,
+    62,
+    63,
+    64,
+    65,
+    66,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73,
+    74,
+    75,
+    76,
+    77,
+    78,
+    79,
+    80,
+    81,
+    82,
+    83,
+    84,
+    85,
+    86,
+    87,
+    88,
+    89,
+    90,
+    91,
+    92,
+    93,
+    94,
+    95,
+    96,
+    97,
+    98,
+    99,
+    100
+  ],
+  "total_time": 7.609524965286255,
+  "total_tasks": 100,
+  "successful_tasks": 0,
+  "failed_tasks": 100,
+  "average_score": 0,
+  "total_score": 0,
+  "results": [
+    {
+      "task_id": 1,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608979940414429
+    },
+    {
+      "task_id": 2,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608459711074829
+    },
+    {
+      "task_id": 3,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608849763870239
+    },
+    {
+      "task_id": 4,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6084208488464355
+    },
+    {
+      "task_id": 5,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608267068862915
+    },
+    {
+      "task_id": 6,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.598450183868408
+    },
+    {
+      "task_id": 7,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597909927368164
+    },
+    {
+      "task_id": 8,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607889890670776
+    },
+    {
+      "task_id": 9,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.60885214805603
+    },
+    {
+      "task_id": 10,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.598490953445435
+    },
+    {
+      "task_id": 11,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.598329067230225
+    },
+    {
+      "task_id": 12,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6085100173950195
+    },
+    {
+      "task_id": 13,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608487129211426
+    },
+    {
+      "task_id": 14,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.598214864730835
+    },
+    {
+      "task_id": 15,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.598221063613892
+    },
+    {
+      "task_id": 16,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.596585035324097
+    },
+    {
+      "task_id": 17,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608716726303101
+    },
+    {
+      "task_id": 18,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.606258153915405
+    },
+    {
+      "task_id": 19,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608608722686768
+    },
+    {
+      "task_id": 20,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.596602916717529
+    },
+    {
+      "task_id": 21,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597729921340942
+    },
+    {
+      "task_id": 22,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.5965540409088135
+    },
+    {
+      "task_id": 23,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608701229095459
+    },
+    {
+      "task_id": 24,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608630180358887
+    },
+    {
+      "task_id": 25,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607921123504639
+    },
+    {
+      "task_id": 26,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.596302032470703
+    },
+    {
+      "task_id": 27,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607270002365112
+    },
+    {
+      "task_id": 28,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.60824179649353
+    },
+    {
+      "task_id": 29,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608142852783203
+    },
+    {
+      "task_id": 30,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608500003814697
+    },
+    {
+      "task_id": 31,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.59824013710022
+    },
+    {
+      "task_id": 32,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.598258018493652
+    },
+    {
+      "task_id": 33,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.606142997741699
+    },
+    {
+      "task_id": 34,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.606102705001831
+    },
+    {
+      "task_id": 35,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608126401901245
+    },
+    {
+      "task_id": 36,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.59804892539978
+    },
+    {
+      "task_id": 37,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608091115951538
+    },
+    {
+      "task_id": 38,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.598221063613892
+    },
+    {
+      "task_id": 39,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.606128692626953
+    },
+    {
+      "task_id": 40,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608421802520752
+    },
+    {
+      "task_id": 41,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6083221435546875
+    },
+    {
+      "task_id": 42,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608386039733887
+    },
+    {
+      "task_id": 43,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607048988342285
+    },
+    {
+      "task_id": 44,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597898006439209
+    },
+    {
+      "task_id": 45,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.608001708984375
+    },
+    {
+      "task_id": 46,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607755899429321
+    },
+    {
+      "task_id": 47,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607632160186768
+    },
+    {
+      "task_id": 48,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.596258878707886
+    },
+    {
+      "task_id": 49,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6076579093933105
+    },
+    {
+      "task_id": 50,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6067070960998535
+    },
+    {
+      "task_id": 51,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607793092727661
+    },
+    {
+      "task_id": 52,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.605946063995361
+    },
+    {
+      "task_id": 53,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607944011688232
+    },
+    {
+      "task_id": 54,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607992887496948
+    },
+    {
+      "task_id": 55,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.5973289012908936
+    },
+    {
+      "task_id": 56,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.598021030426025
+    },
+    {
+      "task_id": 57,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607641220092773
+    },
+    {
+      "task_id": 58,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607958078384399
+    },
+    {
+      "task_id": 59,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6076819896698
+    },
+    {
+      "task_id": 60,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607567071914673
+    },
+    {
+      "task_id": 61,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597723960876465
+    },
+    {
+      "task_id": 62,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.605738878250122
+    },
+    {
+      "task_id": 63,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607838869094849
+    },
+    {
+      "task_id": 64,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.605773687362671
+    },
+    {
+      "task_id": 65,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607560873031616
+    },
+    {
+      "task_id": 66,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597718000411987
+    },
+    {
+      "task_id": 67,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607961893081665
+    },
+    {
+      "task_id": 68,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607726812362671
+    },
+    {
+      "task_id": 69,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.5975518226623535
+    },
+    {
+      "task_id": 70,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597761869430542
+    },
+    {
+      "task_id": 71,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.60706901550293
+    },
+    {
+      "task_id": 72,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607628107070923
+    },
+    {
+      "task_id": 73,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597651958465576
+    },
+    {
+      "task_id": 74,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607333183288574
+    },
+    {
+      "task_id": 75,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597508907318115
+    },
+    {
+      "task_id": 76,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597630977630615
+    },
+    {
+      "task_id": 77,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597574949264526
+    },
+    {
+      "task_id": 78,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607000827789307
+    },
+    {
+      "task_id": 79,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607402324676514
+    },
+    {
+      "task_id": 80,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597737073898315
+    },
+    {
+      "task_id": 81,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597651243209839
+    },
+    {
+      "task_id": 82,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.595855236053467
+    },
+    {
+      "task_id": 83,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6073620319366455
+    },
+    {
+      "task_id": 84,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607835054397583
+    },
+    {
+      "task_id": 85,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.606534242630005
+    },
+    {
+      "task_id": 86,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6075990200042725
+    },
+    {
+      "task_id": 87,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607265949249268
+    },
+    {
+      "task_id": 88,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597473859786987
+    },
+    {
+      "task_id": 89,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.6071617603302
+    },
+    {
+      "task_id": 90,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607483148574829
+    },
+    {
+      "task_id": 91,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.60728120803833
+    },
+    {
+      "task_id": 92,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607532024383545
+    },
+    {
+      "task_id": 93,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607100963592529
+    },
+    {
+      "task_id": 94,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.605386972427368
+    },
+    {
+      "task_id": 95,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.606737852096558
+    },
+    {
+      "task_id": 96,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.596334218978882
+    },
+    {
+      "task_id": 97,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.607621908187866
+    },
+    {
+      "task_id": 98,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.59584379196167
+    },
+    {
+      "task_id": 99,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.597252130508423
+    },
+    {
+      "task_id": 100,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-mth-pi-1767988897': BackendError: Method execution failed: Deployment creation failed: Request failed with status 502 Bad Gateway: <html>\r\n<head><title>502 Bad Gateway</title></head>\r\n<body>\r\n<center><h1>502 Bad Gateway</h1></center>\r\n</body>\r\n</html>\r\n\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 7.605274200439453
+    }
+  ]
+}

@@ -35,6 +35,11 @@ class Actor:
         
         # Initialize trace task instance
         self.trace_task = TraceTask()
+        
+        # OpenEnv state - stores current challenge for step-based interaction
+        self._current_challenge = None
+        self._episode_done = True
+        self._episode_seed = None
     
     async def _llm_chat(self, prompt, model, base_url, timeout, temperature, current_api_key, seed=None):
         """Call LLM API with specified API key and optional seed (streaming mode)"""
@@ -207,4 +212,137 @@ class Actor:
 
         logger.__exit__(None, None, None)
         return result
+
+    # =========================================================================
+    # OpenEnv Protocol Methods
+    # =========================================================================
+    
+    async def reset(
+        self,
+        task_id: int = None,
+        seed: int = None,
+    ) -> dict:
+        """
+        OpenEnv reset: Initialize a new episode and return initial observation.
+        
+        Args:
+            task_id: Task identifier for deterministic task selection.
+                     If not provided, a random task is selected.
+            seed: Random seed for reproducibility.
+                  If not provided, a random seed is generated.
+        
+        Returns:
+            dict with:
+                - observation: The challenge prompt (text for LLM)
+                - reward: 0.0 (no reward at reset)
+                - done: False (episode just started)
+                - truncated: False
+                - info: Additional metadata
+        """
+        # Generate seed if not provided
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        
+        self._episode_seed = seed
+        
+        # Generate challenge
+        self._current_challenge = await self.trace_task.generate(task_id=task_id)
+        self._episode_done = False
+        
+        return {
+            "observation": self._current_challenge.prompt,
+            "reward": 0.0,
+            "done": False,
+            "truncated": False,
+            "info": {
+                "task_id": task_id,
+                "seed": seed,
+                "dataset_index": self._current_challenge.extra.get("dataset_index"),
+                "env": "trace",
+            }
+        }
+    
+    async def step(self, action: str) -> dict:
+        """
+        OpenEnv step: Process an action (LLM response) and return result.
+        
+        For trace tasks, this is a single-step environment - the action is
+        the model's prediction of the program output.
+        
+        Args:
+            action: The model's response/prediction
+        
+        Returns:
+            dict with:
+                - observation: Empty (episode is done after this step)
+                - reward: 1.0 if correct, 0.0 if incorrect
+                - done: True (trace is single-step)
+                - truncated: False
+                - info: Additional metadata including score
+        """
+        if self._current_challenge is None:
+            raise RuntimeError("No active episode. Call reset() first.")
+        
+        if self._episode_done:
+            raise RuntimeError("Episode already done. Call reset() to start a new episode.")
+        
+        # Evaluate the response
+        score, test_result = await self.trace_task.evaluate(action, self._current_challenge)
+        
+        self._episode_done = True
+        
+        # Build conversation for logging
+        conversation = [
+            {"role": "user", "content": self._current_challenge.prompt},
+            {"role": "assistant", "content": action}
+        ]
+        
+        return {
+            "observation": "",  # No next observation - episode is done
+            "reward": score,
+            "done": True,
+            "truncated": False,
+            "info": {
+                "score": score,
+                "success": score > 0,
+                "test_result": test_result,
+                "conversation": conversation,
+                "seed": self._episode_seed,
+                "dataset_index": self._current_challenge.extra.get("dataset_index"),
+                "ground_truth": self._current_challenge.extra.get("ground_truth"),
+            }
+        }
+    
+    def state(self) -> dict:
+        """
+        OpenEnv state: Return current observation without taking any action.
+        
+        Returns:
+            dict with:
+                - observation: Current challenge prompt (or empty if no active episode)
+                - reward: 0.0
+                - done: Current done status
+                - truncated: False
+                - info: Current episode metadata
+        """
+        if self._current_challenge is None:
+            return {
+                "observation": "",
+                "reward": 0.0,
+                "done": True,
+                "truncated": False,
+                "info": {"error": "No active episode. Call reset() first."}
+            }
+        
+        return {
+            "observation": self._current_challenge.prompt,
+            "reward": 0.0,
+            "done": self._episode_done,
+            "truncated": False,
+            "info": {
+                "seed": self._episode_seed,
+                "dataset_index": self._current_challenge.extra.get("dataset_index"),
+                "env": "trace",
+            }
+        }
 

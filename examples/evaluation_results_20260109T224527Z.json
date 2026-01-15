@@ -1,0 +1,50 @@
+{
+  "image": "affinefoundation/affine-env:print",
+  "model": "Qwen/Qwen3-32B",
+  "base_url": "https://llm.chutes.ai/v1",
+  "task_ids": [
+    1,
+    2,
+    3,
+    4,
+    5
+  ],
+  "total_time": 1447.008041858673,
+  "total_tasks": 5,
+  "successful_tasks": 0,
+  "failed_tasks": 5,
+  "average_score": 0,
+  "total_score": 0,
+  "results": [
+    {
+      "task_id": 1,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-affine-env-print-1767997280': BackendError: Method execution failed: Deployment creation failed: error sending request for url (https://api.basilica.ai/deployments/1974d988-1848-4f41-8033-59964cb38d90): error trying to connect: dns error: failed to lookup address information: nodename nor servname provided, or not known\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 1436.8078837394714
+    },
+    {
+      "task_id": 2,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-affine-env-print-1767997280': BackendError: Method execution failed: Deployment creation failed: Deployment affine-env-prin-evaluate-t2-1767997280 failed: Deployment failed. Check if the image exists and starts correctly.\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 1447.0077021121979
+    },
+    {
+      "task_id": 3,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-affine-env-print-1767997280': BackendError: Method execution failed: Deployment creation failed: error sending request for url (https://api.basilica.ai/deployments/0f426f80-8978-4393-9954-fefefd68650e): error trying to connect: dns error: failed to lookup address information: nodename nor servname provided, or not known\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 1438.2639560699463
+    },
+    {
+      "task_id": 4,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-affine-env-print-1767997280': BackendError: Method execution failed: Deployment creation failed: error sending request for url (https://api.basilica.ai/deployments/7f99d409-d463-4ffb-9631-9e618f0e416f): error trying to connect: dns error: failed to lookup address information: nodename nor servname provided, or not known\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 1437.3480412960052
+    },
+    {
+      "task_id": 5,
+      "error": "Method 'evaluate' failed on environment 'basilica-pod-affine-env-print-1767997280': BackendError: Method execution failed: Deployment creation failed: error sending request for url (https://api.basilica.ai/deployments/e818f36e-666e-4be8-bee6-d5a00393e102): error trying to connect: dns error: failed to lookup address information: nodename nor servname provided, or not known\n",
+      "error_type": "EnvironmentError",
+      "elapsed": 1436.224797964096
+    }
+  ]
+}
