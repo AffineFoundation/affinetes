@@ -152,6 +152,20 @@ class Actor:
             api_key: API key for LLM service. If not provided, uses CHUTES_API_KEY env var
         """
         self.api_key = api_key or os.getenv("CHUTES_API_KEY")
+        
+        # OpenEnv state - for step-based interaction
+        self._game = None
+        self._game_state = None
+        self._game_config = None
+        self._agent = None
+        self._opponent_bots = {}  # player_id -> bot
+        self._llm_player_id = None
+        self._episode_seed = None
+        self._episode_done = True
+        self._episode_start_time = None
+        self._conversation = []  # Track conversation history
+        self._action_history = []  # Track all actions
+        self._rng = None  # Random state for game
 
     async def evaluate(
         self,
@@ -589,3 +603,403 @@ class Actor:
             result["error"] = str(error)
 
         return result
+
+    # =========================================================================
+    # OpenEnv Protocol Methods
+    # =========================================================================
+    
+    def reset(
+        self,
+        task_id: int = None,
+        seed: int = None,
+        opponent: str = "random",
+    ) -> dict:
+        """
+        OpenEnv reset: Initialize a new game episode and return initial observation.
+        
+        Args:
+            task_id: Task identifier (12-digit format: GGGGCCCCCCCC).
+                     If not provided, a random task is selected.
+            seed: Random seed for reproducibility.
+                  If not provided, a random seed is generated.
+            opponent: Opponent type ("random" or "mcts")
+        
+        Returns:
+            dict with:
+                - observation: The game state prompt (text for LLM)
+                - reward: 0.0 (no reward at reset)
+                - done: False (episode just started)
+                - truncated: False
+                - info: Additional metadata including legal_actions
+        """
+        # Generate defaults if not provided
+        if task_id is None:
+            task_id = random.randint(0, 10**11 - 1)
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        
+        self._episode_seed = seed
+        self._episode_start_time = time.time()
+        self._episode_done = False
+        self._conversation = []
+        self._action_history = []
+        
+        # Create game from task_id
+        self._game, self._game_config = create_game(task_id)
+        game_name = self._game_config["game_name"]
+        num_players = self._game.num_players()
+        
+        # Determine LLM player ID from seed
+        self._llm_player_id = seed % num_players
+        
+        # Get agent for this game
+        agent_class = GAME_AGENTS.get(game_name)
+        if not agent_class:
+            raise ValueError(f"No agent found for game: {game_name}")
+        self._agent = agent_class()
+        
+        # Create opponent bots for all non-LLM players
+        self._opponent_bots = {}
+        for player_id in range(num_players):
+            if player_id != self._llm_player_id:
+                self._opponent_bots[player_id] = self._create_opponent_bot(
+                    opponent, player_id, seed + 2 + player_id, self._game, self._agent
+                )
+        
+        # Initialize random state for game
+        self._rng = np.random.RandomState(seed)
+        
+        # Create initial game state
+        self._game_state = self._game.new_initial_state()
+        
+        # Generate system prompt and add to conversation
+        system_prompt = self._agent.generate_system_prompt()
+        self._conversation.append({"role": "system", "content": system_prompt})
+        
+        # Advance game to first LLM turn (handle chance nodes and opponent turns)
+        self._advance_to_llm_turn()
+        
+        # Check if game ended during advancement (e.g., game with no LLM moves)
+        if self._game_state.is_terminal():
+            self._episode_done = True
+            returns = self._game_state.returns()
+            score = self._compute_score(returns, self._llm_player_id, self._game)
+            return {
+                "observation": "",
+                "reward": score,
+                "done": True,
+                "truncated": False,
+                "info": self._build_info(score=score, returns=returns)
+            }
+        
+        # Generate observation for LLM
+        observation = self._generate_observation()
+        
+        return {
+            "observation": observation,
+            "reward": 0.0,
+            "done": False,
+            "truncated": False,
+            "info": self._build_info()
+        }
+    
+    def step(self, action: str) -> dict:
+        """
+        OpenEnv step: Process an action (LLM response) and return result.
+        
+        Args:
+            action: The action to take (can be action ID or action string)
+        
+        Returns:
+            dict with:
+                - observation: Next state prompt (empty if done)
+                - reward: Game reward (computed at terminal state)
+                - done: Whether the episode has ended
+                - truncated: False (we don't truncate games)
+                - info: Additional metadata
+        """
+        if self._game_state is None:
+            raise RuntimeError("No active episode. Call reset() first.")
+        
+        if self._episode_done:
+            raise RuntimeError("Episode already done. Call reset() to start a new episode.")
+        
+        if self._game_state.is_terminal():
+            self._episode_done = True
+            returns = self._game_state.returns()
+            score = self._compute_score(returns, self._llm_player_id, self._game)
+            return {
+                "observation": "",
+                "reward": score,
+                "done": True,
+                "truncated": False,
+                "info": self._build_info(score=score, returns=returns)
+            }
+        
+        # Parse the action
+        legal_actions = self._game_state.legal_actions(self._llm_player_id)
+        parsed_action = self._parse_action_string(action, legal_actions)
+        
+        if parsed_action is None:
+            # Invalid action - return error but don't end episode
+            # Let the training loop retry or handle the error
+            return {
+                "observation": self._generate_observation(),
+                "reward": 0.0,
+                "done": False,
+                "truncated": False,
+                "info": self._build_info(
+                    error=f"Invalid action: '{action}'. Legal actions: {legal_actions}"
+                )
+            }
+        
+        # Record LLM's action
+        self._record_action(self._llm_player_id, parsed_action)
+        
+        # Add assistant response to conversation
+        self._conversation.append({"role": "assistant", "content": action})
+        
+        # Apply the action
+        self._game_state.apply_action(parsed_action)
+        
+        # Advance to next LLM turn (handle chance nodes and opponent turns)
+        self._advance_to_llm_turn()
+        
+        # Check if game ended
+        if self._game_state.is_terminal():
+            self._episode_done = True
+            returns = self._game_state.returns()
+            score = self._compute_score(returns, self._llm_player_id, self._game)
+            return {
+                "observation": "",
+                "reward": score,
+                "done": True,
+                "truncated": False,
+                "info": self._build_info(score=score, returns=returns)
+            }
+        
+        # Generate next observation for LLM
+        observation = self._generate_observation()
+        
+        return {
+            "observation": observation,
+            "reward": 0.0,
+            "done": False,
+            "truncated": False,
+            "info": self._build_info()
+        }
+    
+    def state(self) -> dict:
+        """
+        OpenEnv state: Return current observation without taking any action.
+        
+        Returns:
+            dict with:
+                - observation: Current game state prompt (or empty if no active episode)
+                - reward: 0.0
+                - done: Current done status
+                - truncated: False
+                - info: Current episode metadata
+        """
+        if self._game_state is None:
+            return {
+                "observation": "",
+                "reward": 0.0,
+                "done": True,
+                "truncated": False,
+                "info": {"error": "No active episode. Call reset() first."}
+            }
+        
+        if self._episode_done or self._game_state.is_terminal():
+            returns = self._game_state.returns() if self._game_state.is_terminal() else None
+            score = self._compute_score(returns, self._llm_player_id, self._game) if returns else 0.0
+            return {
+                "observation": "",
+                "reward": score,
+                "done": True,
+                "truncated": False,
+                "info": self._build_info(score=score, returns=returns)
+            }
+        
+        return {
+            "observation": self._generate_observation(),
+            "reward": 0.0,
+            "done": False,
+            "truncated": False,
+            "info": self._build_info()
+        }
+    
+    def _advance_to_llm_turn(self):
+        """
+        Advance game state until it's the LLM's turn or game is terminal.
+        
+        Handles:
+        - Chance nodes (random events)
+        - Opponent bot turns
+        """
+        while not self._game_state.is_terminal():
+            current_player = self._game_state.current_player()
+            
+            # Handle chance nodes
+            if current_player == pyspiel.PlayerId.CHANCE:
+                outcomes = self._game_state.chance_outcomes()
+                action_probs = [(a, p) for a, p in outcomes]
+                actions = [a for a, _ in action_probs]
+                probs = [p for _, p in action_probs]
+                action = self._rng.choice(actions, p=probs)
+                self._game_state.apply_action(action)
+                continue
+            
+            # Handle simultaneous games - need LLM to act
+            if current_player == pyspiel.PlayerId.SIMULTANEOUS:
+                # For simultaneous games, we need all players to act at once
+                # This is a special case - return to let LLM provide action
+                break
+            
+            # If it's LLM's turn, stop advancing
+            if current_player == self._llm_player_id:
+                break
+            
+            # Opponent's turn - let bot play
+            if current_player in self._opponent_bots:
+                bot = self._opponent_bots[current_player]
+                action = bot.step(self._game_state)
+                self._record_action(current_player, action)
+                
+                # Inform all bots about the action
+                for pid, other_bot in self._opponent_bots.items():
+                    if hasattr(other_bot, 'inform_action'):
+                        other_bot.inform_action(self._game_state, current_player, action)
+                
+                self._game_state.apply_action(action)
+            else:
+                # Unknown player - shouldn't happen
+                break
+    
+    def _generate_observation(self) -> str:
+        """
+        Generate observation text for LLM (the prompt).
+        
+        Returns the same format as the LLMBot would generate.
+        """
+        if self._game_state.is_terminal():
+            return ""
+        
+        # Get legal actions for the LLM player
+        current_player = self._game_state.current_player()
+        
+        # Handle simultaneous games
+        if current_player == pyspiel.PlayerId.SIMULTANEOUS:
+            legal_actions = self._game_state.legal_actions(self._llm_player_id)
+        else:
+            legal_actions = self._game_state.legal_actions(self._llm_player_id)
+        
+        # Generate user prompt using the agent
+        user_prompt = self._agent.generate_user_prompt(
+            state=self._game_state,
+            player_id=self._llm_player_id,
+            legal_actions=legal_actions
+        )
+        
+        # Add to conversation history
+        self._conversation.append({"role": "user", "content": user_prompt})
+        
+        return user_prompt
+    
+    def _parse_action_string(self, action_str: str, legal_actions: list) -> int:
+        """
+        Parse action string to action ID.
+        
+        Supports:
+        - Pure number: "42"
+        - Number in text: "I choose 42"
+        - Action string match: "a3" for chess
+        """
+        action_str = action_str.strip()
+        
+        # Strategy 1: Pure number
+        try:
+            action = int(action_str)
+            if action in legal_actions:
+                return action
+        except ValueError:
+            pass
+        
+        # Strategy 2: Find number in text
+        import re
+        for action in legal_actions:
+            if re.search(rf'\b{action}\b', action_str):
+                return action
+        
+        # Strategy 3: Match action string
+        action_str_lower = action_str.lower()
+        for action in legal_actions:
+            try:
+                game_action_str = self._game_state.action_to_string(self._llm_player_id, action).lower()
+                if game_action_str in action_str_lower or action_str_lower in game_action_str:
+                    return action
+            except:
+                pass
+        
+        return None
+    
+    def _record_action(self, player_id: int, action: int):
+        """Record an action to the action history."""
+        try:
+            action_str = self._game_state.action_to_string(player_id, action)
+        except:
+            action_str = str(action)
+        
+        self._action_history.append({
+            "player_id": int(player_id),
+            "action": int(action),
+            "action_str": action_str,
+            "is_llm": bool(player_id == self._llm_player_id)
+        })
+    
+    def _build_info(self, score: float = None, returns: list = None, error: str = None) -> dict:
+        """Build info dictionary for OpenEnv response."""
+        game_name = self._game_config["game_name"] if self._game_config else "unknown"
+        
+        # Get legal actions if game is not terminal
+        legal_actions = []
+        legal_actions_str = []
+        if self._game_state and not self._game_state.is_terminal():
+            current_player = self._game_state.current_player()
+            if current_player == pyspiel.PlayerId.SIMULTANEOUS:
+                legal_actions = list(self._game_state.legal_actions(self._llm_player_id))
+            elif current_player == self._llm_player_id:
+                legal_actions = list(self._game_state.legal_actions(self._llm_player_id))
+            
+            # Convert to strings for readability
+            for action in legal_actions:
+                try:
+                    action_str = self._game_state.action_to_string(self._llm_player_id, action)
+                    legal_actions_str.append(f"{action} -> {action_str}")
+                except:
+                    legal_actions_str.append(str(action))
+        
+        info = {
+            "game_name": game_name,
+            "task_id": self._game_config.get("task_id") if self._game_config else None,
+            "seed": self._episode_seed,
+            "llm_player_id": self._llm_player_id,
+            "legal_actions": legal_actions,
+            "legal_actions_str": legal_actions_str,
+            "action_history": self._action_history,
+            "conversation": self._conversation,
+            "time_elapsed": time.time() - self._episode_start_time if self._episode_start_time else 0,
+        }
+        
+        if score is not None:
+            info["score"] = score
+            info["success"] = score > 0.5
+        
+        if returns is not None:
+            info["returns"] = [float(r) for r in returns]
+            info["llm_return"] = float(returns[self._llm_player_id]) if self._llm_player_id < len(returns) else None
+        
+        if error is not None:
+            info["error"] = error
+        
+        return info

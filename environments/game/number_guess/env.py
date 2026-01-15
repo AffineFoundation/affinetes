@@ -19,6 +19,15 @@ class Actor:
     def __init__(self, api_key: Optional[str] = None):
         """Initialize actor with API key"""
         self.api_key = api_key or os.getenv("CHUTES_API_KEY")
+        
+        # OpenEnv state
+        self._target = None
+        self._attempts_used = 0
+        self._episode_done = True
+        self._episode_seed = None
+        self._task_id = None
+        self._conversation = []
+        self._last_feedback = None
     
     async def _llm_chat(self, messages, model, base_url, timeout, temperature, api_key, seed=None):
         """Call LLM API"""
@@ -164,3 +173,222 @@ What is your next guess?"""
         }
         
         return result
+
+    # =========================================================================
+    # OpenEnv Protocol Methods
+    # =========================================================================
+    
+    def reset(
+        self,
+        task_id: Optional[int] = None,
+        seed: Optional[int] = None,
+    ) -> dict:
+        """
+        OpenEnv reset: Initialize a new number guessing game.
+        
+        Args:
+            task_id: Task identifier for deterministic target number.
+                     If not provided, a random target is chosen.
+            seed: Random seed for reproducibility.
+        
+        Returns:
+            dict with:
+                - observation: The initial game prompt (text for LLM)
+                - reward: 0.0 (no reward at reset)
+                - done: False (episode just started)
+                - truncated: False
+                - info: Game metadata
+        """
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+        
+        self._episode_seed = seed
+        self._task_id = task_id
+        self._attempts_used = 0
+        self._episode_done = False
+        self._conversation = []
+        
+        # Generate target number based on task_id
+        random.seed(task_id if task_id is not None else random.randint(0, 2**31 - 1))
+        self._target = random.randint(self.MIN_RANGE, self.MAX_RANGE)
+        
+        # Generate initial prompt
+        initial_prompt = f"""You are playing a number guessing game.
+
+Rules:
+- I have chosen a secret number between {self.MIN_RANGE} and {self.MAX_RANGE} (inclusive)
+- You have {self.MAX_ATTEMPTS} attempts to guess the number
+- After each guess, I will tell you if the secret number is higher or lower
+- Try to find the number in as few attempts as possible
+
+To make a guess, respond with just the number.
+Example: "500"
+
+What is your first guess?"""
+        
+        self._conversation.append({"role": "user", "content": initial_prompt})
+        self._last_feedback = initial_prompt
+        
+        return {
+            "observation": initial_prompt,
+            "reward": 0.0,
+            "done": False,
+            "truncated": False,
+            "info": {
+                "task_id": task_id,
+                "seed": seed,
+                "attempts_remaining": self.MAX_ATTEMPTS,
+                "min_range": self.MIN_RANGE,
+                "max_range": self.MAX_RANGE,
+                "env": "game:number_guess",
+            }
+        }
+    
+    def step(self, action: str) -> dict:
+        """
+        OpenEnv step: Process a guess (LLM response) and return result.
+        
+        Args:
+            action: The model's guess (e.g., "500" or "I guess 500")
+        
+        Returns:
+            dict with:
+                - observation: Feedback message or empty if done
+                - reward: 1.0 if correct, 0.0 otherwise
+                - done: True if game ended (correct guess or no attempts left)
+                - truncated: False
+                - info: Game metadata
+        """
+        if self._target is None:
+            raise RuntimeError("No active episode. Call reset() first.")
+        
+        if self._episode_done:
+            raise RuntimeError("Episode already done. Call reset() to start a new episode.")
+        
+        # Add assistant response to conversation
+        self._conversation.append({"role": "assistant", "content": action})
+        
+        # Parse the guess
+        guess = self._parse_guess(action)
+        
+        if guess is None:
+            # Could not parse - give feedback but don't count as attempt
+            feedback = "Cannot parse your guess. Please respond with just a number.\n\nWhat is your guess?"
+            self._conversation.append({"role": "user", "content": feedback})
+            self._last_feedback = feedback
+            
+            return {
+                "observation": feedback,
+                "reward": 0.0,
+                "done": False,
+                "truncated": False,
+                "info": {
+                    "attempts_used": self._attempts_used,
+                    "attempts_remaining": self.MAX_ATTEMPTS - self._attempts_used,
+                    "parse_error": True,
+                    "conversation": self._conversation,
+                }
+            }
+        
+        self._attempts_used += 1
+        attempts_left = self.MAX_ATTEMPTS - self._attempts_used
+        
+        # Check if correct
+        if guess == self._target:
+            self._episode_done = True
+            feedback = f"Correct! You found the secret number {guess} in {self._attempts_used} attempts!"
+            self._conversation.append({"role": "user", "content": feedback})
+            
+            return {
+                "observation": feedback,
+                "reward": 1.0,
+                "done": True,
+                "truncated": False,
+                "info": {
+                    "success": True,
+                    "attempts_used": self._attempts_used,
+                    "target": self._target,
+                    "conversation": self._conversation,
+                    "score": 1.0,
+                }
+            }
+        
+        # Check if out of attempts
+        if attempts_left == 0:
+            self._episode_done = True
+            feedback = f"Game over! You've used all {self._attempts_used} attempts.\nThe secret number was {self._target}."
+            self._conversation.append({"role": "user", "content": feedback})
+            
+            return {
+                "observation": feedback,
+                "reward": 0.0,
+                "done": True,
+                "truncated": False,
+                "info": {
+                    "success": False,
+                    "attempts_used": self._attempts_used,
+                    "target": self._target,
+                    "conversation": self._conversation,
+                    "score": 0.0,
+                }
+            }
+        
+        # Give hint and continue
+        hint = "higher" if guess < self._target else "lower"
+        feedback = f"""Your guess: {guess}
+Result: The secret number is {hint} than {guess}.
+
+Attempts remaining: {attempts_left}
+
+What is your next guess?"""
+        
+        self._conversation.append({"role": "user", "content": feedback})
+        self._last_feedback = feedback
+        
+        return {
+            "observation": feedback,
+            "reward": 0.0,
+            "done": False,
+            "truncated": False,
+            "info": {
+                "guess": guess,
+                "hint": hint,
+                "attempts_used": self._attempts_used,
+                "attempts_remaining": attempts_left,
+                "conversation": self._conversation,
+            }
+        }
+    
+    def state(self) -> dict:
+        """
+        OpenEnv state: Return current game state without taking any action.
+        
+        Returns:
+            dict with:
+                - observation: Current feedback/prompt (or empty if no active episode)
+                - reward: 0.0
+                - done: Current done status
+                - truncated: False
+                - info: Current game metadata
+        """
+        if self._target is None:
+            return {
+                "observation": "",
+                "reward": 0.0,
+                "done": True,
+                "truncated": False,
+                "info": {"error": "No active episode. Call reset() first."}
+            }
+        
+        return {
+            "observation": self._last_feedback or "",
+            "reward": 0.0,
+            "done": self._episode_done,
+            "truncated": False,
+            "info": {
+                "attempts_used": self._attempts_used,
+                "attempts_remaining": self.MAX_ATTEMPTS - self._attempts_used,
+                "conversation": self._conversation,
+                "env": "game:number_guess",
+            }
+        }

@@ -10,7 +10,7 @@ import asyncio
 import inspect
 import sys
 import traceback
-from typing import Any, Optional
+from typing import Any, Optional, Dict, List
 
 app = FastAPI(title="affinetes HTTP Server")
 
@@ -31,6 +31,32 @@ class MethodResponse(BaseModel):
     status: str
     result: Optional[Any] = None
     error: Optional[str] = None
+
+
+# =============================================================================
+# OpenEnv Protocol Models
+# =============================================================================
+
+class ResetRequest(BaseModel):
+    """OpenEnv reset request"""
+    task_id: Optional[int] = None
+    seed: Optional[int] = None
+    # Additional environment-specific parameters can be passed
+    kwargs: Optional[Dict[str, Any]] = None
+
+
+class StepRequest(BaseModel):
+    """OpenEnv step request"""
+    action: str  # Text action (will be parsed by environment)
+
+
+class OpenEnvResponse(BaseModel):
+    """OpenEnv response for reset/step/state"""
+    observation: str  # Text prompt for LLM
+    reward: float = 0.0
+    done: bool = False
+    truncated: bool = False
+    info: Dict[str, Any] = {}
 
 
 def _load_user_env():
@@ -146,3 +172,157 @@ async def list_methods():
 async def health():
     """Health check endpoint"""
     return {"status": "ok"}
+
+
+# =============================================================================
+# OpenEnv Protocol Endpoints
+# =============================================================================
+
+def _get_actor():
+    """Get or initialize actor instance"""
+    global user_actor
+    
+    if hasattr(user_module, "Actor") and user_actor is None:
+        try:
+            user_actor = user_module.Actor()
+        except Exception as e:
+            raise HTTPException(500, f"Failed to initialize Actor: {str(e)}")
+    
+    return user_actor
+
+
+@app.post("/reset", response_model=OpenEnvResponse)
+async def reset(request: ResetRequest):
+    """
+    OpenEnv reset endpoint.
+    
+    Initializes a new episode and returns the initial observation.
+    Requires Actor.reset(task_id, seed, **kwargs) method.
+    """
+    actor = _get_actor()
+    
+    if not actor or not hasattr(actor, "reset"):
+        raise HTTPException(
+            501, 
+            "OpenEnv not supported: Actor.reset() method not implemented"
+        )
+    
+    try:
+        func = getattr(actor, "reset")
+        kwargs = request.kwargs or {}
+        
+        if inspect.iscoroutinefunction(func):
+            result = await func(
+                task_id=request.task_id,
+                seed=request.seed,
+                **kwargs
+            )
+        else:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: func(task_id=request.task_id, seed=request.seed, **kwargs)
+            )
+        
+        # Handle both dict response and OpenEnvResponse-like objects
+        if isinstance(result, dict):
+            return OpenEnvResponse(
+                observation=result.get("observation", ""),
+                reward=result.get("reward", 0.0),
+                done=result.get("done", False),
+                truncated=result.get("truncated", False),
+                info=result.get("info", {})
+            )
+        else:
+            return result
+            
+    except Exception as e:
+        tb = traceback.format_exc()
+        raise HTTPException(500, f"reset() failed: {str(e)}\n{tb}")
+
+
+@app.post("/step", response_model=OpenEnvResponse)
+async def step(request: StepRequest):
+    """
+    OpenEnv step endpoint.
+    
+    Takes an action and returns the next observation, reward, and done flag.
+    Requires Actor.step(action) method.
+    """
+    actor = _get_actor()
+    
+    if not actor or not hasattr(actor, "step"):
+        raise HTTPException(
+            501,
+            "OpenEnv not supported: Actor.step() method not implemented"
+        )
+    
+    try:
+        func = getattr(actor, "step")
+        
+        if inspect.iscoroutinefunction(func):
+            result = await func(action=request.action)
+        else:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: func(action=request.action)
+            )
+        
+        # Handle both dict response and OpenEnvResponse-like objects
+        if isinstance(result, dict):
+            return OpenEnvResponse(
+                observation=result.get("observation", ""),
+                reward=result.get("reward", 0.0),
+                done=result.get("done", False),
+                truncated=result.get("truncated", False),
+                info=result.get("info", {})
+            )
+        else:
+            return result
+            
+    except Exception as e:
+        tb = traceback.format_exc()
+        raise HTTPException(500, f"step() failed: {str(e)}\n{tb}")
+
+
+@app.get("/state", response_model=OpenEnvResponse)
+async def state():
+    """
+    OpenEnv state endpoint.
+    
+    Returns the current observation without taking any action.
+    Requires Actor.state() method.
+    """
+    actor = _get_actor()
+    
+    if not actor or not hasattr(actor, "state"):
+        raise HTTPException(
+            501,
+            "OpenEnv not supported: Actor.state() method not implemented"
+        )
+    
+    try:
+        func = getattr(actor, "state")
+        
+        if inspect.iscoroutinefunction(func):
+            result = await func()
+        else:
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(None, func)
+        
+        # Handle both dict response and OpenEnvResponse-like objects
+        if isinstance(result, dict):
+            return OpenEnvResponse(
+                observation=result.get("observation", ""),
+                reward=result.get("reward", 0.0),
+                done=result.get("done", False),
+                truncated=result.get("truncated", False),
+                info=result.get("info", {})
+            )
+        else:
+            return result
+            
+    except Exception as e:
+        tb = traceback.format_exc()
+        raise HTTPException(500, f"state() failed: {str(e)}\n{tb}")
