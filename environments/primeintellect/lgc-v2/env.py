@@ -8,6 +8,9 @@ import openai
 import sys
 import random
 
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 # Add /app to path to import local modules
 if '/app' not in sys.path:
     sys.path.insert(0, '/app')
@@ -381,4 +384,156 @@ class Actor:
         gc.collect()
 
         logger.__exit__(None, None, None)
+        return result
+
+    async def _llm_chat_local(self, prompt, model: AutoModelForCausalLM, tokenizer: AutoTokenizer, seed=None):
+        """Call local LLM model for inference"""
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True
+        )
+
+        inputs = tokenizer([text], return_tensors="pt").to(model.device)
+
+        with torch.inference_mode():
+            outputs = model.generate(**inputs, eos_token_id=tokenizer.eos_token_id, max_new_tokens=4096)
+
+        output_ids = outputs[0][len(inputs.input_ids[0]):].tolist()
+        return tokenizer.decode(output_ids, skip_special_tokens=True)
+
+    async def local_evaluate(
+        self,
+        model: AutoModelForCausalLM,
+        tokenizer: AutoTokenizer,
+        timeout=600,
+        temperature=0.7,
+        api_key: str = None,
+        task_id: int = None,
+        seed: int = None,
+    ):
+        """
+        Run evaluation on a single logic task
+
+        Args:
+            model: Model to use for evaluation
+            tokenizer: Tokenizer to use for evaluation
+            seed: Random seed for LLM generation. Used to ensure reproducible results. If not provided, a random seed will be generated.
+            task_id: Task ID that encodes both task type and seed.
+                     Task type is determined by: task_id // 100,000,000
+                     Seed is determined by: task_id % 100,000,000
+
+                     Examples:
+                       - task_id=500 -> dyck_language with seed=500
+                       - task_id=100_000_500 -> future_task with seed=500
+
+                     If not provided, a random task_id for dyck_language will be generated.
+
+        Returns:
+            Dict with evaluation results including score, conversation, and metadata
+        """
+        # Generate random task_id if not provided (default to dyck_language)
+        if task_id is None:
+            task_id = random.randint(0, 99_999_999)  # dyck_language range
+
+        # Allow per-call api_key override
+        current_api_key = api_key or self.api_key
+
+        start = time.time()
+
+        # Generate challenge using task_id (auto-detects task type)
+        try:
+            challenge = await self.logic_task.generate(task_id=task_id)
+        except ValueError as e:
+            # Only catch expected generation failures
+            if "Failed to generate valid sequence" in str(e):
+                import traceback
+                # Try to decode task_type for task_name
+                try:
+                    from logic_task_v2 import LogicTaskV2
+                    task_type, seed = LogicTaskV2.decode_task_id(task_id)
+                    task_name = f"logic-v2:{task_type}"
+                except:
+                    task_type = "unknown"
+                    seed = task_id
+                    task_name = "logic-v2:unknown"
+
+                # Return 0 score with same format as success, failure info in conversation
+                error_message = f"Task generation failed: {str(e)}"
+                conversation = [
+                    {"role": "system", "content": error_message},
+                    {"role": "assistant", "content": None}
+                ]
+
+                return {
+                    "task_name": task_name,
+                    "score": 0.0,
+                    "success": True,  # Hide failure from external view
+                    "time_taken": time.time() - start,
+                    "extra": {
+                        "conversation": conversation,
+                        "task_id": task_id,
+                        "task_type": task_type,
+                        "seed": seed,
+                        "task_metadata": {
+                            "generation_failed": True,
+                            "generation_error": str(e),
+                            "generation_traceback": traceback.format_exc()
+                        },
+                        "usage": None
+                    }
+                }
+            else:
+                # Other ValueErrors are unexpected, let them propagate
+                raise
+
+        # Call LLM using task_id as seed
+        try:
+            resp = await self._llm_chat_local(challenge.prompt, model, tokenizer, task_id)
+            error = None
+        except Exception as e:
+            import traceback
+            resp = None
+            error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+
+        # Evaluate
+        score = 0.0
+        if resp:
+            try:
+                score = await self.logic_task.evaluate(resp, challenge)
+            except Exception as e:
+                import traceback
+                error = f"Evaluation error: {type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+
+        conversation = [
+            {"role": "user", "content": challenge.prompt},
+            {"role": "assistant", "content": resp}
+        ]
+
+        task_type = challenge.extra.get("task_type")
+
+        result = {
+            "task_name": f"logic-v2:{task_type}",
+            "score": score,
+            "success": score > 0,
+            "time_taken": time.time() - start,
+            "extra": {
+                "conversation": conversation,
+                "task_id": task_id,
+                "task_type": task_type,
+                "seed": challenge.extra.get("seed"),
+                "task_metadata": challenge.extra.get("metadata", {})
+            }
+        }
+
+        # Add error info if present
+        if error:
+            result["error"] = error
+            result["error_type"] = "llm_failure"
+
+        # Force garbage collection to free memory immediately
+        gc.collect()
+
         return result

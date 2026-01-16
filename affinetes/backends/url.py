@@ -37,7 +37,6 @@ class URLBackend(AbstractBackend):
     def __init__(
         self,
         base_url: str,
-        timeout: int = 600,
         verify_ssl: bool = True,
         env_type_override: Optional[str] = None,
         **kwargs
@@ -47,13 +46,11 @@ class URLBackend(AbstractBackend):
         
         Args:
             base_url: Environment service base URL (e.g., "http://your-service.com:8080")
-            timeout: Request timeout in seconds (default: 600)
             verify_ssl: Verify SSL certificates for HTTPS connections (default: True)
             env_type_override: Force environment type (EnvType.FUNCTION_BASED or EnvType.HTTP_BASED)
             **kwargs: Additional configuration
         """
         self.base_url = base_url.rstrip('/')
-        self.timeout = timeout
         self.verify_ssl = verify_ssl
         self.config = kwargs
         self._env_type = env_type_override

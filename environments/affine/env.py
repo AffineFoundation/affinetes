@@ -8,6 +8,9 @@ import openai
 import sys
 import random
 
+import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
+
 # Add /app to path to import local modules
 if '/app' not in sys.path:
     sys.path.insert(0, '/app')
@@ -97,6 +100,23 @@ class Actor:
         # Return both content and usage information
         return content.strip(), usage
     
+    async def _llm_chat_local(self, prompt, model: AutoModelForCausalLM, tokenizer: AutoTokenizer, seed=None):
+        messages = [{"role": "user", "content": prompt}]
+        text = tokenizer.apply_chat_template(
+            messages,
+            tokenize=False,
+            add_generation_prompt=True,
+            enable_thinking=True
+        )
+        
+        inputs = tokenizer([text], return_tensors="pt").to(model.device)
+
+        with torch.inference_mode():
+            outputs = model.generate(**inputs, eos_token_id=tokenizer.eos_token_id, max_new_tokens=4096)
+
+        output_ids = outputs[0][len(inputs.input_ids[0]):].tolist() 
+        return tokenizer.decode(output_ids, skip_special_tokens=True)
+    
     async def evaluate(
         self,
         task_type="sat",
@@ -174,6 +194,85 @@ class Actor:
                 "conversation": conversation,
                 "seed": seed,
                 "usage": usage
+            }
+        }
+        
+        # Add error info if present
+        if error:
+            result["error"] = error
+            result["error_type"] = "llm_failure"
+
+        # Force garbage collection to free memory immediately
+        del task_instance
+        gc.collect()
+
+        return result
+    
+    async def local_evaluate(
+        self,
+        model: AutoModelForCausalLM,
+        tokenizer: AutoTokenizer,
+        task_type="sat",
+        task_id: int = None,
+        seed: int = None
+    ):
+        """
+        Run evaluation on a single task
+        
+        Args:
+            task_type: Type of task to evaluate (sat, abd, ded)
+            model: Model to use for evaluation
+            task_id: Optional task ID for deterministic task selection.
+                     - For SAT: used as seed for deterministic generation
+                     - For ABD/DED: used as index into R2 dataset
+                     If not provided, tasks are randomly generated/sampled.
+        """
+        # Generate random seed if not provided
+        if seed is None:
+            seed = random.randint(0, 2**32 - 1)
+
+        # Get task class from registry
+        task_cls = self.TASKS.get(task_type)
+        if not task_cls:
+            raise ValueError(f"Unknown task: {task_type}. Available: {list(self.TASKS.keys())}")
+        
+        # Initialize task instance, passing global dataset if task supports it
+        if task_type in ("abd", "ded"):
+            task_instance = task_cls(dataset=_global_dataset)
+        else:
+            task_instance = task_cls()
+        
+        start = time.time()
+        
+        challenge = await task_instance.generate(task_id=task_id)
+        
+        # Call LLM
+        try:
+            resp = await self._llm_chat_local(challenge.prompt, model, tokenizer, seed)
+            error = None
+        except Exception as e:
+            import traceback
+            resp = None
+            error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+        
+        # Evaluate (unified async interface)
+        score = 0.0
+        if resp:
+            score = await task_instance.evaluate(resp, challenge)
+
+        conversation = [
+            {"role": "user", "content": challenge.prompt},
+            {"role": "assistant", "content": resp}
+        ]
+
+        result = {
+            "task_name": f"affine:{task_type}",
+            "score": score,
+            "success": score > 0,
+            "time_taken": time.time() - start,
+            "extra": {
+                "conversation": conversation,
+                "seed": seed
             }
         }
         
