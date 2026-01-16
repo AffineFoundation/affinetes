@@ -60,12 +60,26 @@ class OpenEnvSession:
         if self._stopped:
             return None
         self._stopped = True
-        if hasattr(self._env, "stop"):
+        # If environment wrapper is already cleaned up, silently skip.
+        try:
+            if hasattr(self._env, "is_ready") and callable(getattr(self._env, "is_ready")):
+                if not self._env.is_ready():
+                    return None
+        except Exception:
+            # If readiness check itself fails (e.g., during shutdown), skip.
+            return None
+
+        # Try stop() first (preferred)
+        try:
             return await self._env.stop(request={"episode_id": self.episode_id})
-        # fallback (older envs)
-        if hasattr(self._env, "close"):
+        except Exception:
+            pass
+
+        # Fallback for older envs
+        try:
             return await self._env.close()
-        return None
+        except Exception:
+            return None
 
     async def step(
         self,
@@ -104,7 +118,12 @@ class OpenEnvSession:
         try:
             loop = asyncio.get_event_loop()
             if loop.is_running():
-                loop.create_task(self.stop())
+                async def _safe_stop():
+                    try:
+                        await self.stop()
+                    except Exception:
+                        return
+                loop.create_task(_safe_stop())
         except Exception:
             # During interpreter shutdown or if no loop exists, skip silently.
             pass
