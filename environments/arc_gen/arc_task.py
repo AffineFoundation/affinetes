@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from models import Challenge
 
-from arc_gen import task_list
+from agent.arc_agi_generator import ARC2Generator
 
 _PROMPT_HEADER = """You are given ARC-style tasks.
 Each grid is a matrix of integers 0-9 representing colors.
@@ -25,31 +25,7 @@ class ArcGenTask:
     def __init__(self, num_train: int = 3, num_test: int = 1) -> None:
         self.num_train = num_train
         self.num_test = num_test
-        self._tasks = task_list.task_list()
-        self._task_nums = sorted(self._tasks.keys())
-
-    def _select_task_num(self, task_id: Optional[int], rng: random.Random) -> int:
-        if task_id is None:
-            return rng.choice(self._task_nums)
-        idx = (int(task_id) - 1) % len(self._task_nums)
-        return self._task_nums[idx]
-
-    @staticmethod
-    def _example_seed(seed: int, task_num: int, example_idx: int) -> int:
-        return (seed + (task_num * 1000) + example_idx) % (2**32)
-
-    def _generate_examples(self, generator, seed: int, task_num: int, count: int) -> List[Dict[str, Any]]:
-        if count <= 0:
-            return []
-        state = random.getstate()
-        examples: List[Dict[str, Any]] = []
-        try:
-            for idx in range(count):
-                random.seed(self._example_seed(seed, task_num, idx))
-                examples.append(generator())
-        finally:
-            random.setstate(state)
-        return examples
+        self.generator = ARC2Generator()
 
     @staticmethod
     def _format_grid(grid: List[List[int]]) -> str:
@@ -73,11 +49,9 @@ class ArcGenTask:
         task_id: Optional[int] = None,
         num_train: Optional[int] = None,
         num_test: Optional[int] = None,
+        seed:Optional[int] = None,
     ) -> Challenge:
-        if task_id is not None:
-            generation_seed = int(task_id)
-        else:
-            generation_seed = random.randint(0, 2**32 - 1)
+        
         if num_train is None:
             num_train = self.num_train
         if num_test is None:
@@ -85,26 +59,22 @@ class ArcGenTask:
         if num_test < 1:
             raise ValueError("num_test must be >= 1")
 
-        rng = random.Random(generation_seed)
-        task_num = self._select_task_num(task_id, rng)
-        task_uid, generator, _ = self._tasks[task_num]
+        generation_result = self.generator.generate_problem_set(task_id = task_id , seed = seed)
+        train_examples = generation_result["train_examples"]
+        test_input = generation_result["test_input"]
+        test_output = generation_result["test_output"]
 
-        examples = self._generate_examples(generator, generation_seed, task_num, num_train + num_test)
-        train_examples = examples[:num_train]
-        test_examples = examples[num_train:num_train + num_test]
-        test_example = test_examples[0]
-
-        prompt = self._build_prompt(train_examples, test_example["input"])
+        prompt = self._build_prompt(train_examples, test_input)
 
         return Challenge(
             env="affine:arc-gen",
             prompt=prompt,
             extra={
-                "task_num": task_num,
-                "task_uid": task_uid,
                 "task_id": task_id,
-                "generation_seed": generation_seed,
-                "expected_output": test_example["output"],
+                "seed": seed,
+                "expected_output": test_output,
+                "test_input" : test_input,
+                "train_examples" : train_examples
             },
         )
 

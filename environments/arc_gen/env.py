@@ -94,16 +94,13 @@ class Actor:
         """Run evaluation on a single ARC-GEN task."""
         # Use task_id as seed for deterministic generation if seed not provided
         if seed is None:
-            if task_id is not None:
-                seed = task_id
-            else:
-                seed = random.randint(0, 2**32 - 1)
+            seed = random.randint(0, 99_999_999)
 
         current_api_key = api_key or self.api_key
 
         start = time.time()
 
-        challenge = await self.arc_task.generate(task_id=task_id, num_train=num_train)
+        challenge = await self.arc_task.generate(task_id=task_id, num_train=num_train , seed = seed)
 
         usage = None
         try:
@@ -142,8 +139,6 @@ class Actor:
                 "conversation": conversation,
                 "seed": seed,
                 "task_id": task_id,
-                "task_num": challenge.extra.get("task_num"),
-                "task_uid": challenge.extra.get("task_uid"),
                 "cell_accuracy": cell_accuracy,
                 "expected_output": challenge.extra.get("expected_output"),
                 "usage": usage,
