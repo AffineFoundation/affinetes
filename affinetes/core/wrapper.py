@@ -61,6 +61,11 @@ class EnvironmentWrapper:
             logger.debug(f"Environment '{self.name}' cleaned up")
         except Exception as e:
             logger.error(f"Error during cleanup of '{self.name}': {e}")
+
+    def openenv(self):
+        """Return an OpenEnv client wrapper (2A) to hide episode_id plumbing."""
+        from .openenv_client import OpenEnvClient
+        return OpenEnvClient(self)
     
     async def list_methods(self, print_info: bool = True) -> list:
         """

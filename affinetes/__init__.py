@@ -20,19 +20,22 @@ Basic Usage:
 """
 
 from .__version__ import __version__
-from .api import (
-    build_image_from_env,
-    load_env,
-    list_active_environments,
-    cleanup_all_environments,
-    get_environment,
-)
 
-__all__ = [
-    "__version__",
+
+_LAZY_EXPORTS = {
     "build_image_from_env",
     "load_env",
     "list_active_environments",
     "cleanup_all_environments",
     "get_environment",
-]
+}
+
+
+def __getattr__(name: str):
+    if name in _LAZY_EXPORTS:
+        from . import api as _api
+        return getattr(_api, name)
+    raise AttributeError(f"module 'affinetes' has no attribute {name!r}")
+
+
+__all__ = ["__version__", *_LAZY_EXPORTS]
