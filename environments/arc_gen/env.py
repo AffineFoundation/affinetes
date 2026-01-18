@@ -100,7 +100,7 @@ class Actor:
 
         start = time.time()
 
-        challenge = await self.arc_task.generate(task_id=task_id, num_train=num_train , seed = seed)
+        challenge = await self.arc_task.generate(task_id=task_id, num_train=num_train)
 
         usage = None
         try:

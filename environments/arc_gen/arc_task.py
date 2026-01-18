@@ -49,7 +49,6 @@ class ArcGenTask:
         task_id: Optional[int] = None,
         num_train: Optional[int] = None,
         num_test: Optional[int] = None,
-        seed:Optional[int] = None,
     ) -> Challenge:
         
         if num_train is None:
@@ -59,7 +58,7 @@ class ArcGenTask:
         if num_test < 1:
             raise ValueError("num_test must be >= 1")
 
-        generation_result = self.generator.generate_problem_set(task_id = task_id , seed = seed)
+        generation_result = self.generator.generate_problem_set(task_id = task_id)
         train_examples = generation_result["train_examples"]
         test_input = generation_result["test_input"]
         test_output = generation_result["test_output"]
@@ -71,7 +70,6 @@ class ArcGenTask:
             prompt=prompt,
             extra={
                 "task_id": task_id,
-                "seed": seed,
                 "expected_output": test_output,
                 "test_input" : test_input,
                 "train_examples" : train_examples

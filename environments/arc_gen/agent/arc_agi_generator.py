@@ -26,6 +26,7 @@ class ARC2Generator:
         self,
         max_chain_length: int = 4,
         max_grid_size: int = 30,
+        task_range: int=10
     ):
         self.max_chain_length = max_chain_length
         self.max_grid_size = max_grid_size
@@ -34,6 +35,7 @@ class ARC2Generator:
         self.min_distinct_colors = 2
         self.min_non_black_cells = 6
         self.max_resample_attempts = 4
+        self.task_range = 100_000_000
     def generate_initial_problem(
         self,
         task_num: Optional[int] = None,
@@ -207,7 +209,6 @@ class ARC2Generator:
         task_id: Optional[int] = 0,
         num_train: int = 3,
         chain_length: Optional[int] = None,
-        seed : int = None
     ) -> Dict[str, Any]:
         """
         Generate train/test examples with the same transformation chain.
@@ -227,11 +228,12 @@ class ARC2Generator:
               }
             }
         """
-        
+        task_num = task_id // self.task_range
+        seed = task_id % self.task_range
         
         rng = random.Random(seed)
-        base_initial = self.generate_initial_problem(task_id, rng)
-        task_id = base_initial["task_num"]
+        base_initial = self.generate_initial_problem(task_num, rng)
+        task_num = base_initial["task_num"]
         
         # Generate transformation chain (empty if chain_length is 0)
         if chain_length == 0:
@@ -251,7 +253,7 @@ class ARC2Generator:
         while len(train_examples) < num_train and attempts < max_attempts:
             attempts += 1
             try:
-                base = self.generate_initial_problem(task_num=task_id, rng = rng)
+                base = self.generate_initial_problem(task_num=task_num, rng = rng)
         
                 if chain:
                     output = self.apply_transformation_chain(base["output"], chain)
@@ -269,7 +271,7 @@ class ARC2Generator:
         if len(train_examples) != num_train:
             raise ValueError(f"Fail to generate")
         # Generate test example
-        test_base = self.generate_initial_problem(task_id, rng)
+        test_base = self.generate_initial_problem(task_num, rng)
         if chain:
             test_output = self.apply_transformation_chain(test_base["output"], chain)
         else:
@@ -281,7 +283,6 @@ class ARC2Generator:
             "test_output": test_output,
             "metadata": {
                 "task_id": task_id,
-                "seed" : seed,
                 "transformation_chain": chain,
                 "chain_length": len(chain),
             }
