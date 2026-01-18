@@ -244,6 +244,12 @@ RULES:
 - If the specified bug types don't fit this code, use your judgment to inject a different realistic bug type
 - The bug MUST cause at least one test to fail - otherwise it's not a valid bug
 
+STRATEGY FOR EFFECTIVE BUGS:
+1. Analyze what the gold_patch fixes - inject bugs in the SAME code path
+2. Focus on return values, conditionals, and error handling - these affect test outcomes
+3. Avoid cosmetic changes (comments, variable names) - they don't break tests
+4. Prefer bugs in core logic that gets exercised by multiple code paths
+
 OUTPUT: Return ONLY a JSON object (no markdown, no extra text):
 {{"bug_patch": "diff --git a/path/to/file.js b/path/to/file.js\\nindex abc..def 100644\\n--- a/path/to/file.js\\n+++ b/path/to/file.js\\n@@ -10,3 +10,3 @@\\n-    correct code\\n+    buggy code", "problem_statement": "User-facing bug description", "bug_description": "Technical description of the bug"}}
 
@@ -303,11 +309,23 @@ async def generate_bug(
     # All tests pass after gold_patch
     all_passing_tests = list(set(fail_to_pass) | set(pass_to_pass))
 
-    # Randomly select target tests to guide bug generation
+    # Mixed selection: prioritize fail_to_pass (2x weight) but include pass_to_pass for diversity
     import random
     rng = random.Random(seed)
-    num_target_tests = min(5, len(all_passing_tests))
-    target_tests = rng.sample(all_passing_tests, num_target_tests) if all_passing_tests else []
+
+    # Build weighted pool: fail_to_pass tests appear twice (2x weight)
+    weighted_pool = list(fail_to_pass) * 2 + list(pass_to_pass)
+    rng.shuffle(weighted_pool)
+
+    # Select unique tests from shuffled weighted pool
+    target_tests = []
+    seen = set()
+    for t in weighted_pool:
+        if t not in seen:
+            target_tests.append(t)
+            seen.add(t)
+        if len(target_tests) >= 5:
+            break
 
     # Build prompt with target tests
     prompt = build_breaker_prompt(
