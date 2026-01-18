@@ -744,18 +744,21 @@ fi
             # Get Docker image and run
             image = get_dockerhub_image_uri(instance_id, self.dockerhub_username, repo)
 
+            print(f"Pulling image for verify_fix: {image}")
             subprocess.run(
                 ["docker", "pull", image],
-                check=False, capture_output=True, timeout=300
+                check=False, capture_output=True, timeout=DOCKER_PULL_TIMEOUT
             )
 
+            print(f"Running verification container (timeout={VERIFY_FIX_TIMEOUT}s)...")
             result = subprocess.run(
                 ["docker", "run", "--rm", "-i", "--entrypoint", "/bin/bash", image],
                 input=full_script,
                 capture_output=True,
-                timeout=1800,
+                timeout=VERIFY_FIX_TIMEOUT,
                 text=True
             )
+            print("Verification container completed.")
 
             stdout = result.stdout
 
