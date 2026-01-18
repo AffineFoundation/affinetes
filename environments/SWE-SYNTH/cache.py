@@ -203,8 +203,7 @@ class R2Cache(CacheBackend):
         """
         Try to acquire distributed lock for task_id.
 
-        Returns True if lock acquired.
-        Raises CacheLockError if unable to acquire after retries.
+        Returns True if lock acquired, False if unable to acquire after retries.
         """
         for attempt in range(max_retries):
             # Check if data already exists (no need to lock)
@@ -246,9 +245,7 @@ class R2Cache(CacheBackend):
         if self.exists(task_id):
             return True
 
-        raise CacheLockError(
-            f"Failed to acquire lock for task {task_id} after {max_retries} retries"
-        )
+        return False
 
     def release_lock(self, task_id: int) -> None:
         """Release distributed lock for task_id"""
