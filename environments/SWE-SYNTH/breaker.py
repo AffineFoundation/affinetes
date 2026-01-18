@@ -336,23 +336,32 @@ async def generate_bug(
     # Clean control characters that break JSON parsing
     def clean_json_string(s):
         # Remove control characters except \n, \r, \t
-        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', s)
+        s = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', s)
+        # Also escape unescaped control chars within string values
+        # Replace literal newlines/tabs in string values with escaped versions
+        def escape_in_strings(match):
+            val = match.group(0)
+            val = val.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            return val
+        # Match JSON string values and escape control chars within them
+        s = re.sub(r'"(?:[^"\\]|\\.)*"', escape_in_strings, s)
+        return s
 
-    # Parse JSON from response
+    # Parse JSON from response (strict=False allows control chars in strings)
     json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
     if json_match:
         json_str = clean_json_string(json_match.group(1))
-        bug_data = json.loads(json_str)
+        bug_data = json.loads(json_str, strict=False)
     else:
         # Try to find JSON object with bug_patch
         json_match = re.search(r'\{[^{}]*"bug_patch"[^{}]*\}', content, re.DOTALL)
         if json_match:
             json_str = clean_json_string(json_match.group(0))
-            bug_data = json.loads(json_str)
+            bug_data = json.loads(json_str, strict=False)
         else:
             # Try parsing entire content as JSON
             json_str = clean_json_string(content)
-            bug_data = json.loads(json_str)
+            bug_data = json.loads(json_str, strict=False)
 
     # Validate required fields
     if not bug_data.get("bug_patch"):
