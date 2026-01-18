@@ -30,6 +30,26 @@ from minisweagent.environments.docker import DockerEnvironment
 from minisweagent.models.litellm_model import LitellmModel
 
 
+# Timeout constants (in seconds)
+DOCKER_PULL_TIMEOUT = 300
+GENERATE_BUG_TIMEOUT = 300
+VERIFY_BUG_TIMEOUT = 300
+FIXER_TIMEOUT = 1800
+VERIFY_FIX_TIMEOUT = 1800
+
+# Bug generation: (generate + verify) * max_retries
+BUG_GENERATION_MAX_RETRIES = 10
+BUG_GENERATION_TIMEOUT = (GENERATE_BUG_TIMEOUT + VERIFY_BUG_TIMEOUT) * BUG_GENERATION_MAX_RETRIES  # 6000s
+
+# Total timeout = bug generation + fix + verify fix + buffer
+TOTAL_TIMEOUT = (
+    BUG_GENERATION_TIMEOUT +                     # generate bug (worst case)
+    FIXER_TIMEOUT +                              # fix bug
+    DOCKER_PULL_TIMEOUT + VERIFY_FIX_TIMEOUT +   # verify fix
+    10                                           # buffer
+)
+
+
 def get_dockerhub_image_uri(uid: str, dockerhub_username: str, repo_name: str) -> str:
     """Generate Docker Hub image URI matching SWE-bench naming scheme."""
     repo_base, repo_name_only = repo_name.lower().split("/")
@@ -122,19 +142,26 @@ class SynthActor:
         """
         Decode task_id into deterministic parameters.
 
-        Encoding: task_id maps to (swe_instance, bug_type, seed)
+        Encoding: task_id maps to (swe_instance, bug_types, seed)
         - swe_idx = task_id % num_swe_instances
-        - bug_type_idx = (task_id // num_swe_instances) % num_bug_types
-        - seed = task_id (used for generation randomness)
+        - seed = task_id
+        - bug_types = randomly selected 1-3 types using seed
         """
+        import random
+
         swe_idx = task_id % self.num_swe_instances
-        bug_type_idx = (task_id // self.num_swe_instances) % self.num_bug_types
+        seed = task_id
+
+        # Use seed to randomly select 1-3 bug types
+        rng = random.Random(seed)
+        num_types = rng.randint(1, 3)
+        bug_types = rng.sample(BUG_TYPES, num_types)
 
         return {
             "swe_instance_idx": swe_idx,
             "swe_instance": self.swe_instances[swe_idx],
-            "bug_type": BUG_TYPES[bug_type_idx],
-            "seed": task_id,
+            "bug_types": bug_types,
+            "seed": seed,
         }
 
 
@@ -381,7 +408,7 @@ fi
                 ["docker", "run", "--rm", "-i", "--entrypoint", "/bin/bash", image],
                 input=full_script,
                 capture_output=True,
-                timeout=600,
+                timeout=300,
                 text=True
             )
 
@@ -463,6 +490,7 @@ fi
         max_iterations: int,
         cost_limit: float,
         temperature: float,
+        seed: Optional[int] = None,
     ) -> tuple[Optional[str], Dict[str, Any], list]:
         """
         Use Fixer model to repair the bug.
@@ -490,6 +518,8 @@ fi
                 "api_key": fixer_api_key,
                 "temperature": temperature,
             }
+            if seed is not None:
+                model_kwargs["seed"] = seed
 
             model_obj = LitellmModel(
                 model_name=litellm_model_name,
@@ -786,14 +816,12 @@ fi
     async def evaluate(
         self,
         task_id: int,
-        fixer_model: str = "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE",
-        breaker_model: str = "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE",
-        fixer_base_url: str = "https://llm.chutes.ai/v1",
-        breaker_base_url: str = "https://llm.chutes.ai/v1",
-        fixer_api_key: Optional[str] = None,
-        breaker_api_key: Optional[str] = None,
+        model: str = "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE",
+        base_url: str = "https://llm.chutes.ai/v1",
+        api_key: Optional[str] = None,
         timeout: int = 1800,
         temperature: float = 0.0,
+        seed: Optional[int] = None,
         max_iterations: int = 30,
         cost_limit: float = 10.0,
         skip_cache: bool = False,
@@ -803,15 +831,13 @@ fi
         Complete evaluation: generate bug (if needed) + fix it.
 
         Args:
-            task_id: Deterministically maps to (swe_instance, bug_type, seed)
-            fixer_model: Model for fixing bugs
-            breaker_model: Model for generating bugs
-            fixer_base_url: API base URL for fixer
-            breaker_base_url: API base URL for breaker
-            fixer_api_key: API key for fixer (uses env var if not provided)
-            breaker_api_key: API key for breaker (uses env var if not provided)
+            task_id: Deterministically maps to (swe_instance, bug_types, seed)
+            model: Model for fixing bugs
+            base_url: API base URL
+            api_key: API key (uses env var CHUTES_API_KEY if not provided)
             timeout: Timeout for commands
             temperature: Model temperature for fixer
+            seed: Random seed for LLM inference
             max_iterations: Max agent steps for fixer
             cost_limit: Max cost for fixer
             skip_cache: Force regenerate bug even if cached
@@ -821,17 +847,24 @@ fi
         """
         start = time.time()
 
-        fixer_api_key = fixer_api_key or self.api_key
-        breaker_api_key = breaker_api_key or self.api_key
+        # Use provided api_key or fall back to instance api_key
+        chutes_api_key = api_key or self.api_key
+        if not chutes_api_key:
+            raise ValueError("api_key required (pass to evaluate() or set CHUTES_API_KEY env var)")
 
-        if not fixer_api_key:
-            raise ValueError("fixer_api_key required (pass api_key to __init__ or set CHUTES_API_KEY)")
-        if not breaker_api_key:
-            raise ValueError("breaker_api_key required (pass api_key to __init__ or set CHUTES_API_KEY)")
+        # Fixer uses user-provided model
+        fixer_model = model
+        fixer_base_url = base_url
+        fixer_api_key = chutes_api_key
+
+        # Breaker model is fixed (not user-configurable)
+        breaker_model = "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE"
+        breaker_base_url = "https://llm.chutes.ai/v1"
+        breaker_api_key = chutes_api_key
 
         # Decode task_id
         params = self._decode_task_id(task_id)
-        print(f"Task {task_id} -> SWE instance {params['swe_instance_idx']}, bug type: {params['bug_type']}")
+        print(f"Task {task_id} -> SWE instance {params['swe_instance_idx']}, bug types: {params['bug_types']}")
 
         # Check cache (L1: local, L2: R2)
         bug_from_cache = False
@@ -867,17 +900,16 @@ fi
                         max_files=5,
                     )
 
-                    # Generate and verify bug (retry up to 10 times)
-                    max_verify_retries = 10
+                    # Generate and verify bug (retry up to max times)
                     bug_verified = False
                     last_verification = None
 
-                    for verify_attempt in range(max_verify_retries):
+                    for verify_attempt in range(BUG_GENERATION_MAX_RETRIES):
                         # Generate bug using breaker module
-                        print(f"Generating bug with {breaker_model} (verify attempt {verify_attempt + 1}/{max_verify_retries})...")
+                        print(f"Generating bug with {breaker_model} (verify attempt {verify_attempt + 1}/{BUG_GENERATION_MAX_RETRIES})...")
                         bug_instance = await generate_bug(
                             swe_instance=params["swe_instance"],
-                            bug_type=params["bug_type"],
+                            bug_types=params["bug_types"],
                             seed=params["seed"] + verify_attempt * 100,  # Vary seed on retry
                             breaker_model=breaker_model,
                             breaker_base_url=breaker_base_url,
@@ -904,13 +936,13 @@ fi
                         else:
                             # Verification failed
                             print(f"Bug verification failed: {verification}")
-                            if verify_attempt < max_verify_retries - 1:
+                            if verify_attempt < BUG_GENERATION_MAX_RETRIES - 1:
                                 print(f"Retrying bug generation...")
 
                     # All retries failed - raise error
                     if not bug_verified:
                         raise RuntimeError(
-                            f"Failed to generate valid bug after {max_verify_retries} attempts. "
+                            f"Failed to generate valid bug after {BUG_GENERATION_MAX_RETRIES} attempts. "
                             f"Last verification: {last_verification}"
                         )
 
@@ -938,6 +970,7 @@ fi
             max_iterations,
             cost_limit,
             temperature,
+            seed,
         )
 
         # Verify fix
@@ -951,9 +984,9 @@ fi
             "time_taken": time.time() - start,
             "extra": {
                 "task_id": task_id,
-                "bug_id": f"{bug_instance['source']['swe_instance_id']}/{params['bug_type']}_{params['seed']}",
+                "bug_id": f"{bug_instance['source']['swe_instance_id']}/{'+'.join(params['bug_types'])}_{params['seed']}",
                 "bug_from_cache": bug_from_cache,
-                "bug_type": params["bug_type"],
+                "bug_types": params["bug_types"],
                 "swe_instance_id": bug_instance["source"]["swe_instance_id"],
                 "problem_statement": bug_instance["bug"]["problem_statement"],
                 "fix_patch": fix_patch,

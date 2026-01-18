@@ -26,6 +26,11 @@ BUG_TYPES = [
     "wrong-operator",       # Arithmetic operator errors (+, -, *, /)
     "missing-return",       # Missing return statement
     "exception-swallow",    # Swallowing exceptions incorrectly
+    "wrong-constant",       # Wrong constant/magic number
+    "string-format",        # String formatting errors
+    "order-dependency",     # Wrong order of operations
+    "early-exit",           # Premature return/break/continue
+    "wrong-default",        # Wrong default value
 ]
 
 
@@ -92,6 +97,46 @@ BUG_TYPE_DESCRIPTIONS = {
             "except Exception as e: log(e) → except: pass",
         ]
     },
+    "wrong-constant": {
+        "description": "Using wrong constant or magic number",
+        "examples": [
+            "timeout = 1000 → timeout = 100",
+            "MAX_RETRIES = 3 → MAX_RETRIES = 0",
+            "BUFFER_SIZE = 4096 → BUFFER_SIZE = 40",
+        ]
+    },
+    "string-format": {
+        "description": "String formatting or interpolation errors",
+        "examples": [
+            'f"{name}" → f"{names}"',
+            '"{} {}".format(a, b) → "{} {}".format(b, a)',
+            'f"Error: {msg}" → f"Error: {err}"',
+        ]
+    },
+    "order-dependency": {
+        "description": "Wrong order of operations or statements",
+        "examples": [
+            "validate(); process() → process(); validate()",
+            "lock(); access() → access(); lock()",
+            "init(); use() → use(); init()",
+        ]
+    },
+    "early-exit": {
+        "description": "Premature return, break, or continue",
+        "examples": [
+            "if error: log(); return → if error: return",
+            "for item in items: process(item) → for item in items: break",
+            "while condition: work(); check() → while condition: return",
+        ]
+    },
+    "wrong-default": {
+        "description": "Using wrong default value for parameters or variables",
+        "examples": [
+            "def f(x=None): → def f(x=0):",
+            "count = 0 → count = 1",
+            "enabled = True → enabled = False",
+        ]
+    },
 }
 
 
@@ -129,17 +174,26 @@ def select_target_tests(
 
 def build_breaker_prompt(
     repo: str,
-    bug_type: str,
+    bug_types: List[str],
     gold_patch: str,
     problem_statement_original: str,
     repo_files: List[dict] = None,
+    target_tests: List[str] = None,
 ) -> str:
     """Build the prompt for Breaker model."""
 
-    bug_info = BUG_TYPE_DESCRIPTIONS.get(bug_type, {})
-    bug_description = bug_info.get("description", bug_type)
-    bug_examples = bug_info.get("examples", [])
-    examples_str = "\n".join(f"  - {ex}" for ex in bug_examples)
+    # Build description for all bug types
+    bug_descriptions = []
+    all_examples = []
+    for bug_type in bug_types:
+        bug_info = BUG_TYPE_DESCRIPTIONS.get(bug_type, {})
+        desc = bug_info.get("description", bug_type)
+        bug_descriptions.append(f"- {bug_type}: {desc}")
+        all_examples.extend(bug_info.get("examples", []))
+
+    bug_types_str = ", ".join(bug_types)
+    descriptions_str = "\n".join(bug_descriptions)
+    examples_str = "\n".join(f"  - {ex}" for ex in all_examples[:6])  # Limit examples
 
     # Build source files section
     files_section = ""
@@ -148,16 +202,29 @@ def build_breaker_prompt(
         for f in repo_files:
             files_section += f"\n--- {f['path']} ---\n```\n{f['content'][:2000]}\n```\n"
 
-    return f"""You are a code mutation expert. Inject a realistic "{bug_type}" bug into the codebase.
+    # Build target tests section
+    tests_section = ""
+    if target_tests:
+        tests_str = "\n".join(f"  - {t}" for t in target_tests[:5])
+        tests_section = f"""
+
+TARGET TESTS (your bug should cause at least one of these to fail):
+{tests_str}
+
+IMPORTANT: Design your bug to break the functionality tested by these tests. Analyze what these tests check and introduce a bug that will cause them to fail."""
+
+    return f"""You are a code mutation expert. Inject a realistic bug combining these types: {bug_types_str}.
 
 CONTEXT:
 - Repository: {repo}
-- Code is CORRECT (all tests pass). Your job is to introduce a bug.
+- Code is CORRECT (all tests pass). Your job is to introduce a bug that will cause tests to fail.
 
-BUG TYPE: {bug_type}
-{bug_description}
-Examples: {examples_str}
-{files_section}
+BUG TYPES TO COMBINE:
+{descriptions_str}
+
+Examples:
+{examples_str}
+{files_section}{tests_section}
 REFERENCE PATCH (shows what was recently fixed - you can inject bug here or in the source files above):
 ```diff
 {gold_patch}
@@ -165,7 +232,7 @@ REFERENCE PATCH (shows what was recently fixed - you can inject bug here or in t
 
 INSTRUCTIONS:
 1. Choose a location to inject the bug (either in the gold_patch area OR in one of the source files)
-2. Create a bug_patch in unified diff format that introduces a {bug_type} bug
+2. Create a bug_patch in unified diff format that introduces a bug combining: {bug_types_str}
 3. Write a problem_statement describing symptoms (like a user bug report)
 
 RULES:
@@ -174,6 +241,8 @@ RULES:
 - NO syntax errors, NO deleting large code blocks
 - problem_statement describes SYMPTOMS users would see, not the bug itself
 - The file path in your diff must match the actual file path
+- If the specified bug types don't fit this code, use your judgment to inject a different realistic bug type
+- The bug MUST cause at least one test to fail - otherwise it's not a valid bug
 
 OUTPUT: Return ONLY a JSON object (no markdown, no extra text):
 {{"bug_patch": "diff --git a/path/to/file.js b/path/to/file.js\\nindex abc..def 100644\\n--- a/path/to/file.js\\n+++ b/path/to/file.js\\n@@ -10,3 +10,3 @@\\n-    correct code\\n+    buggy code", "problem_statement": "User-facing bug description", "bug_description": "Technical description of the bug"}}
@@ -182,13 +251,12 @@ Generate the JSON now:"""
 
 async def generate_bug(
     swe_instance: Dict[str, Any],
-    bug_type: str,
+    bug_types: List[str],
     seed: int,
     breaker_model: str,
     breaker_base_url: str,
     breaker_api_key: str,
     temperature: float = 0.7,
-    max_retries: int = 3,
     repo_files: List[dict] = None,
 ) -> Dict[str, Any]:
     """
@@ -196,13 +264,12 @@ async def generate_bug(
 
     Args:
         swe_instance: SWE-bench instance data
-        bug_type: Type of bug to inject
+        bug_types: List of bug types to inject (1-3 types)
         seed: Random seed for generation
         breaker_model: Model name for bug generation
         breaker_base_url: API base URL
         breaker_api_key: API key
         temperature: Sampling temperature
-        max_retries: Maximum retry attempts for LLM call (default 3)
         repo_files: List of source files for bug injection
 
     Returns:
@@ -236,95 +303,88 @@ async def generate_bug(
     # All tests pass after gold_patch
     all_passing_tests = list(set(fail_to_pass) | set(pass_to_pass))
 
-    # Build prompt (no target_tests - we'll discover them through verification)
+    # Randomly select target tests to guide bug generation
+    import random
+    rng = random.Random(seed)
+    num_target_tests = min(5, len(all_passing_tests))
+    target_tests = rng.sample(all_passing_tests, num_target_tests) if all_passing_tests else []
+
+    # Build prompt with target tests
     prompt = build_breaker_prompt(
         repo=repo,
-        bug_type=bug_type,
+        bug_types=bug_types,
         gold_patch=gold_patch,
         problem_statement_original=problem_statement_original,
         repo_files=repo_files,
+        target_tests=target_tests,
     )
 
-    # Retry loop for LLM call
     import re
-    last_error = None
-    retry_errors = []
 
-    for attempt in range(max_retries):
-        try:
-            print(f"Attempt {attempt + 1}/{max_retries} generating bug...")
-            response = await acompletion(
-                model=f"openai/{breaker_model}" if not breaker_model.startswith("openai/") else breaker_model,
-                messages=[{"role": "user", "content": prompt}],
-                api_base=breaker_base_url,
-                api_key=breaker_api_key,
-                temperature=temperature,
-                seed=seed + attempt,  # Vary seed on retry
-            )
+    response = await acompletion(
+        model=f"openai/{breaker_model}" if not breaker_model.startswith("openai/") else breaker_model,
+        messages=[{"role": "user", "content": prompt}],
+        api_base=breaker_base_url,
+        api_key=breaker_api_key,
+        temperature=temperature,
+        seed=seed,
+        timeout=300,
+    )
 
-            content = response.choices[0].message.content
+    content = response.choices[0].message.content
 
-            # Parse JSON from response
-            json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
-            if json_match:
-                bug_data = json.loads(json_match.group(1))
-            else:
-                # Try to find JSON object with bug_patch
-                json_match = re.search(r'\{[^{}]*"bug_patch"[^{}]*\}', content, re.DOTALL)
-                if json_match:
-                    bug_data = json.loads(json_match.group(0))
-                else:
-                    # Try parsing entire content as JSON
-                    bug_data = json.loads(content)
+    # Clean control characters that break JSON parsing
+    def clean_json_string(s):
+        # Remove control characters except \n, \r, \t
+        return re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', s)
 
-            # Validate required fields
-            if not bug_data.get("bug_patch"):
-                raise ValueError("Missing bug_patch in response")
+    # Parse JSON from response
+    json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
+    if json_match:
+        json_str = clean_json_string(json_match.group(1))
+        bug_data = json.loads(json_str)
+    else:
+        # Try to find JSON object with bug_patch
+        json_match = re.search(r'\{[^{}]*"bug_patch"[^{}]*\}', content, re.DOTALL)
+        if json_match:
+            json_str = clean_json_string(json_match.group(0))
+            bug_data = json.loads(json_str)
+        else:
+            # Try parsing entire content as JSON
+            json_str = clean_json_string(content)
+            bug_data = json.loads(json_str)
 
-            bug_instance = {
-                "source": {
-                    "dataset": "SWE-bench_Pro",
-                    "swe_instance_id": instance_id,
-                    "base_commit": base_commit,
-                    "repo": repo,
-                },
-                "bug": {
-                    "bug_type": bug_type,
-                    "patch": bug_data.get("bug_patch", ""),
-                    "problem_statement": bug_data.get("problem_statement", ""),
-                    "description": bug_data.get("bug_description", ""),
-                    # target_tests will be discovered during verification
-                },
-                "generation": {
-                    "breaker_model": breaker_model,
-                    "seed": seed + attempt,
-                    "temperature": temperature,
-                    "attempt": attempt + 1,
-                    "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
-                },
-                "original": {
-                    "gold_patch": gold_patch,
-                    "problem_statement": problem_statement_original,
-                    "all_tests": all_passing_tests,
-                    "fail_to_pass": fail_to_pass,  # Tests that gold_patch fixes
-                },
-                "verification": {"verified": False},
-            }
+    # Validate required fields
+    if not bug_data.get("bug_patch"):
+        raise ValueError("Missing bug_patch in response")
 
-            print(f"Bug generated successfully on attempt {attempt + 1}")
-            return bug_instance
+    bug_instance = {
+        "source": {
+            "dataset": "SWE-bench_Pro",
+            "swe_instance_id": instance_id,
+            "base_commit": base_commit,
+            "repo": repo,
+        },
+        "bug": {
+            "bug_types": bug_types,
+            "patch": bug_data.get("bug_patch", ""),
+            "problem_statement": bug_data.get("problem_statement", ""),
+            "description": bug_data.get("bug_description", ""),
+            # target_tests will be discovered during verification
+        },
+        "generation": {
+            "breaker_model": breaker_model,
+            "seed": seed,
+            "temperature": temperature,
+            "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        },
+        "original": {
+            "gold_patch": gold_patch,
+            "problem_statement": problem_statement_original,
+            "all_tests": all_passing_tests,
+            "fail_to_pass": fail_to_pass,  # Tests that gold_patch fixes
+        },
+        "verification": {"verified": False},
+    }
 
-        except Exception as e:
-            import traceback
-            error_trace = traceback.format_exc()
-            last_error = str(e)
-            retry_errors.append({"attempt": attempt + 1, "error": last_error})
-            print(f"Attempt {attempt + 1} failed: {e}")
-
-            if attempt < max_retries - 1:
-                print(f"Retrying...")
-                continue
-
-    # All retries failed, raise exception
-    error_summary = "; ".join([f"Attempt {e['attempt']}: {e['error']}" for e in retry_errors])
-    raise RuntimeError(f"Failed to generate bug after {max_retries} attempts: {error_summary}")
+    return bug_instance
