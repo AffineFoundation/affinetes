@@ -319,7 +319,8 @@ class TraceTask:
         source = sample.get("program", "")
         inputs = sample.get("inputs", "")
         
-        seed = random.randint(0, 1000000)
+        # Use task_id as seed for deterministic print injection
+        seed = task_id if task_id is not None else random.randint(0, 1000000)
         transformed = inject_non_overfittable_prints(source, seed, max_injections=6)
         
         # Get ground truth
