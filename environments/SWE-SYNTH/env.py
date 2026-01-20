@@ -512,14 +512,31 @@ fi
             print(f"Fixing bug using image: {image}")
 
             # Initialize model
-            litellm_model_name = f"openai/{fixer_model}" if not fixer_model.startswith("openai/") else fixer_model
-            model_kwargs = {
-                "api_base": fixer_base_url,
-                "api_key": fixer_api_key,
-                "temperature": temperature,
-            }
+            # Support different providers: anthropic/, openai/, or default to openai/
+            if fixer_model.startswith(("openai/", "anthropic/", "azure/", "bedrock/")):
+                litellm_model_name = fixer_model
+            elif fixer_model.startswith("claude"):
+                # Claude models don't need provider prefix for litellm
+                litellm_model_name = fixer_model
+            else:
+                litellm_model_name = f"openai/{fixer_model}"
+
+            # Build model kwargs based on provider
+            model_kwargs = {"temperature": temperature}
             if seed is not None:
                 model_kwargs["seed"] = seed
+
+            # Set API credentials based on model type
+            is_anthropic = fixer_model.startswith("claude") or fixer_model.startswith("anthropic/")
+            if is_anthropic:
+                # For Anthropic models, set env var (litellm reads from ANTHROPIC_API_KEY)
+                import os
+                os.environ["ANTHROPIC_API_KEY"] = fixer_api_key
+            else:
+                # For other models, use api_base and api_key
+                if fixer_base_url:
+                    model_kwargs["api_base"] = fixer_base_url
+                model_kwargs["api_key"] = fixer_api_key
 
             model_obj = LitellmModel(
                 model_name=litellm_model_name,
@@ -828,6 +845,7 @@ fi
         max_iterations: int = 30,
         cost_limit: float = 10.0,
         skip_cache: bool = False,
+        chutes_api_key: Optional[str] = None,
         **kwargs
     ) -> Dict[str, Any]:
         """
@@ -837,13 +855,14 @@ fi
             task_id: Deterministically maps to (swe_instance, bug_types, seed)
             model: Model for fixing bugs
             base_url: API base URL
-            api_key: API key (uses env var CHUTES_API_KEY if not provided)
+            api_key: API key for fixer model (uses env var CHUTES_API_KEY if not provided)
             timeout: Timeout for commands
             temperature: Model temperature for fixer
             seed: Random seed for LLM inference
             max_iterations: Max agent steps for fixer
             cost_limit: Max cost for fixer
             skip_cache: Force regenerate bug even if cached
+            chutes_api_key: API key for breaker (Chutes). If not provided, uses api_key
 
         Returns:
             Result dict with score and metadata
@@ -851,19 +870,19 @@ fi
         start = time.time()
 
         # Use provided api_key or fall back to instance api_key
-        chutes_api_key = api_key or self.api_key
-        if not chutes_api_key:
+        fixer_api_key = api_key or self.api_key
+        if not fixer_api_key:
             raise ValueError("api_key required (pass to evaluate() or set CHUTES_API_KEY env var)")
 
         # Fixer uses user-provided model
         fixer_model = model
         fixer_base_url = base_url
-        fixer_api_key = chutes_api_key
 
         # Breaker model is fixed (not user-configurable)
+        # Priority: CHUTES_API_KEY env var > chutes_api_key param > fixer api_key
         breaker_model = "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE"
         breaker_base_url = "https://llm.chutes.ai/v1"
-        breaker_api_key = chutes_api_key
+        breaker_api_key = os.environ.get("CHUTES_API_KEY") or chutes_api_key or fixer_api_key
 
         # Decode task_id
         params = self._decode_task_id(task_id)

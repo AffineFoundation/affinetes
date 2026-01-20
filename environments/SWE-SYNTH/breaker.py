@@ -239,7 +239,6 @@ RULES:
 - Make subtle, realistic changes (what a tired developer might write)
 - Your bug_patch is applied AFTER the gold_patch
 - NO syntax errors, NO deleting large code blocks
-- problem_statement describes SYMPTOMS users would see, not the bug itself
 - The file path in your diff must match the actual file path
 - If the specified bug types don't fit this code, use your judgment to inject a different realistic bug type
 - The bug MUST cause at least one test to fail - otherwise it's not a valid bug
@@ -250,8 +249,21 @@ STRATEGY FOR EFFECTIVE BUGS:
 3. Avoid cosmetic changes (comments, variable names) - they don't break tests
 4. Prefer bugs in core logic that gets exercised by multiple code paths
 
+PROBLEM_STATEMENT GUIDELINES:
+Write a clear bug report that helps developers investigate, but does NOT directly reveal the fix:
+- Describe the FEATURE/FUNCTIONALITY affected (e.g., "email confirmation", "user search", "data export")
+- Describe WHAT GOES WRONG with specific details (e.g., "displays undefined instead of the expected value", "returns empty results", "throws TypeError")
+- Describe WHEN/HOW it happens (e.g., "when resending confirmation too quickly", "when searching with special characters")
+- Include observable symptoms like error messages, wrong output values, or unexpected behavior
+- Do NOT mention specific line numbers, variable names, or the exact code change needed
+
+GOOD example: "The email confirmation resend feature shows a malformed error message. When users try to resend too quickly, the rate-limit message displays 'undefined' or a raw variable path instead of showing the actual wait time in minutes. The error should show something like 'Please wait 10 minutes' but instead shows gibberish."
+
+BAD example (too vague): "Error message is confusing."
+BAD example (reveals answer): "Line 80 uses meta.config.emailConfirmInterval instead of emailInterval variable."
+
 OUTPUT: Return ONLY a JSON object (no markdown, no extra text):
-{{"bug_patch": "diff --git a/path/to/file.js b/path/to/file.js\\nindex abc..def 100644\\n--- a/path/to/file.js\\n+++ b/path/to/file.js\\n@@ -10,3 +10,3 @@\\n-    correct code\\n+    buggy code", "problem_statement": "User-facing bug description", "bug_description": "Technical description of the bug"}}
+{{"bug_patch": "diff --git a/path/to/file.js b/path/to/file.js\\nindex abc..def 100644\\n--- a/path/to/file.js\\n+++ b/path/to/file.js\\n@@ -10,3 +10,3 @@\\n-    correct code\\n+    buggy code", "problem_statement": "Clear bug report describing the feature, symptoms, and context", "bug_description": "Technical description of the injected bug mechanism"}}
 
 Generate the JSON now:"""
 
@@ -366,20 +378,46 @@ async def generate_bug(
         return s
 
     # Parse JSON from response (strict=False allows control chars in strings)
+    bug_data = None
+
+    # Method 1: Try ```json ... ``` block
     json_match = re.search(r'```json\s*(.*?)\s*```', content, re.DOTALL)
     if json_match:
-        json_str = clean_json_string(json_match.group(1))
+        try:
+            json_str = clean_json_string(json_match.group(1))
+            bug_data = json.loads(json_str, strict=False)
+        except json.JSONDecodeError:
+            pass
+
+    # Method 2: Find JSON by matching balanced braces starting from "bug_patch"
+    if bug_data is None:
+        # Find the start of JSON object containing bug_patch
+        idx = content.find('"bug_patch"')
+        if idx != -1:
+            # Search backward for opening brace
+            start = content.rfind('{', 0, idx)
+            if start != -1:
+                # Find matching closing brace
+                depth = 0
+                end = start
+                for i, c in enumerate(content[start:], start):
+                    if c == '{':
+                        depth += 1
+                    elif c == '}':
+                        depth -= 1
+                        if depth == 0:
+                            end = i + 1
+                            break
+                try:
+                    json_str = clean_json_string(content[start:end])
+                    bug_data = json.loads(json_str, strict=False)
+                except json.JSONDecodeError:
+                    pass
+
+    # Method 3: Try parsing entire content as JSON
+    if bug_data is None:
+        json_str = clean_json_string(content)
         bug_data = json.loads(json_str, strict=False)
-    else:
-        # Try to find JSON object with bug_patch
-        json_match = re.search(r'\{[^{}]*"bug_patch"[^{}]*\}', content, re.DOTALL)
-        if json_match:
-            json_str = clean_json_string(json_match.group(0))
-            bug_data = json.loads(json_str, strict=False)
-        else:
-            # Try parsing entire content as JSON
-            json_str = clean_json_string(content)
-            bug_data = json.loads(json_str, strict=False)
 
     # Validate required fields
     if not bug_data.get("bug_patch"):
