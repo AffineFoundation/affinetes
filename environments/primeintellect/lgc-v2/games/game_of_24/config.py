@@ -4,6 +4,7 @@ Simplified seed-based generation with flexible parameters
 """
 
 import random
+import secrets
 
 # ============================================================================
 # Prompt Templates
@@ -84,7 +85,7 @@ def derive_params_from_seed(seed: int):
     Returns:
         dict with keys: prompt_idx, min_val, max_val, num_count, target, operators
     """
-    rng = random.Random(seed)
+    rng = secrets.SystemRandom()
 
     # Prompt variant (0-49, alternates between zh and en)
     prompt_idx = seed % 50

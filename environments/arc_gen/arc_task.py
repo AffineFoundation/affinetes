@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 import json
 import random
+import secrets
 import re
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -77,7 +78,7 @@ class ArcGenTask:
         if task_id is not None:
             generation_seed = int(task_id)
         else:
-            generation_seed = random.randint(0, 2**32 - 1)
+            generation_seed = secrets.randbelow(2**32)
         if num_train is None:
             num_train = self.num_train
         if num_test is None:

@@ -7,6 +7,7 @@ import httpx
 import openai
 import sys
 import random
+import secrets
 
 # Add /app to path to import local modules
 if '/app' not in sys.path:
@@ -102,7 +103,7 @@ Again, do not get stuck trying to do the same thing over and over again. Please 
             idx = task_id % len(self.dataset)
             sample = self.dataset[idx]
         else:
-            idx = random.randint(0, len(self.dataset) - 1)
+            idx = secrets.randbelow(len(self.dataset))
             sample = self.dataset[idx]
         
         return Challenge(
@@ -197,7 +198,7 @@ Again, do not get stuck trying to do the same thing over and over again. Please 
         """
         # Generate random seed if not provided
         if seed is None:
-            seed = random.randint(0, 2**32 - 1)
+            seed = secrets.randbelow(2**32)
 
         # Allow per-call api_key override
         current_api_key = api_key or self.api_key

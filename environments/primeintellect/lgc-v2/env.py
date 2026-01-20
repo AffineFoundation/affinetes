@@ -7,6 +7,7 @@ import httpx
 import openai
 import sys
 import random
+import secrets
 
 # Add /app to path to import local modules
 if '/app' not in sys.path:
@@ -241,7 +242,7 @@ class Actor:
         """
         # Generate random task_id if not provided (default to dyck_language)
         if task_id is None:
-            task_id = random.randint(0, 99_999_999)  # dyck_language range
+            task_id = secrets.randbelow(100_000_000)  # dyck_language range
 
         # Allow per-call api_key override
         current_api_key = api_key or self.api_key

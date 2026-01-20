@@ -7,6 +7,7 @@ HTTP layer handles request parsing, env layer focuses on business logic.
 import os
 import time
 import random
+import secrets
 import re
 import uuid
 from dataclasses import dataclass
@@ -98,7 +99,7 @@ What is your first guess?"""
         Returns:
             OpenEnvResponse with initial observation
         """
-        seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+        seed = seed if seed is not None else secrets.randbelow(2**32)
         task_id = task_id if task_id is not None else (seed & 0x7FFFFFFF)
 
         target = random.Random(task_id).randint(self.MIN_RANGE, self.MAX_RANGE)
@@ -253,7 +254,7 @@ What is your first guess?"""
         api_key: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Run a full evaluation with an LLM."""
-        seed = seed if seed is not None else random.randint(0, 2**32 - 1)
+        seed = seed if seed is not None else secrets.randbelow(2**32)
         api_key = api_key or self.api_key
         start = time.time()
 

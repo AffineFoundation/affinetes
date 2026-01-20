@@ -2,6 +2,7 @@
 
 import json
 import random
+import secrets
 from datasets import load_dataset
 
 import sys
@@ -70,7 +71,7 @@ class LogicTask:
             idx = task_id % len(self.dataset)
             sample = self.dataset[idx]
         else:
-            idx = random.randint(0, len(self.dataset) - 1)
+            idx = secrets.randbelow(len(self.dataset))
             sample = self.dataset[idx]
         
         return Challenge(

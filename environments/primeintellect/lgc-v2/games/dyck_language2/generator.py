@@ -159,7 +159,7 @@ Please provide your final answer (the complete filled sequence) in backticks lik
         Returns:
             Data: Game data object
         """
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Determine n_types from seed if not specified (3-8)
         current_n_types = n_types
@@ -228,12 +228,10 @@ Please provide your final answer (the complete filled sequence) in backticks lik
 
     def _generate_valid_sequence(self, total_length, prefix_length, nesting_depth, seed, max_attempts):
         """Generate valid Dyck sequence where prefix_length opening brackets come first"""
-        rng = random.Random(seed) if seed is not None else random.Random()
+        rng = secrets.SystemRandom()
 
         for attempt in range(max_attempts):
             try:
-                if seed is not None:
-                    rng.seed(seed + attempt)
 
                 if total_length % 2 != 0:
                     total_length -= 1

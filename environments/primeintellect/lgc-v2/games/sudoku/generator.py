@@ -6,6 +6,7 @@ Difficulty is controlled by the number of given cells.
 """
 
 import random
+import secrets
 import re
 import uuid
 from base.data import Data
@@ -31,9 +32,9 @@ class SudokuGenerator:
             Data object containing question, answer, and metadata
         """
         if seed is None:
-            seed = random.randint(0, 99999999)
+            seed = secrets.randbelow(100000000)
 
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Derive difficulty from seed
         params = self._derive_params_from_seed(seed)
@@ -66,7 +67,7 @@ class SudokuGenerator:
 
     def _derive_params_from_seed(self, seed: int) -> dict:
         """Derive all parameters from seed"""
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Difficulty levels: easy(36-45), medium(28-35), hard(22-27)
         difficulty_roll = rng.random()

@@ -44,7 +44,7 @@ class DyckLanguageReasoningErrorsGenerator:
         Returns:
             Data: Game data object
         """
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Determine parameters from seed if not specified
         if n_types <= 0:

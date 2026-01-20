@@ -5,6 +5,7 @@ Generates custom operator definition and evaluation problems
 """
 
 import random
+import secrets
 import re
 import uuid
 
@@ -92,10 +93,10 @@ class OperationGenerator:
             Data object containing question, answer, and metadata
         """
         if seed is None:
-            seed = random.randint(0, 99999999)
+            seed = secrets.randbelow(100000000)
 
         # Derive parameters from seed
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Derive task parameters
         num_symbols = self._derive_num_symbols(rng)
@@ -110,8 +111,8 @@ class OperationGenerator:
         max_attempts = 100
         for attempt in range(max_attempts):
             try:
-                # Use attempt-modified seed for retries
-                attempt_rng = random.Random(seed + attempt)
+                # Use cryptographically secure RNG for retries
+                attempt_rng = secrets.SystemRandom()
 
                 result = self._generate_problem(
                     attempt_rng,

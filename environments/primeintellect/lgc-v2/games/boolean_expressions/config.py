@@ -5,6 +5,7 @@ Contains facts data, prompt templates, and parameter derivation.
 """
 
 import random
+import secrets
 
 # ============================================================================
 # Common Sense Facts (Fixed lists)
@@ -761,7 +762,7 @@ def derive_params_from_seed(seed: int) -> dict:
     Returns:
         dict with all parameters
     """
-    rng = random.Random(seed)
+    rng = secrets.SystemRandom()
 
     return {
         "depth": rng.randint(2, 6),

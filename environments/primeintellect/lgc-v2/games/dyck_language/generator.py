@@ -52,7 +52,7 @@ class DyckLanguageGenerator:
             raise ValueError("n_types must be between 1 and 8")
 
         self.used_brackets = self.brackets[:n_types]
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Determine lengths
         current_total_length = total_length
@@ -101,12 +101,10 @@ class DyckLanguageGenerator:
 
     def _generate_valid_sequence(self, total_length, cut_point, nesting_depth, seed, max_attempts):
         """Generate valid Dyck sequence where cut_point divides prefix and closing-only suffix"""
-        rng = random.Random(seed) if seed is not None else random.Random()
+        rng = secrets.SystemRandom()
 
         for attempt in range(max_attempts):
             try:
-                if seed is not None:
-                    rng.seed(seed + attempt)
 
                 if total_length % 2 != 0:
                     total_length -= 1

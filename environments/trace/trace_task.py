@@ -7,6 +7,7 @@ import json
 import logging
 import os
 import random
+import secrets
 import re
 import signal
 import sys
@@ -313,14 +314,14 @@ class TraceTask:
             idx = task_id % len(self.dataset)
             sample = self.dataset[idx]
         else:
-            idx = random.randint(0, len(self.dataset) - 1)
+            idx = secrets.randbelow(len(self.dataset))
             sample = self.dataset[idx]
         
         source = sample.get("program", "")
         inputs = sample.get("inputs", "")
         
         # Use task_id as seed for deterministic print injection
-        seed = task_id if task_id is not None else random.randint(0, 1000000)
+        seed = task_id if task_id is not None else secrets.randbelow(1000001)
         transformed = inject_non_overfittable_prints(source, seed, max_injections=6)
         
         # Get ground truth
