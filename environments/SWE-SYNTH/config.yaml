@@ -230,6 +230,184 @@ model:
     drop_params: true
 
 breaker:
+  # Breaker agent configuration (code agent for bug injection)
+  system_template: |
+    You are a code mutation expert. Your task is to inject realistic bugs into correct code.
+    Your response must contain exactly ONE bash code block with ONE command (or commands connected with && or ||).
+
+    Include a THOUGHT section before your command where you explain your reasoning process.
+    Format your response as shown in <format_example>.
+
+    <format_example>
+    THOUGHT: Your reasoning and analysis here
+
+    ```bash
+    your_command_here
+    ```
+    </format_example>
+
+    Failure to follow these rules will cause your response to be rejected.
+
+  instance_template: |
+    <task>
+    You are a BUG INJECTION agent. Your goal is to introduce a realistic bug that causes tests to FAIL.
+
+    Repository: {{repo}}
+    Bug types to inject: {{bug_types_str}}
+    </task>
+
+    <bug_type_descriptions>
+    {{bug_descriptions}}
+    </bug_type_descriptions>
+
+    <gold_patch>
+    This patch was recently applied to fix a bug. The code is now CORRECT and all tests pass.
+    Your job is to re-introduce a bug (different from the original) that breaks the tests.
+
+    ```diff
+    {{gold_patch}}
+    ```
+    </gold_patch>
+
+    <target_tests>
+    These tests currently PASS. Your bug should cause at least one to FAIL:
+    {{target_tests_str}}
+    </target_tests>
+
+    {% if test_patch_snippet %}
+    <test_code>
+    Analyze these test assertions to understand what values/behaviors they expect:
+    ```
+    {{test_patch_snippet}}
+    ```
+    </test_code>
+    {% endif %}
+
+    <instructions>
+    ## Your Workflow
+
+    1. **Explore**: Read the source files modified by gold_patch to understand the code
+    2. **Analyze**: Study the test code to understand what behaviors are being tested
+    3. **Plan**: Identify a good location to inject a bug that will cause test failures
+    4. **Inject**: Create a patch that introduces a subtle, realistic bug
+    5. **Verify**: Apply your patch and run tests to confirm at least one test fails
+    6. **Iterate**: If no tests fail, analyze why and try a different approach
+
+    ## Bug Injection Rules
+
+    - Make SUBTLE changes (what a tired developer might write)
+    - NO syntax errors - code must still run
+    - Focus on return values, conditionals, error handling - these affect test outcomes
+    - Avoid cosmetic changes (comments, whitespace) - they don't break tests
+    - Your bug should cause 1-10 tests to fail, not catastrophic failure
+
+    ## Environment Setup (ALREADY DONE)
+
+    The environment is already set up:
+    - Working directory: /app (repository root)
+    - Gold patch ALREADY APPLIED - code is correct, all tests pass
+    - DO NOT apply gold_patch yourself - it's already done!
+
+    ## Files in /workspace
+
+    - `/workspace/gold_patch.diff` - The gold patch (already applied, for reference only)
+    - `/workspace/run_tests.sh` - Run this to execute tests
+    - `/workspace/run_script.sh` - Test runner script
+    - `/workspace/parser.py` - Test output parser
+
+    ## Commands You Should Use
+
+    1. Read source files: `cat src/path/to/file.js` or `head -n 100 <file>`
+    2. Search code: `grep -n "pattern" src/`
+    3. Run tests: `bash /workspace/run_tests.sh`
+    4. Create your bug patch:
+       ```bash
+       cat <<'PATCH' > /workspace/bug.patch
+       diff --git a/path/to/file b/path/to/file
+       --- a/path/to/file
+       +++ b/path/to/file
+       @@ -10,3 +10,3 @@
+       -    original correct code
+       +    your buggy code
+       PATCH
+       ```
+    5. Apply your bug: `git apply /workspace/bug.patch`
+    6. Run tests again to verify failure: `bash /workspace/run_tests.sh`
+
+    ## Workflow
+
+    1. Read the gold_patch to understand what code was changed
+    2. Read the actual source files to understand the code
+    3. Create a bug.patch that introduces a subtle bug
+    4. Apply your bug.patch
+    5. Run tests to verify at least one test fails
+    6. If tests don't fail, revert and try again: `git checkout -- .`
+
+    ## Submission
+
+    When you have successfully injected a bug that causes tests to fail:
+
+    1. First, save your bug patch to a file:
+    ```bash
+    git diff > /workspace/final_bug.patch && cat /workspace/final_bug.patch
+    ```
+
+    2. Then submit with your problem statement and description:
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat <<'RESULT'
+    PROBLEM_STATEMENT:
+    <user-facing bug report describing symptoms, NOT revealing the fix>
+    BUG_DESCRIPTION:
+    <technical description of what bug you injected>
+    RESULT
+    ```
+
+    IMPORTANT: The bug patch will be read from `/workspace/final_bug.patch`. Make sure to save it before submitting!
+
+    The problem statement should describe:
+    - What feature/functionality is affected
+    - What goes wrong (error messages, wrong output, unexpected behavior)
+    - When/how it happens
+    - Do NOT mention line numbers or exact code changes
+    </instructions>
+
+  action_observation_template: |
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+
+  format_error_template: |
+    Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.
+
+    Format your response as:
+    THOUGHT: Your reasoning
+
+    ```bash
+    your_command_here
+    ```
+
+  step_limit: 50
+  cost_limit: 10.0
+  temperature: 0.7
+
   # Bug types and their descriptions for prompting
   bug_types:
     off-by-one:
