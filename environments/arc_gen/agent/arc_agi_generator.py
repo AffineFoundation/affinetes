@@ -40,15 +40,15 @@ class ARC2Generator:
         task_num: Optional[int] = None,
         rng = None,
     ) -> Dict[str, Any]:
+        """
+        Generate a base ARC style problem from task_list.
+        
+        Returns:
+            Dict with "input", "output", and "task_num" keys
+        """
         max_retry = 10
         while max_retry > 0:
             try:
-                """
-                Generate a base ARC-1 style problem from task_list.
-                
-                Returns:
-                    Dict with "input", "output", and "task_num" keys
-                """
                 tmap = task_list.task_list()
                 
                 keys = list(tmap.keys())
@@ -201,6 +201,7 @@ class ARC2Generator:
             return False
         if _count_non_black(grid) < self.min_non_black_cells:
             return False
+        
         return True
 
     def generate_problem_set(
@@ -221,7 +222,7 @@ class ARC2Generator:
               "test_input": <grid>,
               "test_output": <grid>,  # For validation
               "metadata": {
-                  "base_task": <int>,
+                  "task_id": <int>,
                   "transformation_chain": [...],
                   "chain_length": int
               }
@@ -264,8 +265,10 @@ class ARC2Generator:
                         "input": base["input"],
                         "output": output
                     })
-            except:
-                continue
+            except Exception as e:
+                import traceback
+                error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
+                print("Fail to generate\n", error)
         
         if len(train_examples) != num_train:
             raise ValueError(f"Fail to generate")
