@@ -34,7 +34,6 @@ class ARC2Generator:
         # Quality thresholds to keep outputs meaningful
         self.min_distinct_colors = 2
         self.min_non_black_cells = 6
-        self.max_resample_attempts = 4
         self.task_range = task_range
     def generate_initial_problem(
         self,
