@@ -3,6 +3,7 @@
 import gc
 import os
 import random
+import secrets
 import sys
 import time
 
@@ -97,7 +98,7 @@ class Actor:
             if task_id is not None:
                 seed = task_id
             else:
-                seed = random.randint(0, 2**32 - 1)
+                seed = secrets.randbelow(2**32)
 
         current_api_key = api_key or self.api_key
 

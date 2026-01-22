@@ -9,6 +9,7 @@ import asyncio
 import httpx
 import traceback
 import random
+import secrets
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 from functools import partial
@@ -177,7 +178,7 @@ def inject_evaluator_endpoint(app: FastAPI):
             # Generate random seed if not provided
             seed = request.seed
             if seed is None:
-                seed = random.randint(0, 2**32 - 1)
+                seed = secrets.randbelow(2**32)
 
             env_args = {
                 "env_server_base": env_server_base,

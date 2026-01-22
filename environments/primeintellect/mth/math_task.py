@@ -267,8 +267,8 @@ class MathTask:
             sample = self.dataset[idx]
         else:
             # Random selection
-            import random
-            idx = random.randint(0, len(self.dataset) - 1)
+            import secrets
+            idx = secrets.randbelow(len(self.dataset))
             sample = self.dataset[idx]
         
         return Challenge(

@@ -7,6 +7,7 @@ import httpx
 import openai
 import sys
 import random
+import secrets
 
 # Add /app to path to import local modules
 if '/app' not in sys.path:
@@ -130,7 +131,7 @@ class Actor:
         """
         # Generate random seed if not provided
         if seed is None:
-            seed = random.randint(0, 2**32 - 1)
+            seed = secrets.randbelow(2**32)
 
         # Allow per-call api_key override
         current_api_key = api_key or self.api_key

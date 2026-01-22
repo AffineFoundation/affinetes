@@ -7,6 +7,7 @@ Example: SEND + MORE = MONEY
 
 import operator
 import random
+import secrets
 import re
 import string
 import uuid
@@ -36,9 +37,9 @@ class CryptarithmGenerator:
             Data object containing question, answer, and metadata
         """
         if seed is None:
-            seed = random.randint(0, 99999999)
+            seed = secrets.randbelow(100000000)
 
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Derive parameters from seed
         num_letter = rng.randint(4, 8)  # 4-8 unique letters

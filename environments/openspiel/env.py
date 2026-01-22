@@ -8,6 +8,7 @@ Supports two modes:
 import os
 import time
 import random
+import secrets
 import uuid
 import re
 import numpy as np
@@ -436,8 +437,8 @@ class Actor:
         Returns:
             OpenEnvResponse with initial observation
         """
-        resolved_seed = seed if seed is not None else random.randint(0, 2**32 - 1)
-        resolved_task_id = int(task_id) if task_id is not None else random.randint(0, 10**11 - 1)
+        resolved_seed = seed if seed is not None else secrets.randbelow(2**32)
+        resolved_task_id = int(task_id) if task_id is not None else secrets.randbelow(10**11)
         opponent_type = opponent
 
         # Create game from task_id
@@ -752,9 +753,9 @@ Your choice (action ID only):"""
             opponent: Opponent type ("random" or "mcts")
         """
         if task_id is None:
-            task_id = random.randint(0, 10**11 - 1)
+            task_id = secrets.randbelow(10**11)
         if seed is None:
-            seed = random.randint(0, 2**32 - 1)
+            seed = secrets.randbelow(2**32)
 
         current_api_key = api_key or self.api_key
         start_time = time.time()

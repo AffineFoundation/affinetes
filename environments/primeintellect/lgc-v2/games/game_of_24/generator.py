@@ -1,5 +1,6 @@
 import itertools
 import random
+import secrets
 import re
 import uuid
 
@@ -27,13 +28,13 @@ class GameOf24Generator:
             Data object containing question, answer, and metadata
         """
         if seed is None:
-            seed = random.randint(0, 99999999)
+            seed = secrets.randbelow(100000000)
 
         # Derive all parameters from seed
         params = derive_params_from_seed(seed)
 
         # Create RNG for number generation
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Generate numbers using derived parameters
         numbers = [

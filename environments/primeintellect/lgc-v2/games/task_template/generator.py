@@ -5,6 +5,7 @@ TODO: Replace with your task name and description
 """
 
 import random
+import secrets
 from base.data import Data
 
 
@@ -37,8 +38,8 @@ class TaskTemplateGenerator:
         Returns:
             Data: Game data object
         """
-        # Create deterministic RNG
-        rng = random.Random(seed)
+        # Create cryptographically secure RNG
+        rng = secrets.SystemRandom()
 
         # Generate question
         question, answer, metadata = self._generate_one(

@@ -8,6 +8,7 @@ import os
 from time import perf_counter
 from typing import Any
 import random
+import secrets
 
 import aiohttp
 import httpx
@@ -117,7 +118,7 @@ class DeepDiveTask:
             idx = task_id % len(self.dataset)
             sample = self.dataset[idx]
         else:
-            idx = random.randint(0, len(self.dataset) - 1)
+            idx = secrets.randbelow(len(self.dataset))
             sample = self.dataset[idx]
         
         return Challenge(

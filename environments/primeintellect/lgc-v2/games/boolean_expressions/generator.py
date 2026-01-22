@@ -66,13 +66,13 @@ class BooleanExpressionsGenerator:
             Data object containing question, answer, and metadata
         """
         if seed is None:
-            seed = random.randint(0, 99_999_999)
+            seed = secrets.randbelow(100_000_000)
 
         # Derive all parameters from seed
         params = derive_params_from_seed(seed)
 
         # Create RNG for content generation
-        rng = random.Random(seed)
+        rng = secrets.SystemRandom()
 
         # Initialize language-specific data
         language = params["language"]
