@@ -1,3 +1,2 @@
 openai
 httpx
-arc-gen @ git+https://github.com/Shr1ftyy/ARC-GEN
