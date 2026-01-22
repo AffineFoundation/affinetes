@@ -323,6 +323,9 @@ class Actor:
         """
         Auto-play opponent turns until it's LLM player's turn or game ends.
         Returns accumulated reward from opponent moves.
+
+        For SIMULTANEOUS games (e.g., goofspiel), stops immediately after
+        chance nodes to let LLM provide their action via step().
         """
         if not ep or ep.state.is_terminal():
             return 0.0
@@ -335,10 +338,18 @@ class Actor:
             # Check for chance nodes
             if current_player == pyspiel.PlayerId.CHANCE:
                 outcomes_with_probs = ep.state.chance_outcomes()
+                if not outcomes_with_probs:
+                    # Edge case: no chance outcomes (shouldn't happen but be safe)
+                    break
                 action_list, prob_list = zip(*outcomes_with_probs)
                 action = np.random.choice(action_list, p=prob_list)
                 ep.state.apply_action(action)
                 continue
+
+            # For SIMULTANEOUS games, stop and let LLM provide action via step()
+            # In simultaneous games, both players act at once - we need LLM's input
+            if current_player == pyspiel.PlayerId.SIMULTANEOUS:
+                break
 
             # If it's LLM player's turn, stop
             if current_player == ep.llm_player_id:
@@ -569,15 +580,19 @@ class Actor:
 
         # Check if it's LLM player's turn
         current_player = ep.state.current_player()
-        if current_player != ep.llm_player_id:
-            # This shouldn't happen if auto_play_opponents works correctly
+
+        # Handle SIMULTANEOUS games (e.g., goofspiel) - both players act at once
+        is_simultaneous = (current_player == pyspiel.PlayerId.SIMULTANEOUS)
+
+        if not is_simultaneous and current_player != ep.llm_player_id:
+            # For sequential games, check if it's actually LLM's turn
             return self._resp(
                 f"Not your turn. Current player: {current_player}",
                 episode_id=ep.episode_id,
                 info=self._info(ep, error={"type": "not_your_turn", "message": f"Current player is {current_player}", "retryable": False}),
             )
 
-        # Get legal actions
+        # Get legal actions for LLM player
         legal_actions = ep.state.legal_actions(ep.llm_player_id)
         if not legal_actions:
             # No legal actions - game should end
@@ -622,10 +637,53 @@ Your choice (action ID only):"""
         except:
             action_str = str(parsed_action)
 
-        ep.state.apply_action(parsed_action)
+        if is_simultaneous:
+            # SIMULTANEOUS games: combine LLM action with opponent action
+            # Joint action encoding: joint = p0_action + p1_action * num_actions
+            num_actions = ep.game.num_distinct_actions()
+
+            # Get opponent action from bot
+            opponent_action = 0
+            if ep.opponent_bot:
+                # Use opponent bot to select action
+                opponent_legal = ep.state.legal_actions(1 - ep.llm_player_id)
+                if opponent_legal:
+                    # UniformRandomBot selects from its legal actions
+                    opponent_action = np.random.choice(opponent_legal)
+            else:
+                # Fallback to random
+                opponent_legal = ep.state.legal_actions(1 - ep.llm_player_id)
+                if opponent_legal:
+                    opponent_action = np.random.choice(opponent_legal)
+
+            # Compute joint action based on player positions
+            if ep.llm_player_id == 0:
+                joint_action = parsed_action + opponent_action * num_actions
+            else:
+                joint_action = opponent_action + parsed_action * num_actions
+
+            # Apply joint action
+            ep.state.apply_action(joint_action)
+            ep.last_opponent_action = opponent_action
+
+            # Record opponent action
+            try:
+                opp_action_str = ep.state.action_to_string(1 - ep.llm_player_id, opponent_action)
+            except:
+                opp_action_str = str(opponent_action)
+            ep.action_history.append({
+                "player": int(1 - ep.llm_player_id),
+                "action_id": int(opponent_action),
+                "action_str": opp_action_str,
+                "is_opponent": True,
+            })
+        else:
+            # Sequential game: just apply LLM's action
+            ep.state.apply_action(parsed_action)
+
         ep.step_count += 1
 
-        # Record action
+        # Record LLM action
         ep.action_history.append({
             "player": int(ep.llm_player_id),
             "action_id": int(parsed_action),
