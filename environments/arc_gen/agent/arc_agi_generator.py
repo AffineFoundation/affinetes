@@ -134,48 +134,41 @@ class ARC2Generator:
         if chain_length is None:
             chain_length = self.max_chain_length
 
-        pool = list(utils.TRANSFORMATIONS.keys())
-        result_chain: List[Dict[str, Any]] = []
+        result_chain = []
         cur = utils.deep_copy_grid(grid)
-
-        for _ in range(chain_length):
-            compatible = utils.get_compatible_transformations(cur, max_size=self.max_grid_size)
-            available = [t for t in pool if t in compatible]
-
-            if not available:
-                break
-
-            # Avoid immediate reversals for better chain quality
-            if result_chain and len(available) > 1:
-                last = result_chain[-1]["name"]
-                avoid = {
-                    "flip_horizontal": {"flip_horizontal"},
-                    "flip_vertical": {"flip_vertical"},
-                    "rotate_90": {"rotate_270"},
-                    "rotate_270": {"rotate_90"},
-                    "rotate_180": {"rotate_180"},
-                    "gravity_down": {"gravity_up"},
-                    "gravity_up": {"gravity_down"},
-                    "gravity_left": {"gravity_right"},
-                    "gravity_right": {"gravity_left"},
-                }.get(last, set())
-                filtered = [t for t in available if t not in avoid]
-                if filtered:
-                    available = filtered
-
-            name = rng.choice(available)
-            params = self._sample_params(name, cur , rng)
+        compatible = utils.get_compatible_transformations(cur, max_size=self.max_grid_size)
+        ### rotate
+        rotate = rng.choice(["rotate_90" , "rotate_180" , "rotate_180" , None])
+        if rotate != None:
+            result_chain.append({"name": rotate, "params": None})
+        
+        ### transpose
+        if rng.random() > 0.5:
+            result_chain.append({"name": "transpose", "params": None})
+        
+        ### recenter
+        if rng.random() > 0.9:
+            result_chain.append({"name": "recenter", "params": None})
             
-            # Skip if params are invalid
-            if name in ("remove_color", "highlight_color", "shift" , "swap_colors" ) and params is None:
-                continue
-
-            new_cur = utils.apply_transformation(cur, name, params)
-            if not utils.is_valid_grid(new_cur):
-                continue
-
-            result_chain.append({"name": name, "params": params})
-            cur = new_cur
+        ### swap colors
+        for _ in range(chain_length):
+            if rng.random() > 0.7:
+                params = self._sample_params("swap_colors", cur , rng)
+                new_cur = utils.apply_transformation(cur, "swap_colors", params)
+                if not utils.is_valid_grid(new_cur):
+                    continue
+                result_chain.append({"name": "swap_colors", "params": params})
+                cur = new_cur
+            else:
+                break
+            
+        ### zoom                        
+        if rng.random() > 0.95:
+            if "zoom_3x" in compatible:
+                result_chain.append({"name": "zoom_3x", "params": None})
+        elif rng.random() > 0.9:
+            if "zoom_2x" in compatible:
+                result_chain.append({"name": "zoom_2x", "params": None})
 
         return result_chain
 

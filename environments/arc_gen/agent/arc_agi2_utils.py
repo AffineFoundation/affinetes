@@ -327,6 +327,7 @@ def gravity_right(grid: List[List[int]], params: Optional[Dict] = None) -> List[
 
 TRANSFORMATIONS = {
     # Geometric - predictable, intuitive for humans
+    'rotate_90': (rotate_90, {'type': 'geometric', 'preserves_size': True}),
     'rotate_180': (rotate_180, {'type': 'geometric', 'preserves_size': True}),
     'rotate_270': (rotate_270, {'type': 'geometric', 'preserves_size': False}),
     'transpose': (transpose, {'type': 'geometric', 'preserves_size': False}),
