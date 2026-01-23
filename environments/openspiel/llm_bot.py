@@ -109,7 +109,7 @@ class LLMBot(pyspiel.Bot):
         })
 
         try:
-            self._observation = state.observation_string()
+            self._observation = state.observation_string(self._player_id)
         except:
             try:
                 self._observation = str(state)
