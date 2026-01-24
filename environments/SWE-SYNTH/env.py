@@ -21,7 +21,7 @@ from typing import Optional, Dict, Any
 from datasets import load_dataset
 
 # Import breaker and cache modules
-from breaker import BUG_TYPES, generate_bug, generate_bug_with_agent
+from breaker import BUG_TYPES, BreakerInput, run_breaker, BreakerException
 from cache import TwoLevelCache
 
 # Import mini-swe-agent (installed via pip)
@@ -362,13 +362,14 @@ git apply -v /workspace/gold_patch.diff
 
 # Step 2: Apply bug_patch to inject the bug
 echo "=== BUG PATCH CONTENT ==="
-head -20 /workspace/bug_patch.diff
+cat /workspace/bug_patch.diff
 echo "=== APPLYING BUG PATCH ==="
-git apply -v /workspace/bug_patch.diff
+git apply -v /workspace/bug_patch.diff 2>&1
 APPLY_RESULT=$?
 echo "Bug patch apply exit code: $APPLY_RESULT"
 if [ $APPLY_RESULT -ne 0 ]; then
-    echo "WARNING: Bug patch apply failed!"
+    echo "WARNING: Bug patch apply failed! Trying with --3way..."
+    git apply -v --3way /workspace/bug_patch.diff 2>&1 || echo "3way also failed"
 fi
 {before_repo_set_cmd}
 
@@ -436,6 +437,9 @@ fi
                     "stdout_tail": stdout[-500:] if stdout else "",
                     "skipped": True,
                 }
+
+            # Debug: print verification stdout to see patch application result
+            print(f"[DEBUG] Verification stdout (first 2000 chars):\n{stdout[:2000]}")
 
             json_start = stdout.index(begin_marker) + len(begin_marker)
             json_end = stdout.index(end_marker)
@@ -973,88 +977,72 @@ fi
                                 selected_test_files = []
                         test_files_str = ",".join(selected_test_files) if selected_test_files else ""
 
-                        # Generate and verify bug (retry up to max times)
-                        bug_verified = False
-                        last_verification = None
-
-                        for verify_attempt in range(BUG_GENERATION_MAX_RETRIES):
-                            try:
-                                if use_breaker_agent and run_script and parser_script:
-                                    # Use code agent for bug generation
-                                    print(f"Generating bug with agent ({breaker_model}) (attempt {verify_attempt + 1}/{BUG_GENERATION_MAX_RETRIES})...")
-                                    bug_instance = await generate_bug_with_agent(
-                                        swe_instance=swe_inst,
-                                        bug_types=params["bug_types"],
-                                        seed=params["seed"] + verify_attempt * 100,
-                                        breaker_model=breaker_model,
-                                        breaker_base_url=breaker_base_url,
-                                        breaker_api_key=breaker_api_key,
-                                        temperature=0.7,
-                                        max_iterations=breaker_max_iterations,
-                                        cost_limit=breaker_cost_limit,
-                                        timeout=300,
-                                        dockerhub_username=self.dockerhub_username,
-                                        run_script=run_script,
-                                        parser_script=parser_script,
-                                        env_cmds=env_cmds,
-                                        test_files_str=test_files_str,
-                                        before_repo_set_cmd=before_repo_set_cmd,
-                                    )
-                                else:
-                                    # Fallback to prompt mode
-                                    print(f"Generating bug with prompt ({breaker_model}) (attempt {verify_attempt + 1}/{BUG_GENERATION_MAX_RETRIES})...")
-                                    repo_files = self._fetch_repo_files(
-                                        instance_id=instance_id,
-                                        repo=swe_inst.get("repo", ""),
-                                        base_commit=swe_inst.get("base_commit", ""),
-                                        gold_patch=swe_inst.get("patch", ""),
-                                        seed=params["seed"],
-                                        max_files=5,
-                                    )
-                                    bug_instance = await generate_bug(
-                                        swe_instance=swe_inst,
-                                        bug_types=params["bug_types"],
-                                        seed=params["seed"] + verify_attempt * 100,
-                                        breaker_model=breaker_model,
-                                        breaker_base_url=breaker_base_url,
-                                        breaker_api_key=breaker_api_key,
-                                        repo_files=repo_files,
-                                    )
-                            except Exception as gen_error:
-                                print(f"Bug generation failed: {gen_error}")
-                                if verify_attempt < BUG_GENERATION_MAX_RETRIES - 1:
-                                    print("Retrying...")
-                                    continue
-                                raise
-
-                            # Verify the generated bug
-                            print(f"Verifying bug...")
-                            verification = self._verify_bug(bug_instance, swe_inst)
-                            bug_instance["verification"] = verification
-                            last_verification = verification
-
-                            if verification.get("valid"):
-                                num_failed = verification.get("num_failed", 0)
-                                print(f"Bug verified: {num_failed} tests fail (target_tests discovered)")
-                                bug_verified = True
-                                break
-                            elif verification.get("skipped"):
-                                # Verification couldn't run (missing scripts, etc.), accept the bug
-                                print(f"Bug verification skipped: {verification.get('error', 'unknown')}")
-                                bug_verified = True
-                                break
-                            else:
-                                # Verification failed
-                                print(f"Bug verification failed: {verification}")
-                                if verify_attempt < BUG_GENERATION_MAX_RETRIES - 1:
-                                    print(f"Retrying bug generation...")
-
-                        # All retries failed - raise error
-                        if not bug_verified:
+                        # Generate bug using the breaker module
+                        # The breaker module handles verification and retries internally
+                        if not (run_script and parser_script):
                             raise RuntimeError(
-                                f"Failed to generate valid bug after {BUG_GENERATION_MAX_RETRIES} attempts. "
-                                f"Last verification: {last_verification}"
+                                f"Missing run_script or parser_script for instance {instance_id}"
                             )
+
+                        # Get all tests
+                        fail_to_pass = swe_inst.get("FAIL_TO_PASS", swe_inst.get("fail_to_pass", "[]"))
+                        pass_to_pass = swe_inst.get("PASS_TO_PASS", swe_inst.get("pass_to_pass", "[]"))
+                        if isinstance(fail_to_pass, str):
+                            try:
+                                fail_to_pass = eval(fail_to_pass)
+                            except:
+                                fail_to_pass = []
+                        if isinstance(pass_to_pass, str):
+                            try:
+                                pass_to_pass = eval(pass_to_pass)
+                            except:
+                                pass_to_pass = []
+                        all_tests = list(set(fail_to_pass) | set(pass_to_pass))
+
+                        # Get Docker image
+                        docker_image = get_dockerhub_image_uri(
+                            instance_id, self.dockerhub_username, swe_inst.get("repo", "")
+                        )
+
+                        # Create BreakerInput
+                        breaker_input = BreakerInput(
+                            docker_image=docker_image,
+                            base_commit=swe_inst.get("base_commit", ""),
+                            repo=swe_inst.get("repo", ""),
+                            instance_id=instance_id,
+                            gold_patch=swe_inst.get("patch", ""),
+                            test_cases=all_tests,
+                            test_runner_script=run_script,
+                            test_parser_script=parser_script,
+                            test_files=test_files_str,
+                            bug_types=params["bug_types"],
+                            seed=params["seed"],
+                            model=breaker_model,
+                            api_base=breaker_base_url,
+                            api_key=breaker_api_key,
+                            test_patch=swe_inst.get("test_patch", ""),
+                            problem_statement_original=swe_inst.get("problem_statement", ""),
+                            env_cmds=env_cmds,
+                            before_repo_set_cmd=before_repo_set_cmd,
+                            temperature=0.7,
+                            max_iterations=breaker_max_iterations,
+                            cost_limit=breaker_cost_limit,
+                            timeout=300,
+                        )
+
+                        # Run breaker (includes injection, verification, and summarization)
+                        print(f"Generating bug with breaker module ({breaker_model})...")
+                        try:
+                            breaker_output = await run_breaker(
+                                breaker_input,
+                                max_retries=BUG_GENERATION_MAX_RETRIES,
+                            )
+                            # Convert BreakerOutput to bug_instance dict
+                            bug_instance = breaker_output.to_dict()
+                            num_failed = len(breaker_output.target_tests)
+                            print(f"Bug verified: {num_failed} tests fail")
+                        except BreakerException as e:
+                            raise RuntimeError(f"Breaker failed: {e}")
 
                         # Save with conflict resolution
                         # If another machine saved while we were generating, use theirs

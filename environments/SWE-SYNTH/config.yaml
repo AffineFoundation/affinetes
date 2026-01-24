@@ -347,9 +347,9 @@ breaker:
 
     When you have successfully injected a bug that causes tests to fail:
 
-    1. First, save your bug patch to a file:
+    1. First, save your bug patch to a file (only source code changes):
     ```bash
-    git diff > /workspace/final_bug.patch && cat /workspace/final_bug.patch
+    git diff -- '*.js' '*.ts' '*.py' '*.java' '*.go' '*.c' '*.cpp' '*.h' '*.rs' '*.rb' '*.php' > /workspace/final_bug.patch && cat /workspace/final_bug.patch
     ```
 
     2. Then submit with your problem statement and description:
