@@ -24,7 +24,10 @@ from datasets import load_dataset
 from breaker import BUG_TYPES, BreakerInput, run_breaker, BreakerException
 from cache import TwoLevelCache
 
-# Import mini-swe-agent (installed via pip)
+# Import fixer agent abstraction
+from fixer import create_fixer_agent, FixerConfig, AgentType
+
+# Import mini-swe-agent (installed via pip) - for backward compatibility
 from minisweagent.agents.default import DefaultAgent
 from minisweagent.environments.docker import DockerEnvironment
 from minisweagent.models.litellm_model import LitellmModel
@@ -848,20 +851,19 @@ fi
     async def evaluate(
         self,
         task_id: int,
+        # Fixer model config
         model: str = "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE",
         base_url: str = "https://llm.chutes.ai/v1",
         api_key: Optional[str] = None,
+        # Agent type selection
+        fixer_agent: AgentType = "miniswe",
+        # Common execution config
         timeout: int = 1800,
         temperature: float = 0.0,
         seed: Optional[int] = None,
         max_iterations: int = 30,
         cost_limit: float = 10.0,
         skip_cache: bool = False,
-        chutes_api_key: Optional[str] = None,
-        use_breaker_agent: bool = True,
-        breaker_max_iterations: int = 30,
-        breaker_cost_limit: float = 5.0,
-        **kwargs
     ) -> Dict[str, Any]:
         """
         Complete evaluation: generate bug (if needed) + fix it.
@@ -870,17 +872,18 @@ fi
             task_id: Deterministically maps to (swe_instance, bug_types, seed)
             model: Model for fixing bugs
             base_url: API base URL
-            api_key: API key for fixer model (uses env var CHUTES_API_KEY if not provided)
+            api_key: API key (uses env var CHUTES_API_KEY if not provided)
+            fixer_agent: Agent type ("miniswe", "ridge", "swe-agent", "codex")
             timeout: Timeout for commands
             temperature: Model temperature for fixer
             seed: Random seed for LLM inference
             max_iterations: Max agent steps for fixer
             cost_limit: Max cost for fixer
             skip_cache: Force regenerate bug even if cached
-            chutes_api_key: API key for breaker (Chutes). If not provided, uses api_key
-            use_breaker_agent: Use code agent for bug generation (more reliable) vs single prompt
-            breaker_max_iterations: Max agent steps for breaker agent
-            breaker_cost_limit: Max cost for breaker agent
+
+        Agent-specific config (see fixer/config.py for defaults):
+            - SANDBOX_PROXY_URL env var: LLM proxy URL for Ridge
+            - RIDGE_AGENT_PATH env var: Path to Ridge agent
 
         Returns:
             Result dict with score and metadata
@@ -896,11 +899,12 @@ fi
         fixer_model = model
         fixer_base_url = base_url
 
-        # Breaker model is fixed (not user-configurable)
-        # Priority: CHUTES_API_KEY env var > chutes_api_key param > fixer api_key
+        # Breaker config is fixed (internal, not user-configurable)
         breaker_model = "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE"
         breaker_base_url = "https://llm.chutes.ai/v1"
-        breaker_api_key = os.environ.get("CHUTES_API_KEY") or chutes_api_key or fixer_api_key
+        breaker_api_key = os.environ.get("CHUTES_API_KEY") or fixer_api_key
+        breaker_max_iterations = 30
+        breaker_cost_limit = 5.0
 
         # Decode task_id
         params = self._decode_task_id(task_id)
@@ -1057,19 +1061,57 @@ fi
                 finally:
                     self.cache.release_lock(task_id)
 
-        # Fix bug
-        print(f"Fixing bug with {fixer_model}...")
-        fix_patch, fixer_metadata, conversation = await self._fix_bug(
-            bug_instance,
-            fixer_model,
-            fixer_base_url,
-            fixer_api_key,
-            timeout,
-            max_iterations,
-            cost_limit,
-            temperature,
-            seed,
+        # Fix bug using selected agent
+        print(f"Fixing bug with {fixer_model} using {fixer_agent} agent...")
+
+        # Get Docker image for the bug instance
+        source = bug_instance["source"]
+        instance_id = source["swe_instance_id"]
+        repo = source["repo"]
+        docker_image = get_dockerhub_image_uri(instance_id, self.dockerhub_username, repo)
+
+        # Create fixer config
+        # Agent-specific settings (sandbox_proxy_url, ridge_agent_path, etc.)
+        # are auto-resolved from env vars or defaults - no need to pass explicitly
+        fixer_config = FixerConfig(
+            model=fixer_model,
+            api_base=fixer_base_url,
+            api_key=fixer_api_key,
+            temperature=temperature,
+            max_iterations=max_iterations,
+            cost_limit=cost_limit,
+            timeout=timeout,
+            seed=seed,
         )
+
+        # Create and run fixer agent
+        agent = create_fixer_agent(fixer_agent, fixer_config)
+        problem_statement = bug_instance["bug"]["problem_statement"]
+
+        # Get patches needed to prepare buggy code state
+        gold_patch = bug_instance["original"].get("gold_patch", "")
+        bug_patch = bug_instance["bug"].get("patch", "")
+        base_commit = source.get("base_commit", "")
+
+        try:
+            result = await agent.fix(
+                problem_statement=problem_statement,
+                docker_image=docker_image,
+                gold_patch=gold_patch,
+                bug_patch=bug_patch,
+                base_commit=base_commit,
+            )
+            fix_patch = result.patch
+            fixer_metadata = {
+                "model_calls": result.model_calls,
+                "model_cost": result.model_cost,
+                "total_tokens": result.total_tokens,
+            }
+            if result.error:
+                fixer_metadata["error"] = result.error
+            conversation = result.conversation
+        finally:
+            agent.cleanup()
 
         # Verify fix
         print("Verifying fix...")
