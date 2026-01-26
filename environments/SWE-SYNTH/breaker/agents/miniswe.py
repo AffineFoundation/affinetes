@@ -5,12 +5,22 @@ Uses the mini-swe-agent library for bash-based code agent execution.
 """
 
 import os
+import sys
 import asyncio
 import subprocess
+import logging
 from pathlib import Path
 from typing import Dict, Any, Optional
 
 from .base import BaseCodeAgent, AgentConfig, AgentResult
+
+# Enable minisweagent logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(name)s: %(levelname)s: %(message)s',
+    stream=sys.stdout,
+)
+logging.getLogger("minisweagent").setLevel(logging.DEBUG)
 
 
 class MiniSweAgent(BaseCodeAgent):
@@ -92,13 +102,18 @@ class MiniSweAgent(BaseCodeAgent):
             container_timeout=str(container_lifetime),
         )
 
-        # Pull image
+        # Pull image (must succeed, otherwise fail fast)
         print(f"Pulling image: {self.config.docker_image}")
-        subprocess.run(
+        pull_result = subprocess.run(
             ["docker", "pull", self.config.docker_image],
             capture_output=True,
-            timeout=300
+            timeout=300,
+            text=True,
         )
+        if pull_result.returncode != 0:
+            raise RuntimeError(
+                f"Failed to pull image {self.config.docker_image}: {pull_result.stderr}"
+            )
 
         # Prepare agent config
         agent_config = {

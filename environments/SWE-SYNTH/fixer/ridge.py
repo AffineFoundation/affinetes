@@ -104,15 +104,16 @@ class RidgeFixerAgent(BaseFixerAgent):
             if gold_patch or bug_patch:
                 self._apply_patches_to_repo(local_repo_path, base_commit, gold_patch, bug_patch)
 
-            # Start proxy
-            print("[RIDGE] Starting proxy container...")
+            # Start proxy (use port 8001 to avoid conflict with affinetes server on 8000)
+            proxy_port = 8001
+            print(f"[RIDGE] Starting proxy container on port {proxy_port}...")
             proxy_result = ridges.run_proxy_container(
                 openai_api_key=self.config.api_key,
                 openai_model=self.config.model,
                 openai_base_url=self.config.api_base,
                 temperature=self.config.temperature,
                 seed=self.config.seed,
-                port=8000,
+                port=proxy_port,
                 container_name="ridge-proxy"
             )
 
@@ -130,7 +131,7 @@ class RidgeFixerAgent(BaseFixerAgent):
                 repo_path=local_repo_path,
                 agent_path=agent_path,
                 problem_statement=problem_statement,
-                sandbox_proxy_url="http://host.docker.internal:8000",
+                sandbox_proxy_url=f"http://host.docker.internal:{proxy_port}",
                 timeout=self.config.timeout,
             )
 

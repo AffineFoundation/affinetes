@@ -1,15 +1,27 @@
 """MiniSWE Fixer Agent - wraps minisweagent library"""
 
 import os
+import sys
 import asyncio
 import base64
 import time
+import logging
+import subprocess
 from pathlib import Path
 from typing import Optional
 
 import yaml
 
 from .base import BaseFixerAgent, FixerConfig, FixerResult
+
+# Enable minisweagent logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(name)s: %(levelname)s: %(message)s',
+    stream=sys.stdout,
+    force=True,
+)
+logging.getLogger("minisweagent").setLevel(logging.DEBUG)
 
 
 class MiniSWEFixerAgent(BaseFixerAgent):
@@ -57,8 +69,21 @@ class MiniSWEFixerAgent(BaseFixerAgent):
         """Run MiniSWE agent to fix the bug"""
         try:
             from minisweagent.agents.default import DefaultAgent
-            from minisweagent.env import DockerEnvironment
-            from minisweagent.models import LitellmModel
+            from minisweagent.environments.docker import DockerEnvironment
+            from minisweagent.models.litellm_model import LitellmModel
+
+            # Pull image first (must succeed, otherwise fail fast)
+            print(f"Pulling image: {docker_image}")
+            pull_result = subprocess.run(
+                ["docker", "pull", docker_image],
+                capture_output=True,
+                timeout=300,
+                text=True,
+            )
+            if pull_result.returncode != 0:
+                raise RuntimeError(
+                    f"Failed to pull image {docker_image}: {pull_result.stderr}"
+                )
 
             # Initialize model
             model_name = self.config.model

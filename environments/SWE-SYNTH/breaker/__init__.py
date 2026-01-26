@@ -57,7 +57,9 @@ from .summarizer import (
 from .agents import (
     BaseCodeAgent,
     AgentConfig,
+    AgentResult,
     MiniSweAgent,
+    RidgeCodeAgent,
 )
 
 __all__ = [
@@ -85,4 +87,5 @@ __all__ = [
     "BaseCodeAgent",
     "AgentConfig",
     "MiniSweAgent",
+    "RidgeCodeAgent",
 ]

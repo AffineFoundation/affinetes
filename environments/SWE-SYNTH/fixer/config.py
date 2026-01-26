@@ -2,12 +2,16 @@
 
 import os
 
-RIDGE_PROJECT_PATH = "/home/ubuntu/ridges/affine-ridges-env"
+
+def _get_default_ridge_path() -> str:
+    """Get default Ridge path relative to this file"""
+    # fixer/config.py -> .. -> SWE-SYNTH -> ridges
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ridges"))
 
 
 def get_ridge_project_path() -> str:
     """Get Ridge project path (env var > default)"""
-    return os.getenv("RIDGE_PROJECT_PATH", RIDGE_PROJECT_PATH)
+    return os.getenv("RIDGE_PROJECT_PATH", _get_default_ridge_path())
 
 
 def get_ridge_agent_path() -> str:

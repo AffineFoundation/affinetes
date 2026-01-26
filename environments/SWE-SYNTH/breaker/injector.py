@@ -286,19 +286,19 @@ pwd && ls -la
 def create_injector(
     input: BreakerInput,
     config_path: Optional[Path] = None,
+    agent_type: str = "miniswe",
 ) -> BugInjector:
     """
-    Create a BugInjector with default mini-swe-agent backend.
+    Create a BugInjector with specified agent backend.
 
     Args:
         input: BreakerInput with model configuration
         config_path: Optional path to config.yaml
+        agent_type: Agent type to use ("miniswe" or "ridge")
 
     Returns:
         Configured BugInjector
     """
-    from .agents.miniswe import MiniSweAgent
-
     # Load config
     if config_path is None:
         config_path = Path(__file__).parent / "config.yaml"
@@ -319,7 +319,7 @@ def create_injector(
         docker_image=input.docker_image,
     )
 
-    # Create agent with prompt config
+    # Create prompt config
     prompt_config = {
         "system_template": injector_config.get("system_template", ""),
         "instance_template": injector_config.get("instance_template", ""),
@@ -329,6 +329,13 @@ def create_injector(
         "format_error_template": injector_config.get("format_error_template", ""),
     }
 
-    agent = MiniSweAgent(agent_config, prompt_config)
+    # Create agent based on type
+    if agent_type == "ridge":
+        from .agents.ridge import RidgeCodeAgent
+        agent = RidgeCodeAgent(agent_config, prompt_config)
+    else:
+        # Default to miniswe
+        from .agents.miniswe import MiniSweAgent
+        agent = MiniSweAgent(agent_config, prompt_config)
 
     return BugInjector(agent, config_path)

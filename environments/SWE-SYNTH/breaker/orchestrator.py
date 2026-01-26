@@ -152,19 +152,24 @@ class BreakerOrchestrator:
         return True, None
 
 
-async def run_breaker(input: BreakerInput, max_retries: int = 5) -> BreakerOutput:
+async def run_breaker(
+    input: BreakerInput,
+    max_retries: int = 5,
+    agent_type: str = "miniswe",
+) -> BreakerOutput:
     """
     Convenience function to run the complete breaker workflow.
 
     Args:
         input: BreakerInput with all configuration
         max_retries: Maximum injection attempts
+        agent_type: Agent type to use ("miniswe" or "ridge")
 
     Returns:
         BreakerOutput with bug patch and problem statement
     """
     # Create components
-    injector = create_injector(input)
+    injector = create_injector(input, agent_type=agent_type)
     summarizer = create_summarizer(input)
 
     # Create orchestrator
