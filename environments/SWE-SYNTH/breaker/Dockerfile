@@ -31,8 +31,7 @@ COPY cache.py ./
 COPY ridges/ ./ridges/
 
 ENTRYPOINT ["python", "-m", "breaker.service", \
-            "--run-scripts-dir", "/app/ridges/run_scripts", \
-            "--dockerfiles-dir", "/app/ridges/dockerfiles"]
+            "--run-scripts-dir", "/app/ridges/run_scripts"]
 
 # Default: unlimited, starting from task 0
 CMD ["--start-from", "0"]
