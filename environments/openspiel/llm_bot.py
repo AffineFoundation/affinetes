@@ -109,7 +109,7 @@ class LLMBot(pyspiel.Bot):
         })
 
         try:
-            self._observation = state.observation_string()
+            self._observation = state.observation_string(self._player_id)
         except:
             try:
                 self._observation = str(state)
@@ -360,34 +360,49 @@ class LLMBot(pyspiel.Bot):
     
     @staticmethod
     def _remove_think_tags(text: str) -> str:
-        """Remove <think>...</think> tags and their content from text
-        
+        """Remove <think>...</think> and <thinking>...</thinking> tags and their content from text
+
         This prevents conversation history from being polluted with
         model's internal reasoning, keeping only the final answer.
-        
-        Handles truncated outputs where closing </think> tag may be missing.
-        
+
+        Handles multiple formats:
+        - Complete <think>...</think> blocks
+        - Complete <thinking>...</thinking> blocks
+        - Truncated blocks (opening tag without closing tag)
+        - Malformed responses with only closing tags
+
         Args:
-            text: Raw response text potentially containing <think> tags
-            
+            text: Raw response text potentially containing think tags
+
         Returns:
-            Cleaned text with <think> blocks removed
+            Cleaned text with think blocks removed
         """
-        # Remove complete <think>...</think> blocks (non-greedy match, case-insensitive)
-        cleaned = re.sub(r'<think>.*?</think>', '', text, flags=re.DOTALL | re.IGNORECASE)
-        
-        # Handle truncated <think> blocks (opening tag without closing tag)
+        cleaned = text
+
+        # Step 1: Remove complete blocks first (non-greedy match, case-insensitive)
+        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+        cleaned = re.sub(r'<thinking>.*?</thinking>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
+
+        # Step 2: Handle malformed responses with only closing tags
+        # (e.g., opening tag was truncated or streamed separately)
+        # Take content after the last closing tag
+        if "</think>" in cleaned:
+            cleaned = cleaned.split("</think>")[-1]
+        if "</thinking>" in cleaned:
+            cleaned = cleaned.split("</thinking>")[-1]
+
+        # Step 3: Handle truncated blocks (opening tag without closing tag)
         # This can happen when output is cut off at 32k chunks
-        # After removing complete blocks, if there's still a <think> tag, it must be unclosed
-        match = re.search(r'<think>', cleaned, flags=re.IGNORECASE)
-        if match:
-            # Remove everything from the unclosed <think> tag onwards
-            cleaned = cleaned[:match.start()]
-        
+        for tag in ['<think>', '<thinking>']:
+            match = re.search(tag, cleaned, flags=re.IGNORECASE)
+            if match:
+                # Remove everything from the unclosed tag onwards
+                cleaned = cleaned[:match.start()]
+
         # Clean up extra whitespace created by removal
         cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)  # Multiple blank lines -> double newline
         cleaned = cleaned.strip()
-        
+
         return cleaned
 
     def _parse_action(self, response: str, state, legal_actions: List[int]) -> Dict:
