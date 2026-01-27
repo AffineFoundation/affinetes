@@ -18,7 +18,7 @@ async def main():
 
     image_tag = af.build_image_from_env(
         env_path="environments/openspiel",
-        image_tag="openspiel:latest"
+        image_tag="diagonalge/openspiel:latest"
     )
     
     env = af.load_env(

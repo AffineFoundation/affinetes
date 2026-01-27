@@ -191,6 +191,10 @@ class Actor:
         # Training episode states - supports concurrent episodes
         self._episodes: Dict[str, EpisodeState] = {}
         self._last_observations: Dict[str, str] = {}
+        # Store last evaluation conversation for debugging/determinism testing
+        self._last_eval_conversation: List[Dict[str, str]] = []
+        self._last_eval_responses: List[str] = []
+        self._last_eval_task_id: Optional[int] = None
 
     # ========== Helper methods for training interface ==========
 
@@ -795,6 +799,11 @@ Your choice (action ID only):"""
         temperature: float = None,
         api_key: str = None,
         opponent: str = "mcts",
+        top_p: float = 1.0,
+        top_k: int = -1,
+        repetition_penalty: float = 1.0,
+        frequency_penalty: float = 0.0,
+        presence_penalty: float = 0.0,
     ):
         """
         Run single game evaluation
@@ -808,6 +817,11 @@ Your choice (action ID only):"""
             temperature: LLM temperature (None = use model default)
             api_key: Override API key
             opponent: Opponent type ("random" or "mcts")
+            top_p: Nucleus sampling parameter (default: 1.0)
+            top_k: Top-k sampling parameter (default: -1, all tokens)
+            repetition_penalty: Penalty for repetition (default: 1.0, no penalty)
+            frequency_penalty: Penalty based on token frequency (default: 0.0)
+            presence_penalty: Penalty based on token presence (default: 0.0)
         """
         if task_id is None:
             task_id = random.randint(0, 10**11 - 1)
@@ -828,9 +842,30 @@ Your choice (action ID only):"""
                 opponent,
                 start_time,
                 timeout,
+                top_p,
+                top_k,
+                repetition_penalty,
+                frequency_penalty,
+                presence_penalty,
             ),
             timeout=timeout,
         )
+
+    async def chat_history(self) -> Dict[str, Any]:
+        """
+        Get the conversation history from the last evaluation.
+        
+        Returns:
+            Dict containing:
+                - task_id: The task ID of the last evaluation
+                - conversation: Full conversation (system, user, assistant messages)
+                - responses: Just the LLM responses
+        """
+        return {
+            "task_id": self._last_eval_task_id,
+            "conversation": self._last_eval_conversation,
+            "responses": self._last_eval_responses,
+        }
 
     async def _run_evaluation(
         self,
@@ -843,6 +878,11 @@ Your choice (action ID only):"""
         opponent,
         start_time,
         task_timeout,
+        top_p=1.0,
+        top_k=-1,
+        repetition_penalty=1.0,
+        frequency_penalty=0.0,
+        presence_penalty=0.0,
     ):
         """Internal method to run evaluation with unified error handling"""
         llm_player_id = seed % 2
@@ -891,6 +931,11 @@ Your choice (action ID only):"""
                 agent=agent,
                 seed=seed,
                 executor=self.executor,
+                top_p=top_p,
+                top_k=top_k,
+                repetition_penalty=repetition_penalty,
+                frequency_penalty=frequency_penalty,
+                presence_penalty=presence_penalty,
             )
 
             # Create bots for all players
@@ -946,6 +991,17 @@ Your choice (action ID only):"""
             llm_return = returns[llm_player_id]
             score = self._compute_score(returns, llm_player_id, game)
             log_event("request_complete", score=score, llm_return=llm_return)
+            
+            # Log full conversation and responses for determinism testing
+            if llm_bot:
+                conversation = llm_bot.get_conversation()
+                responses = llm_bot.get_responses()
+                log_event("llm_conversation", message_count=len(conversation), conversation=conversation)
+                log_event("llm_responses", count=len(responses), responses=responses)
+                # Store for retrieval via /chat_history endpoint
+                self._last_eval_conversation = conversation
+                self._last_eval_responses = responses
+                self._last_eval_task_id = task_id
 
             result = self._build_result(
                 game_name=game_name,

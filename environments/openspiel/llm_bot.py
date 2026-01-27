@@ -47,6 +47,11 @@ class LLMBot(pyspiel.Bot):
         seed: Optional[int] = None,
         max_parsing_retries: int = DEFAULT_MAX_PARSING_RETRIES,
         executor: concurrent.futures.ThreadPoolExecutor = None,
+        top_p: Optional[float] = 1.0,
+        top_k: Optional[int] = -1,
+        repetition_penalty: Optional[float] = 1.0,
+        frequency_penalty: Optional[float] = 0.0,
+        presence_penalty: Optional[float] = 0.0,
     ):
         """
         Initialize LLM Bot with conversation history support
@@ -63,6 +68,11 @@ class LLMBot(pyspiel.Bot):
             seed: Random seed for LLM API reproducibility
             max_parsing_retries: Maximum parsing retry attempts
             executor: Shared ThreadPoolExecutor for concurrent LLM calls
+            top_p: Nucleus sampling parameter (0.0-1.0)
+            top_k: Top-k sampling parameter (-1 = all tokens, vLLM-specific)
+            repetition_penalty: Penalty for repetition (vLLM-specific)
+            frequency_penalty: Penalty based on token frequency (standard OpenAI)
+            presence_penalty: Penalty based on token presence (standard OpenAI)
         """
         pyspiel.Bot.__init__(self)
         self._game = game
@@ -72,6 +82,11 @@ class LLMBot(pyspiel.Bot):
         self._model = model
         self._temperature = temperature
         self._seed = seed
+        self._top_p = top_p
+        self._top_k = top_k
+        self._repetition_penalty = repetition_penalty
+        self._frequency_penalty = frequency_penalty
+        self._presence_penalty = presence_penalty
         self._rng = np.random.RandomState(rng_seed)
         self._max_parsing_retries = max_parsing_retries
         self._agent = agent
@@ -79,6 +94,7 @@ class LLMBot(pyspiel.Bot):
 
         self._conversation: List[Dict[str, str]] = []
         self._action_history: List[Dict[str, Any]] = []
+        self._responses: List[str] = []  # Store all LLM responses for determinism testing
         self._system_prompt_generated = False
         self._last_error: Optional[str] = None
         self._total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -88,6 +104,7 @@ class LLMBot(pyspiel.Bot):
         """Reset to new game"""
         self._conversation.clear()
         self._action_history.clear()
+        self._responses.clear()
         self._system_prompt_generated = False
         self._last_error = None
         self._total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
@@ -109,7 +126,11 @@ class LLMBot(pyspiel.Bot):
         })
 
         try:
-            self._observation = state.observation_string()
+            # Pass self._player_id explicitly to avoid assertion failure at chance nodes
+            # (when current player is -1). By passing self._player_id (which is always 0 or 1),
+            # we avoid the assertion failure because we're explicitly requesting the observation
+            # for a valid player, not relying on the current player which could be -1 at chance nodes.
+            self._observation = state.observation_string(self._player_id)
         except:
             try:
                 self._observation = str(state)
@@ -152,6 +173,9 @@ class LLMBot(pyspiel.Bot):
                 self._last_error = f"[API_ERROR] {error_msg}"
                 raise APIError(f"LLM API call failed: {error_msg}")
             
+            # Store response for determinism testing
+            self._responses.append(response)
+            
             self._conversation.append({"role": "assistant", "content": response})
             
             # Parse action using the SAME legal_actions from the prompt
@@ -162,8 +186,6 @@ class LLMBot(pyspiel.Bot):
                 action = result['action']
                 self.inform_action(state, self._player_id, action)
                 return action
-            
-            # Parsing failed - use simplified error message to avoid response contamination
             error_msg = (
                 f"Invalid response format. "
                 f"You must respond with ONLY the action ID number (e.g., '5'). "
@@ -178,6 +200,13 @@ class LLMBot(pyspiel.Bot):
         
         raise RuntimeError("Should not reach here")
 
+    def get_responses(self) -> List[str]:
+        """Get all LLM responses from this game for determinism testing"""
+        return self._responses.copy()
+
+    def get_conversation(self) -> List[Dict[str, str]]:
+        """Get the full conversation history (system, user, assistant messages)"""
+        return self._conversation.copy()
 
     def _call_llm_api(self) -> Tuple[str, Dict]:
         """Call LLM API using httpx with streaming support"""
@@ -241,9 +270,20 @@ class LLMBot(pyspiel.Bot):
                 "model": self._model,
                 "messages": self._conversation,
                 "stream": True,
-                "stream_options": {"include_usage": True}
+                "stream_options": {"include_usage": True},
+                # Standard OpenAI sampling parameters (hardcoded for determinism)
+                "top_p": 0.99,
+                "presence_penalty": 0.0,
+                "frequency_penalty": 0.0,
+                # vLLM-specific parameters via extra_body
+                "extra_body": {
+                    "top_k": -1,
+                    "repetition_penalty": 1.0,
+                    "use_beam_search": False,
+                },
             }
             
+            # Standard OpenAI parameters
             if self._temperature is not None:
                 params["temperature"] = self._temperature
             
@@ -263,7 +303,6 @@ class LLMBot(pyspiel.Bot):
                     max_chunks = 32000  # ~32k token limit
                     chunk_timeout = 30.0  # Max time between chunks
                     
-                    # Create stream
                     stream = await client.chat.completions.create(**params)
                     
                     # Create async iterator from stream
