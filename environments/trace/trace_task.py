@@ -265,7 +265,7 @@ def clean_llm_prediction(prediction: str) -> str:
     prediction = re.sub(r"<think>.*?</think>", "", prediction, flags=re.DOTALL)
     prediction = re.sub(r"<thinking>.*?</thinking>", "", prediction, flags=re.DOTALL)
     
-    # Handle remaining </> or </thinking> tags for thinking models
+    # Handle remaining </think> or </thinking> tags for thinking models
     if "</think>" in prediction:
         prediction = prediction.split("</think>")[-1].strip()
     if "</thinking>" in prediction:

@@ -384,6 +384,10 @@ class LLMBot(pyspiel.Bot):
             # Remove everything from the unclosed <think> tag onwards
             cleaned = cleaned[:match.start()]
         
+        # Handle </think> tag without opening tag for deepseek
+        if "</think>" in cleaned:
+            cleaned = cleaned.split("</think>")[-1].strip()
+
         # Clean up extra whitespace created by removal
         cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)  # Multiple blank lines -> double newline
         cleaned = cleaned.strip()
