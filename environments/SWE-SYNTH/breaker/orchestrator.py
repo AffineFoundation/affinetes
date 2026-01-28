@@ -9,11 +9,13 @@ Orchestrates the complete bug injection flow:
 5. Return complete BreakerOutput
 """
 
+from dataclasses import replace
 from typing import Optional
 
 from .types import BreakerInput, BreakerOutput, InjectionResult, BreakerException
 from .injector import BugInjector, create_injector
 from .summarizer import ProblemSummarizer, create_summarizer
+from .bug_types import get_random_bug_types
 
 
 class BreakerOrchestrator:
@@ -66,20 +68,36 @@ class BreakerOrchestrator:
         """
         feedback = None
         last_injection: Optional[InjectionResult] = None
+        tried_bug_types: list[str] = []
 
         for attempt in range(self.max_retries):
-            print(f"Injection attempt {attempt + 1}/{self.max_retries}")
+            # On retry, try different bug types
+            current_input = input
+            if attempt > 0:
+                new_bug_types = get_random_bug_types(
+                    seed=input.seed,
+                    attempt=attempt,
+                    count=3,
+                    exclude=tried_bug_types,
+                )
+                if new_bug_types:
+                    # Create a copy of input with new bug types
+                    current_input = replace(input, bug_types=new_bug_types)
+                    print(f"Trying different bug types: {new_bug_types}")
+
+            tried_bug_types.extend(current_input.bug_types)
+            print(f"Injection attempt {attempt + 1}/{self.max_retries} with bug types: {current_input.bug_types}")
 
             try:
                 # Step 1: Inject bug
                 injection = await self.injector.inject(
-                    input=input,
+                    input=current_input,
                     feedback=feedback,
                 )
                 last_injection = injection
 
                 # Step 2: Verify bug effectiveness
-                is_valid, feedback = self._validate_injection(injection, input)
+                is_valid, feedback = self._validate_injection(injection, current_input)
 
                 if is_valid:
                     print(f"Bug injection successful! {len(injection.failed_tests)} tests failed.")
@@ -87,16 +105,16 @@ class BreakerOrchestrator:
                     # Step 3: Generate problem statement
                     # Pass bug_types so summarizer can describe symptoms accurately
                     problem_statement = await self.summarizer.summarize(
-                        input=input,
+                        input=current_input,
                         bug_patch=injection.bug_patch,
                         failed_tests=injection.failed_tests,
                         error_output=injection.error_output,
-                        bug_types=input.bug_types,
+                        bug_types=current_input.bug_types,
                     )
 
-                    # Step 4: Create and return output
+                    # Step 4: Create and return output (use current_input for accurate bug_types)
                     return BreakerOutput.create(
-                        input=input,
+                        input=current_input,
                         injection=injection,
                         problem_statement=problem_statement,
                     )
@@ -105,12 +123,12 @@ class BreakerOrchestrator:
 
             except Exception as e:
                 print(f"Attempt {attempt + 1} failed with error: {e}")
-                feedback = f"Previous attempt failed with error: {str(e)}"
+                feedback = f"Previous attempt failed with error: {str(e)}. Try a different bug type."
 
         # All retries exhausted
         raise BreakerException(
             f"Failed to inject valid bug after {self.max_retries} attempts. "
-            f"Last feedback: {feedback}"
+            f"Tried bug types: {tried_bug_types}. Last feedback: {feedback}"
         )
 
     def _validate_injection(

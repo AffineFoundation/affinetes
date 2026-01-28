@@ -9,6 +9,8 @@ import base64
 import json
 import random
 import re
+import tempfile
+import shutil
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
@@ -66,31 +68,42 @@ class BugInjector:
         Returns:
             InjectionResult with bug patch and test results
         """
-        # Build setup script
-        setup_script = self._build_setup_script(input)
-
-        # Build template variables for prompt
-        template_vars = self._build_template_vars(input, feedback)
-
-        # Update agent's prompt config
-        if hasattr(self.agent, 'prompt_config'):
-            self.agent.prompt_config = {
-                "system_template": self.prompt_config.get("system_template", ""),
-                "instance_template": self.prompt_config.get("instance_template", ""),
-                "action_observation_template": self.prompt_config.get(
-                    "action_observation_template", ""
-                ),
-                "format_error_template": self.prompt_config.get(
-                    "format_error_template", ""
-                ),
-            }
+        # Create temp directory for workspace files (avoids command line length issues)
+        # Use /tmp/breaker_workspaces which is mounted to host for Docker volume access
+        import os
+        workspace_base = "/tmp/breaker_workspaces"
+        os.makedirs(workspace_base, exist_ok=True)
+        workspace_dir = tempfile.mkdtemp(prefix="ws_", dir=workspace_base)
 
         try:
-            # Run the agent
+            # Write large files to workspace directory
+            self._prepare_workspace(workspace_dir, input)
+
+            # Build setup script (now much shorter, just runs init)
+            setup_script = self._build_setup_script(input)
+
+            # Build template variables for prompt
+            template_vars = self._build_template_vars(input, feedback)
+
+            # Update agent's prompt config
+            if hasattr(self.agent, 'prompt_config'):
+                self.agent.prompt_config = {
+                    "system_template": self.prompt_config.get("system_template", ""),
+                    "instance_template": self.prompt_config.get("instance_template", ""),
+                    "action_observation_template": self.prompt_config.get(
+                        "action_observation_template", ""
+                    ),
+                    "format_error_template": self.prompt_config.get(
+                        "format_error_template", ""
+                    ),
+                }
+
+            # Run the agent with workspace mounted
             result = await self.agent.run(
                 task="Inject a bug that causes tests to fail",
                 setup_script=setup_script,
                 template_vars=template_vars,
+                workspace_dir=workspace_dir,
             )
 
             if not result.diff or not result.diff.startswith("diff"):
@@ -116,23 +129,23 @@ class BugInjector:
 
         finally:
             self.agent.cleanup()
+            # Clean up temp workspace
+            shutil.rmtree(workspace_dir, ignore_errors=True)
 
-    def _build_setup_script(self, input: BreakerInput) -> str:
-        """Build the setup script that runs before agent starts"""
-        # Encode patches and scripts for transfer
-        gold_patch_b64 = base64.b64encode(
-            input.gold_patch.encode('utf-8')
-        ).decode('ascii')
+    def _prepare_workspace(self, workspace_dir: str, input: BreakerInput) -> None:
+        """Write large files to workspace directory (mounted as volume)."""
+        workspace = Path(workspace_dir)
 
-        run_script_b64 = base64.b64encode(
-            input.test_runner_script.encode('utf-8')
-        ).decode('ascii')
+        # Write gold patch
+        (workspace / "gold_patch.diff").write_text(input.gold_patch)
 
-        parser_script_b64 = base64.b64encode(
-            input.test_parser_script.encode('utf-8')
-        ).decode('ascii')
+        # Write test runner script
+        (workspace / "run_script.sh").write_text(input.test_runner_script)
 
-        # Build run_tests.sh wrapper
+        # Write parser script
+        (workspace / "parser.py").write_text(input.test_parser_script)
+
+        # Write run_tests.sh wrapper
         run_tests_script = f"""#!/bin/bash
 cd /app
 {input.env_cmds}
@@ -158,13 +171,10 @@ else
     echo "No test output found"
 fi
 """
-        run_tests_b64 = base64.b64encode(
-            run_tests_script.encode('utf-8')
-        ).decode('ascii')
+        (workspace / "run_tests.sh").write_text(run_tests_script)
 
-        # Build init script
+        # Write init script
         init_script = f"""#!/bin/bash
-mkdir -p /workspace
 cd /app
 git reset --hard {input.base_commit}
 git checkout {input.base_commit}
@@ -181,18 +191,14 @@ git add -A
 git commit -m "Apply gold patch - baseline for bug injection"
 echo "Gold patch committed. Agent's changes will be tracked from here."
 """
-        init_script_b64 = base64.b64encode(
-            init_script.encode('utf-8')
-        ).decode('ascii')
+        (workspace / "init.sh").write_text(init_script)
 
-        # Full setup script
-        setup_script = f"""#!/bin/bash
-mkdir -p /workspace
-echo "{gold_patch_b64}" | base64 -d > /workspace/gold_patch.diff
-echo "{run_script_b64}" | base64 -d > /workspace/run_script.sh
-echo "{parser_script_b64}" | base64 -d > /workspace/parser.py
-echo "{run_tests_b64}" | base64 -d > /workspace/run_tests.sh
-echo "{init_script_b64}" | base64 -d > /workspace/init.sh
+    def _build_setup_script(self, input: BreakerInput) -> str:
+        """Build the setup script that runs before agent starts.
+
+        Note: Large files are already mounted via volume, so this script is short.
+        """
+        setup_script = """#!/bin/bash
 chmod +x /workspace/run_script.sh /workspace/run_tests.sh /workspace/init.sh
 bash /workspace/init.sh
 echo "Setup complete. Working directory: /app"

@@ -20,6 +20,31 @@ Environment variables:
 
 import os
 import sys
+import logging
+
+# Disable verbose logging BEFORE any imports
+os.environ["LITELLM_LOG"] = "ERROR"
+os.environ["HTTPX_LOG_LEVEL"] = "ERROR"
+
+
+class NoDebugFilter(logging.Filter):
+    """Filter out all DEBUG level messages."""
+    def filter(self, record):
+        return record.levelno >= logging.INFO
+
+
+# Apply filter to root logger to block ALL debug messages
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s [%(levelname)s] %(message)s',
+    datefmt='%H:%M:%S'
+)
+for handler in logging.root.handlers:
+    handler.addFilter(NoDebugFilter())
+
+# Also set root logger level
+logging.root.setLevel(logging.INFO)
+
 import json
 import time
 import random
@@ -30,6 +55,23 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
 import boto3
+import litellm
+litellm.suppress_debug_info = True
+litellm.set_verbose = False
+
+# Silence noisy loggers AFTER imports
+_noisy_loggers = [
+    "httpcore", "httpx", "botocore", "boto3", "urllib3",
+    "filelock", "fsspec", "litellm", "LiteLLM",
+    "huggingface_hub", "datasets", "aiohttp", "asyncio",
+    "httpcore.http11", "httpcore.connection",
+    "minisweagent", "minisweagent.environment",
+]
+for _name in _noisy_loggers:
+    _logger = logging.getLogger(_name)
+    _logger.setLevel(logging.ERROR)
+    _logger.handlers = []
+    _logger.propagate = False
 from botocore.config import Config
 from botocore.exceptions import ClientError
 from datasets import load_dataset
@@ -40,6 +82,12 @@ from .bug_types import BUG_TYPES
 
 # Claim expires after 30 minutes (task generation timeout)
 CLAIM_TIMEOUT = 1800
+
+
+def log(msg: str) -> None:
+    """Print log message with timestamp."""
+    ts = time.strftime("%H:%M:%S")
+    print(f"[{ts}] {msg}")
 
 
 def get_dockerhub_image_uri(uid: str, dockerhub_username: str, repo_name: str) -> str:
@@ -458,14 +506,21 @@ class BreakerService:
         except ClientError:
             return False
 
-    def save_task(self, task_id: int, data: Dict[str, Any]) -> None:
-        """Save task to R2."""
-        self.s3.put_object(
-            Bucket=self.r2_bucket,
-            Key=self._get_task_key(task_id),
-            Body=json.dumps(data, indent=2, default=str).encode('utf-8'),
-            ContentType='application/json'
-        )
+    def save_task(self, task_id: int, data: Dict[str, Any]) -> bool:
+        """Save task to R2. Returns True if successful."""
+        key = self._get_task_key(task_id)
+        try:
+            self.s3.put_object(
+                Bucket=self.r2_bucket,
+                Key=key,
+                Body=json.dumps(data, indent=2, default=str).encode('utf-8'),
+                ContentType='application/json'
+            )
+            log(f"[Task {task_id}] ✓ Uploaded to R2: {key}")
+            return True
+        except Exception as e:
+            log(f"[Task {task_id}] ✗ Upload failed: {e}")
+            return False
 
     def decode_task_id(self, task_id: int) -> Dict[str, Any]:
         """
@@ -604,19 +659,22 @@ class BreakerService:
             - (False, None) if generation failed
         """
         if self.task_exists(task_id):
-            print(f"Task {task_id} already exists, skipping")
+            log(f"[Task {task_id}] Already exists, skipping")
             return True, None
 
         params = self.decode_task_id(task_id)
         swe_inst = params["swe_instance"]
         instance_id = swe_inst["instance_id"]
+        bug_types = params['bug_types']
 
-        print(f"Generating task {task_id}: {instance_id}, bug_types={params['bug_types']}")
+        log(f"[Task {task_id}] Starting generation")
+        log(f"[Task {task_id}] Instance: {instance_id}")
+        log(f"[Task {task_id}] Bug types: {bug_types}")
 
         try:
             breaker_input = self._build_breaker_input(params)
         except RuntimeError as e:
-            print(f"Task {task_id} skipped (no scripts): {e}")
+            log(f"[Task {task_id}] Skipped (no scripts): {e}")
             return False, None
 
         try:
@@ -625,9 +683,10 @@ class BreakerService:
                 max_retries=max_retries,
                 agent_type=self.agent_type,
             )
+            log(f"[Task {task_id}] Generation successful")
             return True, output.to_dict()
         except BreakerException as e:
-            print(f"Task {task_id} failed: {e}")
+            log(f"[Task {task_id}] Generation failed: {e}")
             return False, None
 
     def _update_metadata(self, task_id: int, success: bool) -> None:
@@ -719,9 +778,11 @@ class BreakerService:
         tasks_failed = 0
         consecutive_no_work = 0
 
-        print(f"Starting breaker service")
-        print(f"Machine ID: {self.machine_id}")
-        print(f"Scanning from task_id={scan_from}")
+        log("=" * 50)
+        log("Starting breaker service")
+        log(f"Machine ID: {self.machine_id}")
+        log(f"Scanning from task_id={scan_from}")
+        log("=" * 50)
 
         while max_tasks is None or tasks_processed < max_tasks:
             # Find next available task
@@ -732,10 +793,10 @@ class BreakerService:
                 if consecutive_no_work >= 3:
                     # No work available, advance scan window
                     scan_from += 100
-                    print(f"No available tasks, advancing scan to {scan_from}")
+                    log(f"No available tasks, advancing scan to {scan_from}")
                     consecutive_no_work = 0
                 else:
-                    print("No available tasks, waiting...")
+                    log("No available tasks, waiting...")
                     await asyncio.sleep(5)
                 continue
 
@@ -743,7 +804,7 @@ class BreakerService:
 
             # Try to claim the task
             if not self.try_claim_task(task_id):
-                print(f"Task {task_id} claimed by another worker, skipping")
+                log(f"[Task {task_id}] Claimed by another worker, skipping")
                 continue
 
             # Check if already completed (claim returned True because task exists)
@@ -757,12 +818,18 @@ class BreakerService:
                 success, result = await self.generate_task(task_id)
 
                 if success and result is not None:
-                    self.save_task(task_id, result)
-                    tasks_generated += 1
-                    print(f"Task {task_id} saved (total generated: {tasks_generated})")
+                    upload_ok = self.save_task(task_id, result)
+                    if upload_ok:
+                        tasks_generated += 1
+                        log(f"[Task {task_id}] ✓ Complete (total: {tasks_generated} generated, {tasks_failed} failed)")
+                        # Only advance scan_from on successful upload
+                        scan_from = max(scan_from, task_id + 1)
+                    else:
+                        tasks_failed += 1
+                        log(f"[Task {task_id}] ✗ Upload failed, will retry (total: {tasks_generated} generated, {tasks_failed} failed)")
                 elif not success:
                     tasks_failed += 1
-                    print(f"Task {task_id} failed (total failed: {tasks_failed})")
+                    log(f"[Task {task_id}] ✗ Generation failed, will retry (total: {tasks_generated} generated, {tasks_failed} failed)")
 
                 tasks_processed += 1
 
@@ -773,14 +840,13 @@ class BreakerService:
                 # Always release claim
                 self._release_claim(task_id)
 
-            # Advance scan position
-            scan_from = max(scan_from, task_id + 1)
-
             # Progress logging
             if tasks_processed % batch_size == 0:
-                print(f"Progress: {tasks_processed} processed, {tasks_generated} generated, {tasks_failed} failed")
+                log(f"Progress: {tasks_processed} processed, {tasks_generated} generated, {tasks_failed} failed")
 
-        print(f"Completed: {tasks_processed} tasks processed, {tasks_generated} generated, {tasks_failed} failed")
+        log("=" * 50)
+        log(f"Completed: {tasks_processed} tasks processed, {tasks_generated} generated, {tasks_failed} failed")
+        log("=" * 50)
 
 
 def main():

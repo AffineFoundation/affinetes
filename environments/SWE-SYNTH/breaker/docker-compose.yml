@@ -8,6 +8,8 @@ services:
     volumes:
       # Docker socket for Docker-in-Docker
       - /var/run/docker.sock:/var/run/docker.sock
+      # Shared workspace for volume mounts (host path = container path)
+      - /tmp/breaker_workspaces:/tmp/breaker_workspaces
     environment:
       - CHUTES_API_KEY=${CHUTES_API_KEY}
       - R2_ENDPOINT_URL=${R2_ENDPOINT_URL}

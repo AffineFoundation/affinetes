@@ -70,6 +70,7 @@ class BaseCodeAgent(ABC):
         task: str,
         setup_script: str,
         template_vars: Optional[Dict[str, Any]] = None,
+        workspace_dir: Optional[str] = None,
     ) -> AgentResult:
         """
         Run the agent to complete a task in Docker environment.
@@ -79,6 +80,7 @@ class BaseCodeAgent(ABC):
             setup_script: Shell script to run before agent starts
                          (sets up environment, applies patches, etc.)
             template_vars: Variables to substitute in prompt templates
+            workspace_dir: Host directory to mount as /workspace (optional)
 
         Returns:
             AgentResult with diff, output text, and execution metrics

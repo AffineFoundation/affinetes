@@ -14,13 +14,14 @@ from typing import Dict, Any, Optional
 
 from .base import BaseCodeAgent, AgentConfig, AgentResult
 
-# Enable minisweagent logging
+# Configure logging - only show INFO and above
 logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(name)s: %(levelname)s: %(message)s',
+    level=logging.INFO,
+    format='%(asctime)s | %(message)s',
+    datefmt='%H:%M:%S',
     stream=sys.stdout,
 )
-logging.getLogger("minisweagent").setLevel(logging.DEBUG)
+logging.getLogger("minisweagent").setLevel(logging.INFO)
 
 
 class MiniSweAgent(BaseCodeAgent):
@@ -52,6 +53,7 @@ class MiniSweAgent(BaseCodeAgent):
         task: str,
         setup_script: str,
         template_vars: Optional[Dict[str, Any]] = None,
+        workspace_dir: Optional[str] = None,
     ) -> AgentResult:
         """
         Run the agent to complete a task.
@@ -60,6 +62,7 @@ class MiniSweAgent(BaseCodeAgent):
             task: Task description for the agent
             setup_script: Setup script to run before agent starts
             template_vars: Variables for prompt templates
+            workspace_dir: Host directory to mount as /workspace (optional)
 
         Returns:
             AgentResult with diff and execution metrics
@@ -93,12 +96,18 @@ class MiniSweAgent(BaseCodeAgent):
 
         # Initialize Docker environment
         container_lifetime = max(1800, self.config.timeout * 10)
+
+        # Build run_args with optional workspace volume mount
+        run_args = ["--rm", "--entrypoint", ""]
+        if workspace_dir:
+            run_args.extend(["-v", f"{workspace_dir}:/workspace"])
+
         self.env = DockerEnvironment(
             image=self.config.docker_image,
             cwd=self.config.cwd,
             timeout=self.config.timeout,
             executable="docker",
-            run_args=["--rm", "--entrypoint", ""],
+            run_args=run_args,
             container_timeout=str(container_lifetime),
         )
 

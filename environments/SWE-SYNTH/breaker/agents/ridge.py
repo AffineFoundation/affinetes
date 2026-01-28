@@ -112,6 +112,7 @@ class RidgeCodeAgent(BaseCodeAgent):
         task: str,
         setup_script: str,
         template_vars: Optional[Dict[str, Any]] = None,
+        workspace_dir: Optional[str] = None,
     ) -> AgentResult:
         """
         Run the Ridge agent to complete a task.
@@ -120,6 +121,7 @@ class RidgeCodeAgent(BaseCodeAgent):
             task: Task description for the agent
             setup_script: Setup script to run before agent starts
             template_vars: Variables for prompt templates
+            workspace_dir: Host directory to mount (not used by Ridge, kept for interface)
 
         Returns:
             AgentResult with diff and execution metrics

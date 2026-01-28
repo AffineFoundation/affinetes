@@ -9,6 +9,7 @@ from typing import List, Dict, Any
 
 # All supported bug types
 BUG_TYPES = [
+    # Basic bug types (simple pattern changes)
     "off-by-one",           # Boundary errors (< vs <=, > vs >=)
     "logic-inversion",      # Logic errors (and vs or, == vs !=)
     "wrong-variable",       # Using wrong variable
@@ -22,6 +23,15 @@ BUG_TYPES = [
     "order-dependency",     # Wrong order of operations
     "early-exit",           # Premature return/break/continue
     "wrong-default",        # Wrong default value
+    # Complex bug types (require code comprehension)
+    "missing-edge-case",    # Missing handling for edge cases (empty, null, boundary)
+    "state-corruption",     # State not properly updated or reset
+    "semantic-error",       # Code runs but produces wrong result due to logic error
+    "wrong-context",        # Using value from wrong context/scope
+    "incomplete-update",    # Partial update leaving inconsistent state
+    "silent-failure",       # Error condition not properly signaled
+    "resource-leak",        # Resource not properly released
+    "timing-error",         # Wrong timing/sequencing in async code
 ]
 
 
@@ -128,6 +138,79 @@ BUG_TYPE_DESCRIPTIONS: Dict[str, Dict[str, Any]] = {
             "enabled = True → enabled = False",
         ]
     },
+    # Complex bug types that require code comprehension
+    "missing-edge-case": {
+        "description": "Missing handling for edge cases like empty input, null values, or boundary conditions",
+        "examples": [
+            "Function works for normal arrays but crashes on empty array []",
+            "No check for division by zero in percentage calculation",
+            "Missing handling for unicode characters in string processing",
+            "Boundary not checked: allows index -1 or length+1",
+        ]
+    },
+    "state-corruption": {
+        "description": "State not properly updated, reset, or synchronized between operations",
+        "examples": [
+            "Counter not reset between loop iterations, accumulates wrong total",
+            "Cache not invalidated after data update, returns stale value",
+            "Flag not cleared after operation, affects subsequent calls",
+            "Shared state modified without proper initialization check",
+        ]
+    },
+    "semantic-error": {
+        "description": "Code runs without errors but produces wrong result due to misunderstanding",
+        "examples": [
+            "Uses createdAt timestamp instead of updatedAt for 'last modified'",
+            "Compares object reference instead of object value",
+            "Processes parent node instead of child node in tree traversal",
+            "Returns count of all items instead of filtered items",
+        ]
+    },
+    "wrong-context": {
+        "description": "Using value from wrong context, scope, or object",
+        "examples": [
+            "Uses this.userId instead of target.userId in permission check",
+            "Reads from request.query instead of request.body",
+            "Uses outer loop variable instead of inner loop variable",
+            "Accesses parent scope variable that shadows local intention",
+        ]
+    },
+    "incomplete-update": {
+        "description": "Partial update leaving data in inconsistent state",
+        "examples": [
+            "Updates user.name but forgets to update user.displayName",
+            "Removes item from list but not from associated index/map",
+            "Changes status flag but not the corresponding timestamp",
+            "Updates primary record but not the denormalized copies",
+        ]
+    },
+    "silent-failure": {
+        "description": "Error condition not properly signaled or propagated",
+        "examples": [
+            "Returns empty result instead of throwing on invalid input",
+            "Logs error but continues with corrupted data",
+            "Catches exception and returns default instead of re-raising",
+            "Validation fails silently, allowing invalid state to persist",
+        ]
+    },
+    "resource-leak": {
+        "description": "Resource not properly released or cleaned up",
+        "examples": [
+            "File handle not closed in error path",
+            "Database connection not returned to pool on exception",
+            "Event listener not removed on component unmount",
+            "Timer/interval not cleared when no longer needed",
+        ]
+    },
+    "timing-error": {
+        "description": "Wrong timing or sequencing in async operations",
+        "examples": [
+            "Await missing, proceeds before async operation completes",
+            "Callback registered after event could have fired",
+            "Race condition: check-then-act without atomicity",
+            "Promise not properly chained, loses error context",
+        ]
+    },
 }
 
 
@@ -154,3 +237,34 @@ def format_bug_types_for_prompt(bug_types: List[str]) -> str:
 def validate_bug_types(bug_types: List[str]) -> List[str]:
     """Validate and return only known bug types"""
     return [bt for bt in bug_types if bt in BUG_TYPES]
+
+
+def get_random_bug_types(
+    seed: int,
+    attempt: int,
+    count: int = 3,
+    exclude: List[str] = None,
+) -> List[str]:
+    """
+    Get random bug types for an attempt.
+
+    Each attempt gets different bug types to increase variety.
+
+    Args:
+        seed: Base random seed
+        attempt: Current attempt number (used to vary selection)
+        count: Number of bug types to return
+        exclude: Bug types to exclude (e.g., already tried)
+
+    Returns:
+        List of randomly selected bug types
+    """
+    import random
+
+    rng = random.Random(seed + attempt * 1000)
+    available = [t for t in BUG_TYPES if t not in (exclude or [])]
+
+    if len(available) <= count:
+        return available
+
+    return rng.sample(available, count)
