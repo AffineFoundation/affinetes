@@ -643,7 +643,7 @@ class BreakerService:
             env_cmds=env_cmds,
             before_repo_set_cmd=before_repo_set_cmd,
             temperature=0.7,
-            max_iterations=30,
+            max_iterations=50,
             cost_limit=5.0,
             timeout=300,
         )
