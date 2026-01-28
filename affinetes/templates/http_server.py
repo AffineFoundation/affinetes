@@ -228,14 +228,52 @@ async def call_method(call: MethodCall):
     else:
         raise HTTPException(404, f"Method not found: {call.method}")
     
-    # Execute method directly - timeout is handled by caller via _timeout parameter
-    # The 'timeout' kwarg is passed through to the method for its internal use (e.g., LLM API timeout)
+    # Read timeout (seconds). Note: `timeout` is also forwarded to the user method via
+    # **call.kwargs (unchanged).
+    #
+    # Why enforce a server-side timeout?
+    # - If a call hangs (especially sync code running in the thread pool), the request can
+    #   block forever. Over time, stuck calls can pile up and exhaust executor workers,
+    #   eventually making the server unable to process new requests.
+    # - `asyncio.wait_for` is a best-effort guardrail: it stops *waiting* and returns an
+    #   error to the client, but it cannot forcibly kill a blocked thread (it may continue
+    #   running in the background and occupy a worker).
+    timeout = call.kwargs.get("timeout")
+    timeout_s = None
+    if timeout is not None:
+        try:
+            timeout_s = float(timeout)
+        except (TypeError, ValueError):
+            return MethodResponse(
+                status="failed",
+                result={"error": "Invalid timeout; expected a number of seconds."},
+            )
+    # Add a small grace period for server-side enforcement to avoid cutting off user code
+    # that uses the same timeout internally.
+    enforcement_timeout_s = None if timeout_s is None else timeout_s + 10.0
+
+    # Execute with optional timeout enforcement
     try:
-        if inspect.iscoroutinefunction(func):
-            result = await func(*call.args, **call.kwargs)
-        else:
-            loop = asyncio.get_event_loop()
-            result = await loop.run_in_executor(None, lambda: func(*call.args, **call.kwargs))
+        # Build an awaitable unit of work (sync -> thread pool, async -> await directly)
+        exec_coro = (
+            func(*call.args, **call.kwargs)
+            if inspect.iscoroutinefunction(func)
+            else asyncio.to_thread(func, *call.args, **call.kwargs)
+        )
+
+        try:
+            result = (
+                await asyncio.wait_for(exec_coro, timeout=enforcement_timeout_s)
+                if timeout_s is not None
+                else await exec_coro
+            )
+        except asyncio.TimeoutError:
+            return MethodResponse(
+                status="failed",
+                result={
+                    "error": f"Task execution exceeded timeout of {timeout_s}s (+10s grace)"
+                },
+            )
 
         return MethodResponse(status="success", result=_serialize_result(result))
     except Exception as e:
