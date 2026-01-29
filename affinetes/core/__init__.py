@@ -12,6 +12,9 @@ _LAZY_EXPORTS = {
     "OpenEnvResponse",
     # helpers
     "llm_chat",
+    "ChatResult",
+    "remove_think_tags",
+    "create_client",
 }
 
 
@@ -36,9 +39,10 @@ def __getattr__(name: str):
         from .openenv import ResetRequest, StepRequest, OpenEnvResponse
         return {"ResetRequest": ResetRequest, "StepRequest": StepRequest, "OpenEnvResponse": OpenEnvResponse}[name]
 
-    if name == "llm_chat":
-        from .llm_chat import llm_chat
-        return llm_chat
+    if name in {"llm_chat", "ChatResult", "remove_think_tags", "create_client"}:
+        from .llm_chat import llm_chat, ChatResult, remove_think_tags, create_client
+        return {"llm_chat": llm_chat, "ChatResult": ChatResult,
+                "remove_think_tags": remove_think_tags, "create_client": create_client}[name]
 
     raise AttributeError(f"module 'affinetes.core' has no attribute {name!r}")
 
