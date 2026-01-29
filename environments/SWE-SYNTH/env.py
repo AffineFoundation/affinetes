@@ -452,19 +452,29 @@ fi
         # Verify fix
         print("Verifying fix...")
         if not fix_patch or not fix_patch.strip():
-            # Distinguish between different failure reasons
+            # Distinguish between infrastructure errors vs model failures
+            # Following openspiel pattern:
+            # - Infrastructure errors (timeout, API, docker): set error field (invalid sample, can retry)
+            # - Model completed but no patch: no error field (valid sample, model just failed)
             if result.error:
-                # Fixer had an error (timeout, API failure, etc.)
-                error_msg = result.error
-                if "timeout" in error_msg.lower():
-                    test_stats = {"error": "fixer_timeout", "details": error_msg}
-                elif "api" in error_msg.lower() or "authentication" in error_msg.lower():
-                    test_stats = {"error": "api_error", "details": error_msg}
+                error_msg = result.error.lower()
+                if "timeout" in error_msg or "timed out" in error_msg:
+                    # Infrastructure timeout - invalid sample
+                    test_stats = {"error": "fixer_timeout", "details": result.error}
+                elif "api" in error_msg or "authentication" in error_msg or "connection" in error_msg or "network" in error_msg:
+                    # API/network error - invalid sample
+                    test_stats = {"error": "api_error", "details": result.error}
+                elif "docker" in error_msg or "container" in error_msg:
+                    # Docker infrastructure error - invalid sample
+                    test_stats = {"error": "docker_error", "details": result.error}
                 else:
-                    test_stats = {"error": "fixer_error", "details": error_msg}
+                    # Other fixer errors that might be infrastructure related
+                    test_stats = {"error": "fixer_error", "details": result.error}
             else:
-                # Model returned but didn't generate a valid patch
-                test_stats = {"error": "no_patch_generated", "details": "Model completed but produced no patch"}
+                # Model completed execution but didn't generate a valid patch
+                # This is a valid sample - model just couldn't solve the problem
+                # No error field = valid sample with score 0
+                test_stats = {"failure_reason": "no_patch_generated"}
             score = 0.0
         else:
             score, test_stats = self._verify_fix(bug_instance, fix_patch)
