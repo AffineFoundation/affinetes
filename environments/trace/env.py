@@ -8,8 +8,6 @@ Supports two modes:
 import os
 import time
 import gc
-import httpx
-import openai
 import sys
 import random
 import uuid
@@ -26,6 +24,7 @@ from trace_task import TraceTask
 from request_logger import RequestLogger, log_event
 
 from affinetes.core.openenv import OpenEnvResponse
+from affinetes.core.llm_chat import llm_chat
 
 
 @dataclass
@@ -310,75 +309,7 @@ Test Result: {test_result}
         return {"status": "ok", "stopped": True, "episode_id": episode_id}
 
     # ========== Original Evaluation Interface ==========
-    
-    async def _llm_chat(self, prompt, model, base_url, timeout, temperature, current_api_key, seed=None):
-        """Call LLM API with specified API key and optional seed (streaming mode)"""
-        # Unset SSL_CERT_FILE to avoid certificate path issues in container
-        # Let httpx/certifi use default certificate bundle
-        os.environ.pop('SSL_CERT_FILE', None)
-        os.environ.pop('REQUESTS_CA_BUNDLE', None)
-        
-        client = openai.AsyncOpenAI(
-            base_url=base_url.rstrip('/'),
-            api_key=current_api_key,
-            timeout=httpx.Timeout(timeout),
-            max_retries=0
-        )
 
-        # Prepare API call parameters with streaming enabled
-        params = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": True,
-            "stream_options": {"include_usage": True}
-        }
-        
-        # Add temperature if provided
-        if temperature is not None:
-            params["temperature"] = temperature
-        
-        # Add seed if provided
-        if seed is not None:
-            params["seed"] = seed
-
-        stream = await client.chat.completions.create(**params)
-        
-        # Collect streamed content and usage
-        content_parts = []
-        reasoning_parts = []  # Collect reasoning content for o1-style models
-        usage = None
-
-        async for chunk in stream:
-            # Collect content chunks and reasoning chunks
-            if chunk.choices and chunk.choices[0].delta:
-                delta = chunk.choices[0].delta
-
-                # Collect regular content
-                if delta.content:
-                    content_parts.append(delta.content)
-
-                # Collect reasoning content (for o1-style reasoning models)
-                if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                    reasoning_parts.append(delta.reasoning_content)
-
-            # Collect usage information from the final chunk
-            if chunk.usage:
-                usage = chunk.usage.model_dump()
-
-        # Combine all content parts
-        if not content_parts:
-            # Return None for empty content (e.g., token limit exhausted during reasoning)
-            # This will result in 0 score rather than raising an error
-            return None, usage
-
-        content = "".join(content_parts)
-        if not content:
-            # Return None for empty content (e.g., token limit exhausted during reasoning)
-            return None, usage
-
-        # Return both content and usage information
-        return content.strip(), usage
-    
     async def evaluate(
         self,
         model="deepseek-ai/DeepSeek-V3",
@@ -434,7 +365,17 @@ Test Result: {test_result}
         log_event("llm_call_start")
         usage = None
         try:
-            resp, usage = await self._llm_chat(challenge.prompt, model, base_url, timeout, temperature, current_api_key, seed)
+            result = await llm_chat(
+                messages=[{"role": "user", "content": challenge.prompt}],
+                model=model,
+                base_url=base_url,
+                api_key=current_api_key,
+                timeout=timeout,
+                temperature=temperature,
+                seed=seed,
+                stream=True,
+            )
+            resp, usage = result.content, result.usage
             error = None
             log_event("llm_call_complete", response_length=len(resp) if resp else 0)
         except Exception as e:

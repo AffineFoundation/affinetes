@@ -6,11 +6,10 @@ import numpy as np
 import asyncio
 import re
 import concurrent.futures
-import httpx
-import openai
 from typing import Tuple, Optional, Dict, List, Any
 
 from base_agent import BaseGameAgent
+from affinetes.core.llm_chat import llm_chat
 
 # Constants
 DEFAULT_MAX_PARSING_RETRIES = 2
@@ -180,12 +179,26 @@ class LLMBot(pyspiel.Bot):
 
 
     def _call_llm_api(self) -> Tuple[str, Dict]:
-        """Call LLM API using httpx with streaming support"""
+        """Call LLM API via shared llm_chat helper with streaming + retries"""
+        async def _run():
+            result = await llm_chat(
+                messages=self._conversation,
+                model=self._model,
+                base_url=self._base_url,
+                api_key=self._api_key,
+                temperature=self._temperature,
+                seed=self._seed,
+                stream=True,
+                max_retries=10,
+                strip_think_tags=True,
+            )
+            return result.content or "", result.usage
+
         def run_async():
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
             try:
-                result = loop.run_until_complete(self._llm_chat_async())
+                result = loop.run_until_complete(_run())
                 pending = asyncio.all_tasks(loop)
                 if pending:
                     loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
@@ -198,212 +211,14 @@ class LLMBot(pyspiel.Bot):
         if self._executor:
             result = self._executor.submit(run_async).result()
         else:
-            # Fallback for backward compatibility
             with concurrent.futures.ThreadPoolExecutor(max_workers=1) as executor:
                 result = executor.submit(run_async).result()
-        
-        # Update usage statistics and clean response
+
         response, usage = result
         if usage:
             self._total_usage = usage.copy()
-        
-        # Remove <think> tags and content from response before storing
-        response = self._remove_think_tags(response)
-        
+
         return response, usage
-    
-    async def _llm_chat_async(self) -> Tuple[str, Dict]:
-        """Call LLM API with streaming using AsyncOpenAI
-        
-        Returns:
-            Tuple of (response_text, usage_dict)
-        """
-        # Unset SSL cert environment variables to avoid container issues
-        os.environ.pop("SSL_CERT_FILE", None)
-        os.environ.pop("REQUESTS_CA_BUNDLE", None)
-        
-        # Create OpenAI client
-        client = openai.AsyncOpenAI(
-            base_url=self._base_url.rstrip("/"),
-            api_key=self._api_key,
-            timeout=httpx.Timeout(
-                connect=10.0,
-                read=20.0,  # Per-chunk timeout
-                write=10.0,
-                pool=10.0
-            ),
-            max_retries=0  # Handle retries manually
-        )
-        
-        try:
-            # Prepare API parameters
-            params = {
-                "model": self._model,
-                "messages": self._conversation,
-                "stream": True,
-                "stream_options": {"include_usage": True}
-            }
-            
-            if self._temperature is not None:
-                params["temperature"] = self._temperature
-            
-            if self._seed is not None:
-                params["seed"] = self._seed
-            
-            content_parts = []
-            reasoning_parts = []  
-            usage = None
-            
-            # Retry logic (max 10 retries with exponential backoff)
-            max_retries = 10
-            for attempt in range(max_retries):
-                try:
-                    content_parts.clear()
-                    chunk_count = 0
-                    max_chunks = 32000  # ~32k token limit
-                    chunk_timeout = 30.0  # Max time between chunks
-                    
-                    # Create stream
-                    stream = await client.chat.completions.create(**params)
-                    
-                    # Create async iterator from stream
-                    chunk_iter = stream.__aiter__()
-                    
-                    while True:
-                        try:
-                            # Wait for next chunk with timeout
-                            chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=chunk_timeout)
-                        except StopAsyncIteration:
-                            break
-                        except asyncio.TimeoutError:
-                            raise TimeoutError(f"Stream timeout: no chunk received for {chunk_timeout}s")
-                        
-                        chunk_count += 1
-                        
-                        if chunk.choices and chunk.choices[0].delta:
-                            delta = chunk.choices[0].delta
-
-                            # Collect regular content
-                            if delta.content:
-                                content_parts.append(delta.content)
-
-                            # Collect reasoning content (for o1-style reasoning models)
-                            if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                                reasoning_parts.append(delta.reasoning_content)
-
-                            # Apply chunk limit (approximate token limit)
-                            if chunk_count >= max_chunks:
-                                break
-                        
-                        # Collect usage information
-                        if chunk.usage:
-                            usage = chunk.usage.model_dump()
-                    
-                    # Close stream
-                    try:
-                        await asyncio.wait_for(stream.response.aclose(), timeout=5.0)
-                    except asyncio.TimeoutError:
-                        pass  # Best effort cleanup
-                    except Exception:
-                        pass
-                    
-                    # Validate content
-                    if not content_parts:
-                        return "", usage
-
-                    content = "".join(content_parts)
-                    if not content:
-                        return "", usage
-                    break  # Success, exit retry loop
-                    
-                except (TimeoutError, openai.APITimeoutError, openai.APIConnectionError) as e:
-                    # Retry on timeout and connection errors
-                    if attempt < max_retries - 1:
-                        wait_time = min(2 ** attempt, 32)
-                        await asyncio.sleep(wait_time)
-                    else:
-                        raise ValueError(f"API call failed after {max_retries} retries: {e}")
-                        
-                except openai.BadRequestError as e:
-                    # Don't retry on context length or other client errors
-                    error_msg = str(e)
-                    if "is longer than the model" in error_msg or "context_length_exceeded" in error_msg:
-                        raise ValueError(f"Context length exceeded: {error_msg}") from e
-                    raise ValueError(f"API error: {error_msg}") from e
-                    
-                except openai.APIStatusError as e:
-                    # Retry on server errors (5xx), fail on client errors (4xx)
-                    if e.status_code >= 500:
-                        if attempt < max_retries - 1:
-                            wait_time = min(2 ** attempt, 32)
-                            await asyncio.sleep(wait_time)
-                        else:
-                            raise ValueError(f"API call failed after {max_retries} retries: {e}")
-                    else:
-                        raise ValueError(f"API error {e.status_code}: {e.message}") from e
-                        
-                except ValueError as e:
-                    # Retry on empty content errors
-                    if "empty content stream" in str(e) or "None content" in str(e):
-                        if attempt < max_retries - 1:
-                            wait_time = min(2 ** attempt, 32)
-                            await asyncio.sleep(wait_time)
-                        else:
-                            raise ValueError(f"API call failed after {max_retries} retries: {e}")
-                    else:
-                        raise
-            
-            return content.strip(), usage
-            
-        finally:
-            await client.close()
-    
-    @staticmethod
-    def _remove_think_tags(text: str) -> str:
-        """Remove <think>...</think> and <thinking>...</thinking> tags and their content from text
-
-        This prevents conversation history from being polluted with
-        model's internal reasoning, keeping only the final answer.
-
-        Handles multiple formats:
-        - Complete <think>...</think> blocks
-        - Complete <thinking>...</thinking> blocks
-        - Truncated blocks (opening tag without closing tag)
-        - Malformed responses with only closing tags
-
-        Args:
-            text: Raw response text potentially containing think tags
-
-        Returns:
-            Cleaned text with think blocks removed
-        """
-        cleaned = text
-
-        # Step 1: Remove complete blocks first (non-greedy match, case-insensitive)
-        cleaned = re.sub(r'<think>.*?</think>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
-        cleaned = re.sub(r'<thinking>.*?</thinking>', '', cleaned, flags=re.DOTALL | re.IGNORECASE)
-
-        # Step 2: Handle malformed responses with only closing tags
-        # (e.g., opening tag was truncated or streamed separately)
-        # Take content after the last closing tag
-        if "</think>" in cleaned:
-            cleaned = cleaned.split("</think>")[-1]
-        if "</thinking>" in cleaned:
-            cleaned = cleaned.split("</thinking>")[-1]
-
-        # Step 3: Handle truncated blocks (opening tag without closing tag)
-        # This can happen when output is cut off at 32k chunks
-        for tag in ['<think>', '<thinking>']:
-            match = re.search(tag, cleaned, flags=re.IGNORECASE)
-            if match:
-                # Remove everything from the unclosed tag onwards
-                cleaned = cleaned[:match.start()]
-
-        # Clean up extra whitespace created by removal
-        cleaned = re.sub(r'\n\s*\n\s*\n', '\n\n', cleaned)  # Multiple blank lines -> double newline
-        cleaned = cleaned.strip()
-
-        return cleaned
 
     def _parse_action(self, response: str, state, legal_actions: List[int]) -> Dict:
         """

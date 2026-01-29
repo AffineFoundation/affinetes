@@ -8,8 +8,6 @@ Supports two modes:
 import os
 import time
 import gc
-import httpx
-import openai
 import sys
 import random
 import uuid
@@ -26,6 +24,7 @@ from logic_task_v2 import LogicTaskV2
 from request_logger import RequestLogger, log_event
 
 from affinetes.core.openenv import OpenEnvResponse
+from affinetes.core.llm_chat import llm_chat, create_client
 
 
 @dataclass
@@ -339,167 +338,54 @@ Success: {"Yes" if score > 0 else "No"}
 
     def _get_or_create_client(self, base_url, current_api_key, timeout):
         """Get cached client or create new one with LRU eviction to avoid connection leaks"""
-        # Create cache key based on base_url and api_key
         cache_key = f"{base_url}:{current_api_key[:10]}"
 
-        # If client exists, move to end (mark as recently used)
         if cache_key in self._client_cache:
             self._client_cache.move_to_end(cache_key)
             log_event("client_cache_hit", cache_size=len(self._client_cache), cache_key=cache_key[:30])
             return self._client_cache[cache_key]
 
-        # Create new client
         log_event("client_cache_miss", cache_size=len(self._client_cache), cache_key=cache_key[:30])
 
-        # Unset SSL_CERT_FILE to avoid certificate path issues in container
-        os.environ.pop('SSL_CERT_FILE', None)
-        os.environ.pop('REQUESTS_CA_BUNDLE', None)
-
-        client = openai.AsyncOpenAI(
-            base_url=base_url.rstrip('/'),
-            api_key=current_api_key,
-            timeout=httpx.Timeout(
-                connect=10.0,  # Connection timeout
-                read=20.0,     # Read timeout (per chunk)
-                write=10.0,    # Write timeout
-                pool=10.0      # Pool timeout
-            ),
-            max_retries=0
-        )
+        client = create_client(base_url, current_api_key)
 
         self._client_cache[cache_key] = client
         log_event("client_created", cache_size=len(self._client_cache))
 
-        # Evict oldest client if cache is full (LRU)
         if len(self._client_cache) > self._max_client_cache:
             oldest_key, oldest_client = self._client_cache.popitem(last=False)
             log_event("client_evicted", evicted_key=oldest_key[:30], cache_size=len(self._client_cache))
-            # Note: We don't await close() here since it's sync method
-            # The client will be garbage collected and connections will eventually close
-            # For proper cleanup, consider using async cleanup in Actor.__del__ or cleanup method
 
         return client
 
     async def _llm_chat(self, prompt, model, base_url, timeout, temperature, current_api_key, seed=None):
         """Call LLM API with specified API key and optional seed (streaming mode)"""
-        import asyncio
-
-        # Get client (timeout is configured in httpx.Timeout when creating client)
         client = self._get_or_create_client(base_url, current_api_key, timeout)
 
-        # Prepare API call parameters with streaming enabled
-        params = {
-            "model": model,
-            "messages": [{"role": "user", "content": prompt}],
-            "stream": True,
-            "stream_options": {"include_usage": True}
-        }
-
-        # Add temperature if provided
-        if temperature is not None:
-            params["temperature"] = temperature
-
-        # Add seed if provided
-        if seed is not None:
-            params["seed"] = seed
-
-        # Create stream (httpx client already has 20s read timeout configured)
         log_event("stream_creating")
         stream_start = time.time()
-        stream = await client.chat.completions.create(**params)
-        log_event("stream_created")
 
-        # Collect streamed content and usage
-        content_parts = []
-        reasoning_parts = []  # Collect reasoning content for o1-style models
-        usage = None
-        chunk_count = 0
-        max_chunks = 32000  # Limit output to ~32k tokens (assuming ~1 chunk per token)
-        chunk_timeout = 30.0  # Max time between chunks
+        result = await llm_chat(
+            messages=[{"role": "user", "content": prompt}],
+            model=model,
+            base_url=base_url,
+            api_key=current_api_key,
+            temperature=temperature,
+            seed=seed,
+            stream=True,
+            client=client,
+        )
 
-        first_chunk_received = False
-
-        try:
-            # Create async iterator from stream
-            chunk_iter = stream.__aiter__()
-
-            while True:
-                try:
-                    # Wait for next chunk with timeout
-                    chunk_receive_start = time.time()
-                    chunk = await asyncio.wait_for(chunk_iter.__anext__(), timeout=chunk_timeout)
-                    chunk_receive_time = time.time()
-
-                    # Track first chunk (TTFB)
-                    if not first_chunk_received:
-                        ttfb_ms = int((chunk_receive_time - stream_start) * 1000)
-                        log_event("first_chunk_received", ttfb_ms=ttfb_ms)
-                        first_chunk_received = True
-
-                except StopAsyncIteration:
-                    break
-                except asyncio.TimeoutError:
-                    log_event("stream_chunk_timeout", level='error', timeout_seconds=chunk_timeout, chunks_received=chunk_count)
-                    raise TimeoutError(f"Stream timeout: no chunk received for {chunk_timeout}s")
-
-                chunk_count += 1
-
-                # Collect content chunks and reasoning chunks
-                if chunk.choices and chunk.choices[0].delta:
-                    delta = chunk.choices[0].delta
-
-                    # Collect regular content
-                    if delta.content:
-                        content_parts.append(delta.content)
-
-                    # Collect reasoning content (for o1-style reasoning models)
-                    if hasattr(delta, 'reasoning_content') and delta.reasoning_content:
-                        reasoning_parts.append(delta.reasoning_content)
-
-                    # Apply chunk limit (approximate token limit)
-                    if chunk_count >= max_chunks:
-                        break
-
-                # Collect usage information from the final chunk
-                if chunk.usage:
-                    usage = chunk.usage.model_dump()
-
-            # Combine all content parts
-            content = "".join(content_parts) if content_parts else None
-            reasoning = "".join(reasoning_parts) if reasoning_parts else None
-
-            if not content:
-                # Return None for empty content (e.g., token limit exhausted during reasoning)
-                # This will result in 0 score rather than raising an error
-                log_event("stream_empty_content", level='warning', chunks=chunk_count, has_reasoning=bool(reasoning))
-                return None, reasoning, usage
-
-            # Log stream completion stats
-            stream_duration_ms = int((time.time() - stream_start) * 1000)
+        stream_duration_ms = int((time.time() - stream_start) * 1000)
+        if result.content:
             log_event("stream_complete",
-                     total_chunks=chunk_count,
-                     content_length=len(content),
-                     reasoning_length=len(reasoning) if reasoning else 0,
+                     content_length=len(result.content),
+                     reasoning_length=len(result.reasoning) if result.reasoning else 0,
                      stream_duration_ms=stream_duration_ms)
+        else:
+            log_event("stream_empty_content", level='warning', has_reasoning=bool(result.reasoning))
 
-            # Return content, reasoning, and usage information
-            return content.strip(), reasoning, usage
-
-        finally:
-            # Critical: Close stream to return connection to pool
-            # Use timeout protection to avoid hanging on close
-            try:
-                close_start = time.time()
-                await asyncio.wait_for(stream.response.aclose(), timeout=5.0)
-                close_duration_ms = int((time.time() - close_start) * 1000)
-                log_event("stream_closed", close_duration_ms=close_duration_ms)
-            except asyncio.TimeoutError:
-                # If close hangs, log and continue to avoid blocking error propagation
-                # The connection will be cleaned up by garbage collector
-                log_event("stream_close_timeout", level='warning', timeout_seconds=5.0)
-            except Exception as e:
-                # Best effort cleanup - don't let close failure block error propagation
-                log_event("stream_close_failed", level='warning', error=str(e))
+        return result.content, result.reasoning, result.usage
 
     async def evaluate(
         self,
