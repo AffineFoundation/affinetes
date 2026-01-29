@@ -71,40 +71,61 @@ def parse_test_output(stdout_content: str, stderr_content: str) -> List[TestResu
     stdout_cleaned = clean_text(stdout_content)
     clean_text(stderr_content)
 
+    # Helper to check if line is a test result marker
+    def is_test_marker(line):
+        markers = ["\u2713", "\u2714", "\u25cb", "\u270E", "\u2715", "\u2717", "\u00d7"]
+        return any(line.startswith(m) for m in markers)
+
+    # Helper to parse test case from line
+    def parse_test_case(line):
+        # ✓ ✔ for passed, ○ ✎ for skipped, ✕ ✗ × for failed
+        passed_markers = ["\u2713", "\u2714"]
+        skipped_markers = ["\u25cb", "\u270E"]
+        failed_markers = ["\u2715", "\u2717", "\u00d7"]
+
+        stripped = line.strip()
+        for m in failed_markers:
+            if stripped.startswith(m):
+                test_case = stripped.split(m)[-1].strip().split("(")[0].strip()
+                return test_case, TestStatus.FAILED
+        for m in skipped_markers:
+            if stripped.startswith(m):
+                test_case = stripped.split(m)[-1].strip().split("(")[0].strip()
+                return test_case, TestStatus.SKIPPED
+        for m in passed_markers:
+            if stripped.startswith(m):
+                test_case = stripped.split(m)[-1].strip().split("(")[0].strip()
+                return test_case, TestStatus.PASSED
+        return None, None
+
     lines = stdout_cleaned.splitlines()
     i = 0
     while i < len(lines):
         line = lines[i].strip()
-        if line.startswith("PASS"):
-            test_file = line.split()[1]
+        # Handle both PASS and FAIL test files
+        if line.startswith("PASS") or line.startswith("FAIL"):
+            test_file = line.split()[1] if len(line.split()) > 1 else "unknown"
             i += 1
             # Process all test suites under this test file
-            while i < len(lines) and not lines[i].strip().startswith("PASS"):
-                # Case 1: Test suite exists (e.g., "UseScale")
-                if lines[i].strip() and not lines[i].strip().startswith("\u2713") and not lines[i].strip().startswith("\u2714") and not lines[i].strip().startswith("\u25cb"):  # ○ symbol (U+25CB)
-                    test_suite = lines[i].strip()
+            while i < len(lines) and not lines[i].strip().startswith("PASS") and not lines[i].strip().startswith("FAIL"):
+                stripped = lines[i].strip()
+                # Case 1: Test suite exists (line doesn't start with test marker)
+                if stripped and not is_test_marker(stripped):
+                    test_suite = stripped
                     i += 1
-                    # Extract test cases (lines starting with checkmark, UTF-8: \u2713 or \u2714, or ○)
-                    while i < len(lines) and (lines[i].strip().startswith("\u2713") or lines[i].strip().startswith("\u2714") or lines[i].strip().startswith("\u25cb") or lines[i].strip().startswith("\u270E")):
-                        if lines[i].strip().startswith("\u25cb") or lines[i].strip().startswith("\u270E"):  # ○ symbol (U+25CB) or ✎ (U+270E) for skipped tests
-                            test_case = lines[i].strip().split("\u25cb")[-1].split("\u270E")[-1].strip().split("(")[0].strip()
+                    # Extract test cases
+                    while i < len(lines) and is_test_marker(lines[i].strip()):
+                        test_case, status = parse_test_case(lines[i])
+                        if test_case and status:
                             full_test_name = f"{test_file} | {test_suite} | {test_case}"
-                            results.append(TestResult(name=full_test_name, status=TestStatus.SKIPPED))
-                        else:
-                            test_case = lines[i].strip().split("\u2713")[-1].split("\u2714")[-1].strip().split("(")[0].strip()
-                            full_test_name = f"{test_file} | {test_suite} | {test_case}"
-                            results.append(TestResult(name=full_test_name, status=TestStatus.PASSED))
+                            results.append(TestResult(name=full_test_name, status=status))
                         i += 1
-                # Case 2: No test suite, directly test cases (e.g., "✓ Renames variants (9 ms)" or "○ Skipped test")
-                elif lines[i].strip().startswith("\u2713") or lines[i].strip().startswith("\u2714") or lines[i].strip().startswith("\u25cb") or lines[i].strip().startswith("\u270E"):
-                    if lines[i].strip().startswith("\u25cb") or lines[i].strip().startswith("\u270E"):  # ○ symbol (U+25CB) or ✎ (U+270E) for skipped tests
-                        test_case = lines[i].strip().split("\u25cb")[-1].split("\u270E")[-1].strip().split("(")[0].strip()
+                # Case 2: No test suite, directly test cases
+                elif is_test_marker(stripped):
+                    test_case, status = parse_test_case(lines[i])
+                    if test_case and status:
                         full_test_name = f"{test_file} | {test_case}"
-                        results.append(TestResult(name=full_test_name, status=TestStatus.SKIPPED))
-                    else:
-                        test_case = lines[i].strip().split("\u2713")[-1].split("\u2714")[-1].strip().split("(")[0].strip()
-                        full_test_name = f"{test_file} | {test_case}"
-                        results.append(TestResult(name=full_test_name, status=TestStatus.PASSED))
+                        results.append(TestResult(name=full_test_name, status=status))
                     i += 1
                 else:
                     i += 1

@@ -216,6 +216,44 @@ class MiniSweAgent(BaseCodeAgent):
 
         return diff
 
+    def _print_agent_history(self):
+        """Print agent execution history for debugging."""
+        if not self.agent or not hasattr(self.agent, 'messages'):
+            return
+
+        print("\n" + "=" * 60)
+        print("AGENT EXECUTION HISTORY")
+        print("=" * 60)
+
+        for i, msg in enumerate(self.agent.messages):
+            role = msg.get('role', 'unknown')
+            content = msg.get('content', '')
+
+            # Skip system message (too long)
+            if role == 'system':
+                print(f"\n[{i}] SYSTEM: (prompt template, skipped)")
+                continue
+
+            print(f"\n[{i}] {role.upper()}:")
+
+            # For assistant messages, extract the command
+            if role == 'assistant':
+                # Extract bash command
+                import re
+                commands = re.findall(r'```bash\s*\n(.*?)\n```', content, re.DOTALL)
+                if commands:
+                    print(f"  COMMAND: {commands[0][:200]}")
+                else:
+                    print(f"  {content[:300]}...")
+            else:
+                # For user messages (observations), show truncated output
+                if len(content) > 500:
+                    print(f"  {content[:500]}...")
+                else:
+                    print(f"  {content}")
+
+        print("\n" + "=" * 60)
+
     def cleanup(self):
         """Clean up Docker environment"""
         if self.env:
