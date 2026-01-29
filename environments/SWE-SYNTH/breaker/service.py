@@ -456,26 +456,32 @@ class BreakerService:
         """
         Find next available task_id to work on.
 
+        Always starts from completed_up_to + 1 to ensure failed tasks get retried.
         Uses batch queries for efficiency:
-        1. List all completed tasks in range
-        2. List all active claims in range
-        3. Find first gap
+        1. Get completed_up_to from metadata
+        2. List all completed tasks in range
+        3. List all active claims in range
+        4. Find first gap (task that doesn't exist and has no claim)
 
         Args:
-            start_from: Starting task_id to scan from
+            start_from: Minimum task_id to scan from (used as lower bound)
             max_scan: Maximum number of task_ids to scan
 
         Returns:
             task_id to work on, or None if nothing available
         """
-        end_id = start_from + max_scan
+        # Always start from completed_up_to + 1 to catch failed tasks
+        metadata = self.load_metadata()
+        completed_up_to = metadata["tasks"].get("completed_up_to", -1)
+        actual_start = max(start_from, completed_up_to + 1)
+        end_id = actual_start + max_scan
 
         # Batch query completed tasks and active claims
-        completed = self.list_completed_tasks(start_from, end_id)
-        active_claims = self.list_active_claims(start_from, end_id)
+        completed = self.list_completed_tasks(actual_start, end_id)
+        active_claims = self.list_active_claims(actual_start, end_id)
 
-        # Find first available task
-        for task_id in range(start_from, end_id):
+        # Find first task that doesn't exist and has no active claim
+        for task_id in range(actual_start, end_id):
             if task_id in completed:
                 continue
             if task_id in active_claims:
