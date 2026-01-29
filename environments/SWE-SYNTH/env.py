@@ -357,7 +357,7 @@ fi
         base_url: str = "https://llm.chutes.ai/v1",
         api_key: Optional[str] = None,
         # Agent type selection
-        fixer_agent: AgentType = "miniswe",
+        fixer_agent: AgentType = "ridge",
         # Common execution config
         timeout: int = 1800,
         temperature: float = 0.0,
