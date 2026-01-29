@@ -451,7 +451,23 @@ fi
 
         # Verify fix
         print("Verifying fix...")
-        score, test_stats = self._verify_fix(bug_instance, fix_patch)
+        if not fix_patch or not fix_patch.strip():
+            # Distinguish between different failure reasons
+            if result.error:
+                # Fixer had an error (timeout, API failure, etc.)
+                error_msg = result.error
+                if "timeout" in error_msg.lower():
+                    test_stats = {"error": "fixer_timeout", "details": error_msg}
+                elif "api" in error_msg.lower() or "authentication" in error_msg.lower():
+                    test_stats = {"error": "api_error", "details": error_msg}
+                else:
+                    test_stats = {"error": "fixer_error", "details": error_msg}
+            else:
+                # Model returned but didn't generate a valid patch
+                test_stats = {"error": "no_patch_generated", "details": "Model completed but produced no patch"}
+            score = 0.0
+        else:
+            score, test_stats = self._verify_fix(bug_instance, fix_patch)
 
         # Get bug types from bug_instance
         bug_types = bug_instance.get("bug", {}).get("bug_types", [])
