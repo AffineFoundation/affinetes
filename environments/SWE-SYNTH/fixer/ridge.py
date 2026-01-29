@@ -189,10 +189,13 @@ class RidgeFixerAgent(BaseFixerAgent):
         Returns:
             (repo_path, None) on success, (None, error_message) on failure
         """
-        container_name = f"ridge-extract-{int(time.time() * 1000)}"
+        container_name = f"ridge-extract-{os.urandom(8).hex()}"
         local_repo_path = os.path.join(temp_dir, "repo")
 
         try:
+            # Pre-cleanup in case of leftover container
+            subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
+
             create_result = subprocess.run(
                 ["docker", "create", "--name", container_name, docker_image, "true"],
                 capture_output=True, text=True

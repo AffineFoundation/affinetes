@@ -60,6 +60,9 @@ class R2ReadOnlyCache:
             url = f"{self.public_read_url}/{self._get_key(task_id)}"
             response = httpx.get(url, timeout=30)
             if response.status_code == 200:
+                if not response.content:
+                    print(f"R2 read error: empty response for task {task_id}")
+                    return None
                 return response.json()
             elif response.status_code == 404:
                 return None
@@ -67,7 +70,7 @@ class R2ReadOnlyCache:
                 print(f"R2 read error: HTTP {response.status_code}")
                 return None
         except Exception as e:
-            print(f"R2 read error: {e}")
+            print(f"R2 read error for task {task_id}: {e}")
             return None
 
     def exists(self, task_id: int) -> bool:
