@@ -97,11 +97,11 @@ class RidgeFixerAgent(BaseFixerAgent):
             if repo_path and os.path.exists(repo_path):
                 local_repo_path = repo_path
             else:
-                local_repo_path = self._extract_repo_from_docker(docker_image, temp_dir)
+                local_repo_path, extract_error = self._extract_repo_from_docker(docker_image, temp_dir)
                 if not local_repo_path:
                     return FixerResult(
                         patch="", success=False,
-                        error="Failed to extract repository from Docker image"
+                        error=f"Failed to extract repository from Docker image: {extract_error}"
                     )
 
             # Apply patches
@@ -183,31 +183,38 @@ class RidgeFixerAgent(BaseFixerAgent):
         finally:
             self.cleanup()
 
-    def _extract_repo_from_docker(self, docker_image: str, temp_dir: str) -> Optional[str]:
-        """Extract repository from SWE-bench Docker image"""
+    def _extract_repo_from_docker(self, docker_image: str, temp_dir: str) -> tuple[Optional[str], Optional[str]]:
+        """Extract repository from SWE-bench Docker image
+
+        Returns:
+            (repo_path, None) on success, (None, error_message) on failure
+        """
+        container_name = f"ridge-extract-{int(time.time() * 1000)}"
+        local_repo_path = os.path.join(temp_dir, "repo")
+
         try:
-            container_name = f"ridge-extract-{int(time.time() * 1000)}"
-            local_repo_path = os.path.join(temp_dir, "repo")
-
-            subprocess.run(
+            create_result = subprocess.run(
                 ["docker", "create", "--name", container_name, docker_image, "true"],
-                capture_output=True, check=True
+                capture_output=True, text=True
             )
+            if create_result.returncode != 0:
+                return None, f"docker create failed: {create_result.stderr.strip()}"
 
-            result = subprocess.run(
+            cp_result = subprocess.run(
                 ["docker", "cp", f"{container_name}:/app", local_repo_path],
                 capture_output=True, text=True
             )
 
+            if cp_result.returncode != 0:
+                return None, f"docker cp failed: {cp_result.stderr.strip()}"
+
+            return local_repo_path, None
+
+        except Exception as e:
+            return None, f"extract exception: {e}"
+
+        finally:
             subprocess.run(["docker", "rm", "-f", container_name], capture_output=True)
-
-            if result.returncode != 0:
-                return None
-
-            return local_repo_path
-
-        except Exception:
-            return None
 
     def cleanup(self):
         """Clean up proxy container and temp directory"""
