@@ -49,6 +49,7 @@ class EpisodeState:
     cumulative_reward: float = 0.0
     action_history: List[Dict[str, Any]] = field(default_factory=list)
     last_opponent_action: Optional[int] = None
+    rng: np.random.RandomState = field(default_factory=np.random.RandomState)
 
 
 class SafeRandomRolloutEvaluator(mcts.Evaluator):
@@ -342,7 +343,7 @@ class Actor:
                     # Edge case: no chance outcomes (shouldn't happen but be safe)
                     break
                 action_list, prob_list = zip(*outcomes_with_probs)
-                action = np.random.choice(action_list, p=prob_list)
+                action = ep.rng.choice(action_list, p=prob_list)
                 ep.state.apply_action(action)
                 continue
 
@@ -365,7 +366,7 @@ class Actor:
                 opp_action = ep.opponent_bot.step(ep.state)
             else:
                 # Fallback to random
-                opp_action = np.random.choice(legal_actions)
+                opp_action = ep.rng.choice(legal_actions)
 
             ep.last_opponent_action = opp_action
             ep.state.apply_action(opp_action)
@@ -497,6 +498,7 @@ class Actor:
             llm_player_id=llm_player_id,
             opponent_type=opponent_type,
             opponent_bot=opponent_bot,
+            rng=np.random.RandomState(resolved_seed + 100),
         )
 
         # Store in concurrent episodes dict
@@ -644,17 +646,12 @@ Your choice (action ID only):"""
 
             # Get opponent action from bot
             opponent_action = 0
-            if ep.opponent_bot:
-                # Use opponent bot to select action
-                opponent_legal = ep.state.legal_actions(1 - ep.llm_player_id)
-                if opponent_legal:
-                    # UniformRandomBot selects from its legal actions
-                    opponent_action = np.random.choice(opponent_legal)
-            else:
-                # Fallback to random
-                opponent_legal = ep.state.legal_actions(1 - ep.llm_player_id)
-                if opponent_legal:
-                    opponent_action = np.random.choice(opponent_legal)
+            opponent_legal = ep.state.legal_actions(1 - ep.llm_player_id)
+            if opponent_legal:
+                if ep.opponent_bot:
+                    opponent_action = ep.opponent_bot.step(ep.state)
+                else:
+                    opponent_action = ep.rng.choice(opponent_legal)
 
             # Compute joint action based on player positions
             if ep.llm_player_id == 0:
