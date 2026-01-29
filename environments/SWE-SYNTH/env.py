@@ -104,38 +104,55 @@ class SynthActor:
         # Cleanup stale containers from previous runs
         self._cleanup_stale_containers()
 
-    def _cleanup_stale_containers(self):
-        """Clean up stale ridge-proxy and ridges-sandbox containers from previous runs."""
-        try:
-            # Find and remove stale proxy containers
-            result = subprocess.run(
-                ["docker", "ps", "-aq", "--filter", "name=ridge-proxy-"],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.stdout.strip():
-                containers = result.stdout.strip().split('\n')
-                for cid in containers:
-                    if cid:
-                        subprocess.run(
-                            ["docker", "rm", "-f", cid],
-                            capture_output=True, timeout=30
-                        )
-                print(f"[SWE-SYNTH] Cleaned up {len(containers)} stale proxy containers")
+    def _cleanup_stale_containers(self, min_age_minutes: int = 2):
+        """
+        Clean up stale ridge-proxy and ridges-sandbox containers from previous runs.
 
-            # Find and remove stale sandbox containers
-            result = subprocess.run(
-                ["docker", "ps", "-aq", "--filter", "name=ridges-sandbox-"],
-                capture_output=True, text=True, timeout=30
-            )
-            if result.stdout.strip():
-                containers = result.stdout.strip().split('\n')
-                for cid in containers:
-                    if cid:
-                        subprocess.run(
-                            ["docker", "rm", "-f", cid],
-                            capture_output=True, timeout=30
-                        )
-                print(f"[SWE-SYNTH] Cleaned up {len(containers)} stale sandbox containers")
+        Args:
+            min_age_minutes: Only remove containers older than this many minutes (default: 2)
+        """
+        try:
+            cleaned_count = 0
+            for name_filter in ["ridge-proxy-", "ridges-sandbox-"]:
+                # Get container IDs and creation times
+                result = subprocess.run(
+                    ["docker", "ps", "-a", "--filter", f"name={name_filter}",
+                     "--format", "{{.ID}} {{.CreatedAt}}"],
+                    capture_output=True, text=True, timeout=30
+                )
+                if not result.stdout.strip():
+                    continue
+
+                from datetime import datetime, timezone
+                now = datetime.now(timezone.utc)
+
+                for line in result.stdout.strip().split('\n'):
+                    if not line.strip():
+                        continue
+                    parts = line.split(' ', 1)
+                    if len(parts) < 2:
+                        continue
+                    cid, created_str = parts[0], parts[1]
+
+                    # Parse creation time (format: "2026-01-29 10:00:00 +0000 UTC")
+                    try:
+                        # Remove timezone name suffix if present
+                        created_str = created_str.rsplit(' ', 1)[0] if 'UTC' in created_str else created_str
+                        created = datetime.strptime(created_str.strip(), "%Y-%m-%d %H:%M:%S %z")
+                        age_minutes = (now - created).total_seconds() / 60
+
+                        if age_minutes >= min_age_minutes:
+                            subprocess.run(
+                                ["docker", "rm", "-f", cid],
+                                capture_output=True, timeout=30
+                            )
+                            cleaned_count += 1
+                    except (ValueError, TypeError):
+                        # If we can't parse the time, skip this container
+                        continue
+
+            if cleaned_count > 0:
+                print(f"[SWE-SYNTH] Cleaned up {cleaned_count} stale containers (older than {min_age_minutes} min)")
 
         except Exception as e:
             print(f"[SWE-SYNTH] Warning: Failed to cleanup stale containers: {e}")
