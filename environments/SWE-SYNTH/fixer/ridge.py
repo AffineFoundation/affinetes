@@ -139,6 +139,7 @@ class RidgeFixerAgent(BaseFixerAgent):
                 problem_statement=problem_statement,
                 sandbox_proxy_url=f"http://host.docker.internal:{self._proxy_port}",
                 timeout=self.config.timeout,
+                actual_model=self.config.model,
             )
 
             # Fetch conversation and usage from proxy

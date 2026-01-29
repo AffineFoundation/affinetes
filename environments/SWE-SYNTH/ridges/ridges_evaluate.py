@@ -16,7 +16,7 @@ def image_exists(image_name: str) -> bool:
     return bool(result.stdout.strip())
 
 
-def run_ridges_sandbox(repo_path, agent_path, problem_statement, sandbox_proxy_url="http://74.82.63.163:9001", timeout=1500):
+def run_ridges_sandbox(repo_path, agent_path, problem_statement, sandbox_proxy_url="http://74.82.63.163:9001", timeout=1500, actual_model=None):
     """
     Run the ridges sandbox using Docker out of Docker pattern.
 
@@ -105,6 +105,7 @@ def run_ridges_sandbox(repo_path, agent_path, problem_statement, sandbox_proxy_u
             "--add-host=host.docker.internal:host-gateway",
             "-e", f"SANDBOX_PROXY_URL={sandbox_proxy_url}",
             "-e", f"TIMEOUT={timeout}",
+            "-e", f"ACTUAL_MODEL={actual_model or 'unknown'}",
             image_name,
             "sleep", str(timeout + 60)
         ]

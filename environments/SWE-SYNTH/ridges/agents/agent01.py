@@ -34,6 +34,7 @@ total_inferenced_chars = 0
 individual_inferenced_chars = 0
 
 DEFAULT_PROXY_URL = os.getenv("SANDBOX_PROXY_URL", "http://sandbox_proxy")
+ACTUAL_MODEL = os.getenv("ACTUAL_MODEL", "unknown")
 PROBLEM_TYPE_CREATE = "CREATE"
 PROBLEM_TYPE_FIX = "FIX"
 PROBLEM_TYPE_BUG_INJECTION = "BUG_INJECTION"
@@ -752,10 +753,10 @@ class EnhancedNetwork:
         for i in range(attempts):
             try:
                 start_time = time.time()
-                print(f"⏳ Sending request using {model_name} and {model_timeout} seconds timeout")
+                print(f"⏳ Sending request using {ACTUAL_MODEL} and {model_timeout} seconds timeout")
                 resp = requests.post(url, json=request_data, timeout=(30, model_timeout), headers=headers)
                 resp.raise_for_status()
-                print(f"✔ Request success using {model_name} and {time.time() - start_time:.2f} seconds elapsed!")
+                print(f"✔ Request success using {ACTUAL_MODEL} and {time.time() - start_time:.2f} seconds elapsed!")
                 try:
                     resp_json = resp.json()
                 except JSONDecodeError as e:
