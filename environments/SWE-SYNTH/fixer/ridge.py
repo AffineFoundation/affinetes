@@ -7,6 +7,8 @@ import tempfile
 import time
 from typing import Optional
 
+import requests
+
 from .base import BaseFixerAgent, FixerConfig, FixerResult
 from . import config
 
@@ -139,18 +141,38 @@ class RidgeFixerAgent(BaseFixerAgent):
                 timeout=self.config.timeout,
             )
 
+            # Fetch conversation and usage from proxy
+            conversation = []
+            usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+            model_calls = 0
+            try:
+                proxy_url = f"http://localhost:{self._proxy_port}/api/usage"
+                resp = requests.get(proxy_url, timeout=10)
+                if resp.status_code == 200:
+                    proxy_data = resp.json()
+                    conversation = proxy_data.get("conversation", [])
+                    usage = proxy_data.get("usage", usage)
+                    model_calls = usage.get("total_requests", 0)
+                    print(f"[RIDGE] Got {len(conversation)} conversation turns, {usage.get('total_tokens', 0)} tokens")
+            except Exception as e:
+                print(f"[RIDGE] Failed to fetch usage from proxy: {e}")
+
             if result.get("success"):
                 return FixerResult(
                     patch=result.get("output", ""),
-                    model_calls=result.get("model_calls", 0),
+                    model_calls=model_calls,
                     model_cost=result.get("model_cost", 0.0),
-                    total_tokens=result.get("total_tokens", 0),
-                    conversation=result.get("conversation", []),
+                    total_tokens=usage.get("total_tokens", 0),
+                    conversation=conversation,
                     success=True,
                 )
             else:
                 return FixerResult(
-                    patch="", success=False,
+                    patch="",
+                    model_calls=model_calls,
+                    total_tokens=usage.get("total_tokens", 0),
+                    conversation=conversation,
+                    success=False,
                     error=result.get("error", "Unknown error")
                 )
 

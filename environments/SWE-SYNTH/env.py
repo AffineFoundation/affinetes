@@ -441,11 +441,16 @@ fi
             fixer_metadata = {
                 "model_calls": result.model_calls,
                 "model_cost": result.model_cost,
-                "total_tokens": result.total_tokens,
             }
             if result.error:
-                fixer_metadata["error"] = result.error
-            conversation = result.conversation
+                fixer_metadata["fixer_error"] = result.error
+            conversation = result.conversation or []
+            # Build usage dict (matching openspiel format)
+            usage = {
+                "prompt_tokens": 0,
+                "completion_tokens": 0,
+                "total_tokens": result.total_tokens,
+            }
         finally:
             agent.cleanup()
 
@@ -488,13 +493,20 @@ fi
             "success": score > 0.0,
             "time_taken": time.time() - start,
             "extra": {
+                # Task identification
                 "task_id": task_id,
-                "bug_types": bug_types,
+                "task_type": "swe-synth",
                 "swe_instance_id": instance_id,
+                "bug_types": bug_types,
+                # Problem and solution
                 "problem_statement": problem_statement,
-                "fix_patch": fix_patch,
+                "fix_patch": fix_patch or "",
+                # Interaction trajectory (matching openspiel format)
                 "conversation": conversation,
+                "usage": usage,
+                # Fixer metadata
                 **fixer_metadata,
+                # Test results
                 **test_stats,
             }
         }
