@@ -518,23 +518,26 @@ fi
             # - Infrastructure errors (timeout, API, docker): set error field (invalid sample, can retry)
             # - Model completed but no patch: no error field (valid sample, model just failed)
             if result.error:
+                # Print full error for debugging
+                print(f"[SWE-SYNTH] Fixer error occurred:\n{result.error}")
+
                 error_msg = result.error.lower()
                 if "timeout" in error_msg or "timed out" in error_msg:
-                    # Infrastructure timeout - invalid sample
-                    test_stats = {"error": "fixer_timeout", "details": result.error}
+                    error_type = "fixer_timeout"
                 elif "api" in error_msg or "authentication" in error_msg or "connection" in error_msg or "network" in error_msg:
-                    # API/network error - invalid sample
-                    test_stats = {"error": "api_error", "details": result.error}
+                    error_type = "api_error"
                 elif "docker" in error_msg or "container" in error_msg:
-                    # Docker infrastructure error - invalid sample
-                    test_stats = {"error": "docker_error", "details": result.error}
+                    error_type = "docker_error"
                 else:
-                    # Other fixer errors that might be infrastructure related
-                    test_stats = {"error": "fixer_error", "details": result.error}
+                    error_type = "fixer_error"
+
+                print(f"[SWE-SYNTH] Classified as: {error_type}")
+                test_stats = {"error": error_type, "details": result.error}
             else:
                 # Model completed execution but didn't generate a valid patch
                 # This is a valid sample - model just couldn't solve the problem
                 # No error field = valid sample with score 0
+                print("[SWE-SYNTH] No patch generated (model completed but produced no output)")
                 test_stats = {"failure_reason": "no_patch_generated"}
             score = 0.0
         else:
