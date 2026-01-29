@@ -101,6 +101,45 @@ class SynthActor:
         self.swe_instances = {idx: inst for idx, inst in enumerate(sorted_instances)}
         print(f"Loaded {len(self.swe_instances)} SWE-bench Pro instances")
 
+        # Cleanup stale containers from previous runs
+        self._cleanup_stale_containers()
+
+    def _cleanup_stale_containers(self):
+        """Clean up stale ridge-proxy and ridges-sandbox containers from previous runs."""
+        try:
+            # Find and remove stale proxy containers
+            result = subprocess.run(
+                ["docker", "ps", "-aq", "--filter", "name=ridge-proxy-"],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.stdout.strip():
+                containers = result.stdout.strip().split('\n')
+                for cid in containers:
+                    if cid:
+                        subprocess.run(
+                            ["docker", "rm", "-f", cid],
+                            capture_output=True, timeout=30
+                        )
+                print(f"[SWE-SYNTH] Cleaned up {len(containers)} stale proxy containers")
+
+            # Find and remove stale sandbox containers
+            result = subprocess.run(
+                ["docker", "ps", "-aq", "--filter", "name=ridges-sandbox-"],
+                capture_output=True, text=True, timeout=30
+            )
+            if result.stdout.strip():
+                containers = result.stdout.strip().split('\n')
+                for cid in containers:
+                    if cid:
+                        subprocess.run(
+                            ["docker", "rm", "-f", cid],
+                            capture_output=True, timeout=30
+                        )
+                print(f"[SWE-SYNTH] Cleaned up {len(containers)} stale sandbox containers")
+
+        except Exception as e:
+            print(f"[SWE-SYNTH] Warning: Failed to cleanup stale containers: {e}")
+
     def _load_task(self, task_id: int) -> Dict[str, Any]:
         """
         Load pre-generated task from R2.
