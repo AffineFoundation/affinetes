@@ -532,7 +532,7 @@ fi
                     error_type = "fixer_error"
 
                 print(f"[SWE-SYNTH] Classified as: {error_type}")
-                test_stats = {"error": error_type, "details": result.error}
+                test_stats = {"error": result.error, "error_type": error_type}
             else:
                 # Model completed execution but didn't generate a valid patch
                 # This is a valid sample - model just couldn't solve the problem
