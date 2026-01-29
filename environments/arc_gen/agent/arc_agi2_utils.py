@@ -16,15 +16,13 @@ def get_grid_size(grid: List[List[int]]) -> Tuple[int, int]:
     return len(grid), len(grid[0]) if grid else 0
 
 
-def is_valid_grid(grid: List[List[int]] , max_size = 30) -> bool:
+def is_valid_grid(grid: List[List[int]]) -> bool:
     """Check if grid is valid (non-empty, rectangular, valid colors 0-9)."""
     if not grid or not grid[0]:
         return False
     width = len(grid[0])
-    if width > max_size:
-        return False
     for row in grid:
-        if len(row) != width or len(row) > max_size:
+        if len(row) != width:
             return False
         for val in row:
             if not isinstance(val, int) or val < 0 or val > 9:
@@ -219,10 +217,20 @@ def downsample_2x(grid: List[List[int]], params: Optional[Dict] = None) -> List[
 
 def swap_colors(grid: List[List[int]], params: Optional[Dict] = None) -> List[List[int]]:
     """Swap two colors in the grid."""
-    if params == None:
+    palette = list(get_colors_in_grid(grid) - {0})
+    if len(palette) < 2:
         return grid
-    c1 = params.get('color1')
-    c2 = params.get('color2')
+
+    if params is None:
+        c1, c2 = random.sample(palette, 2)
+    else:
+        c1 = params.get('color1')
+        c2 = params.get('color2')
+        if c1 not in palette:
+            c1 = palette[0]
+        if c2 not in palette or c2 == c1:
+            c2 = next((c for c in palette if c != c1), c1)
+
     result = deep_copy_grid(grid)
     for r in range(len(result)):
         for c in range(len(result[0])):
@@ -327,7 +335,6 @@ def gravity_right(grid: List[List[int]], params: Optional[Dict] = None) -> List[
 
 TRANSFORMATIONS = {
     # Geometric - predictable, intuitive for humans
-    'rotate_90': (rotate_90, {'type': 'geometric', 'preserves_size': True}),
     'rotate_180': (rotate_180, {'type': 'geometric', 'preserves_size': True}),
     'rotate_270': (rotate_270, {'type': 'geometric', 'preserves_size': False}),
     'transpose': (transpose, {'type': 'geometric', 'preserves_size': False}),
@@ -335,24 +342,24 @@ TRANSFORMATIONS = {
     'flip_antidiagonal': (flip_antidiagonal, {'type': 'geometric', 'preserves_size': False}),
 
     # Spatial - for positional reasoning
-    # 'shift': (shift, {'type': 'spatial', 'preserves_size': True}),
+    'shift': (shift, {'type': 'spatial', 'preserves_size': True}),
     'recenter': (recenter, {'type': 'spatial', 'preserves_size': True}),
 
     # Scale - adds complexity through size changes
     'zoom_2x': (zoom_2x, {'type': 'scale', 'preserves_size': False}),
     'zoom_3x': (zoom_3x, {'type': 'scale', 'preserves_size': False}),
-    # 'downsample_2x': (downsample_2x, {'type': 'scale', 'preserves_size': False}),
+    'downsample_2x': (downsample_2x, {'type': 'scale', 'preserves_size': False}),
 
     # Color - for multi-rule compositional reasoning
     'swap_colors': (swap_colors, {'type': 'color', 'preserves_size': True}),
-    # 'remove_color': (remove_color, {'type': 'color', 'preserves_size': True}),
+    'remove_color': (remove_color, {'type': 'color', 'preserves_size': True}),
     # 'highlight_color': (highlight_color, {'type': 'color', 'preserves_size': True}),
 
     # Physics - intuitive for humans, adds predictability
-    # 'gravity_down': (gravity_down, {'type': 'physics', 'preserves_size': True}),
-    # 'gravity_up': (gravity_up, {'type': 'physics', 'preserves_size': True}),
-    # 'gravity_left': (gravity_left, {'type': 'physics', 'preserves_size': True}),
-    # 'gravity_right': (gravity_right, {'type': 'physics', 'preserves_size': True}),
+    'gravity_down': (gravity_down, {'type': 'physics', 'preserves_size': True}),
+    'gravity_up': (gravity_up, {'type': 'physics', 'preserves_size': True}),
+    'gravity_left': (gravity_left, {'type': 'physics', 'preserves_size': True}),
+    'gravity_right': (gravity_right, {'type': 'physics', 'preserves_size': True}),
 
 }
 

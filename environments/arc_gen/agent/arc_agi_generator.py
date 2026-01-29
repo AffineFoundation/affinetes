@@ -26,7 +26,6 @@ class ARC2Generator:
         self,
         max_chain_length: int = 4,
         max_grid_size: int = 30,
-        task_range: int=100_000_000
     ):
         self.max_chain_length = max_chain_length
         self.max_grid_size = max_grid_size
@@ -34,21 +33,21 @@ class ARC2Generator:
         # Quality thresholds to keep outputs meaningful
         self.min_distinct_colors = 2
         self.min_non_black_cells = 6
-        self.task_range = task_range
+        self.max_resample_attempts = 4
     def generate_initial_problem(
         self,
         task_num: Optional[int] = None,
         rng = None,
     ) -> Dict[str, Any]:
-        """
-        Generate a base ARC style problem from task_list.
-        
-        Returns:
-            Dict with "input", "output", and "task_num" keys
-        """
         max_retry = 10
         while max_retry > 0:
             try:
+                """
+                Generate a base ARC-1 style problem from task_list.
+                
+                Returns:
+                    Dict with "input", "output", and "task_num" keys
+                """
                 tmap = task_list.task_list()
                 
                 keys = list(tmap.keys())
@@ -134,41 +133,48 @@ class ARC2Generator:
         if chain_length is None:
             chain_length = self.max_chain_length
 
-        result_chain = []
+        pool = list(utils.TRANSFORMATIONS.keys())
+        result_chain: List[Dict[str, Any]] = []
         cur = utils.deep_copy_grid(grid)
-        compatible = utils.get_compatible_transformations(cur, max_size=self.max_grid_size)
-        ### rotate
-        rotate = rng.choice(["rotate_90" , "rotate_180" , "rotate_180" , None])
-        if rotate != None:
-            result_chain.append({"name": rotate, "params": None})
-        
-        ### transpose
-        if rng.random() > 0.5:
-            result_chain.append({"name": "transpose", "params": None})
-        
-        ### recenter
-        if rng.random() > 0.9:
-            result_chain.append({"name": "recenter", "params": None})
-            
-        ### swap colors
+
         for _ in range(chain_length):
-            if rng.random() > 0.7:
-                params = self._sample_params("swap_colors", cur , rng)
-                new_cur = utils.apply_transformation(cur, "swap_colors", params)
-                if not utils.is_valid_grid(new_cur):
-                    continue
-                result_chain.append({"name": "swap_colors", "params": params})
-                cur = new_cur
-            else:
+            compatible = utils.get_compatible_transformations(cur, max_size=self.max_grid_size)
+            available = [t for t in pool if t in compatible]
+
+            if not available:
                 break
+
+            # Avoid immediate reversals for better chain quality
+            if result_chain and len(available) > 1:
+                last = result_chain[-1]["name"]
+                avoid = {
+                    "flip_horizontal": {"flip_horizontal"},
+                    "flip_vertical": {"flip_vertical"},
+                    "rotate_90": {"rotate_270"},
+                    "rotate_270": {"rotate_90"},
+                    "rotate_180": {"rotate_180"},
+                    "gravity_down": {"gravity_up"},
+                    "gravity_up": {"gravity_down"},
+                    "gravity_left": {"gravity_right"},
+                    "gravity_right": {"gravity_left"},
+                }.get(last, set())
+                filtered = [t for t in available if t not in avoid]
+                if filtered:
+                    available = filtered
+
+            name = rng.choice(available)
+            params = self._sample_params(name, cur , rng)
             
-        ### zoom                        
-        if rng.random() > 0.95:
-            if "zoom_3x" in compatible:
-                result_chain.append({"name": "zoom_3x", "params": None})
-        elif rng.random() > 0.9:
-            if "zoom_2x" in compatible:
-                result_chain.append({"name": "zoom_2x", "params": None})
+            # Skip if params are invalid
+            if name in ("remove_color", "highlight_color", "shift" , "swap_colors" ) and params is None:
+                continue
+
+            new_cur = utils.apply_transformation(cur, name, params)
+            if not utils.is_valid_grid(new_cur):
+                continue
+
+            result_chain.append({"name": name, "params": params})
+            cur = new_cur
 
         return result_chain
 
@@ -194,7 +200,6 @@ class ARC2Generator:
             return False
         if _count_non_black(grid) < self.min_non_black_cells:
             return False
-        
         return True
 
     def generate_problem_set(
@@ -202,6 +207,7 @@ class ARC2Generator:
         task_id: Optional[int] = 0,
         num_train: int = 3,
         chain_length: Optional[int] = None,
+        seed : int = None
     ) -> Dict[str, Any]:
         """
         Generate train/test examples with the same transformation chain.
@@ -215,18 +221,17 @@ class ARC2Generator:
               "test_input": <grid>,
               "test_output": <grid>,  # For validation
               "metadata": {
-                  "task_id": <int>,
+                  "base_task": <int>,
                   "transformation_chain": [...],
                   "chain_length": int
               }
             }
         """
-        task_num = task_id // self.task_range
-        seed = task_id % self.task_range
+        
         
         rng = random.Random(seed)
-        base_initial = self.generate_initial_problem(task_num, rng)
-        task_num = base_initial["task_num"]
+        base_initial = self.generate_initial_problem(task_id, rng)
+        task_id = base_initial["task_num"]
         
         # Generate transformation chain (empty if chain_length is 0)
         if chain_length == 0:
@@ -241,43 +246,34 @@ class ARC2Generator:
         # Generate training examples
         train_examples = []
         attempts = 0
-        max_attempts = num_train * 300
+        max_attempts = num_train * 20
         
-        is_completed = False
-        limit_degenerate = 0
-        while attempts < max_attempts:
+        while len(train_examples) < num_train and attempts < max_attempts:
             attempts += 1
             try:
-                base = self.generate_initial_problem(task_num=task_num, rng = rng)
+                base = self.generate_initial_problem(task_num=task_id, rng = rng)
         
                 if chain:
                     output = self.apply_transformation_chain(base["output"], chain)
                 else:
                     output = base["output"]
                 
-                if limit_degenerate > 20 or self._non_degenerate(output):
-                    if len(train_examples) < num_train:
-                        train_examples.append({
-                            "input": base["input"],
-                            "output": output
-                        })
-                    else:
-                        test_base = base
-                        test_output = output
-                        is_completed = True
-                        break
-                else:
-                    limit_degenerate += 1
-                    
-            except Exception as e:
-                if type(e).__name__ != "ValueError":
-                    import traceback
-                    error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
-                    print("Fail to generate\n", error)
+                if attempts > max_attempts - 20  or self._non_degenerate(output):
+                    train_examples.append({
+                        "input": base["input"],
+                        "output": output
+                    })
+            except:
+                continue
         
-        if not is_completed:
-            raise ValueError(f"Fail to generate problem.")
+        if len(train_examples) != num_train:
+            raise ValueError(f"Fail to generate")
         # Generate test example
+        test_base = self.generate_initial_problem(task_id, rng)
+        if chain:
+            test_output = self.apply_transformation_chain(test_base["output"], chain)
+        else:
+            test_output = test_base["output"]
         
         return {
             "train_examples": train_examples,
@@ -285,6 +281,7 @@ class ARC2Generator:
             "test_output": test_output,
             "metadata": {
                 "task_id": task_id,
+                "seed" : seed,
                 "transformation_chain": chain,
                 "chain_length": len(chain),
             }
