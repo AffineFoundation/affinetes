@@ -51,6 +51,8 @@ import random
 import asyncio
 import argparse
 import socket
+import subprocess
+import shutil
 from pathlib import Path
 from typing import Optional, Dict, Any, List, Tuple
 
@@ -88,6 +90,33 @@ def log(msg: str) -> None:
     """Print log message with timestamp."""
     ts = time.strftime("%H:%M:%S")
     print(f"[{ts}] {msg}")
+
+
+def cleanup_docker_resources() -> None:
+    """Clean up Docker resources to free disk space after each task."""
+    try:
+        # Remove stopped containers
+        subprocess.run(
+            ["docker", "container", "prune", "-f"],
+            capture_output=True, timeout=60
+        )
+        # Remove dangling images (untagged)
+        subprocess.run(
+            ["docker", "image", "prune", "-f"],
+            capture_output=True, timeout=60
+        )
+        # Clean up old breaker workspaces
+        workspace_base = Path("/tmp/breaker_workspaces")
+        if workspace_base.exists():
+            cutoff = time.time() - 3600  # 1 hour old
+            for ws in workspace_base.iterdir():
+                try:
+                    if ws.is_dir() and ws.stat().st_mtime < cutoff:
+                        shutil.rmtree(ws, ignore_errors=True)
+                except Exception:
+                    pass
+    except Exception as e:
+        log(f"Cleanup warning: {e}")
 
 
 def get_dockerhub_image_uri(uid: str, dockerhub_username: str, repo_name: str) -> str:
@@ -875,6 +904,8 @@ class BreakerService:
                         log(f"[Task {task_id}] ✓ Complete (total: {tasks_generated} generated, {tasks_failed} failed)")
                         # Only advance scan_from on successful upload
                         scan_from = max(scan_from, task_id + 1)
+                        # Clean up Docker resources to free disk space
+                        cleanup_docker_resources()
                     else:
                         tasks_failed += 1
                         log(f"[Task {task_id}] ✗ Upload failed, will retry (total: {tasks_generated} generated, {tasks_failed} failed)")
