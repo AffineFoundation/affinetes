@@ -648,33 +648,30 @@ class BreakerService:
             timeout=300,
         )
 
-    async def generate_task(self, task_id: int, max_retries: int = 10) -> Tuple[bool, Optional[Dict[str, Any]]]:
+    async def _try_generate_with_params(
+        self,
+        task_id: int,
+        params: Dict[str, Any],
+        max_retries: int,
+        attempt_label: str = "",
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
         """
-        Generate a single task.
+        Try to generate a task with given parameters.
 
         Returns:
-            (success, data):
-            - (True, data) if generated successfully
-            - (True, None) if task already exists (skipped)
-            - (False, None) if generation failed
+            (success, data) where data includes actual_source_task_id if fallback was used
         """
-        if self.task_exists(task_id):
-            log(f"[Task {task_id}] Already exists, skipping")
-            return True, None
-
-        params = self.decode_task_id(task_id)
         swe_inst = params["swe_instance"]
         instance_id = swe_inst["instance_id"]
         bug_types = params['bug_types']
 
-        log(f"[Task {task_id}] Starting generation")
-        log(f"[Task {task_id}] Instance: {instance_id}")
-        log(f"[Task {task_id}] Bug types: {bug_types}")
+        log(f"[Task {task_id}]{attempt_label} Instance: {instance_id}")
+        log(f"[Task {task_id}]{attempt_label} Bug types: {bug_types}")
 
         try:
             breaker_input = self._build_breaker_input(params)
         except RuntimeError as e:
-            log(f"[Task {task_id}] Skipped (no scripts): {e}")
+            log(f"[Task {task_id}]{attempt_label} Skipped (no scripts): {e}")
             return False, None
 
         try:
@@ -683,11 +680,65 @@ class BreakerService:
                 max_retries=max_retries,
                 agent_type=self.agent_type,
             )
-            log(f"[Task {task_id}] Generation successful")
+            log(f"[Task {task_id}]{attempt_label} Generation successful")
             return True, output.to_dict()
         except BreakerException as e:
-            log(f"[Task {task_id}] Generation failed: {e}")
+            log(f"[Task {task_id}]{attempt_label} Generation failed: {e}")
             return False, None
+
+    async def generate_task(
+        self,
+        task_id: int,
+        max_retries: int = 5,
+        fallback_offset: int = 100000,
+        max_fallback_attempts: int = 5,
+    ) -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """
+        Generate a single task with fallback to different instances.
+
+        If the original instance fails, tries alternative instances by adding
+        fallback_offset to the task_id (which maps to a different SWE-bench instance).
+        The result is still saved under the original task_id.
+
+        Returns:
+            (success, data):
+            - (True, data) if generated successfully
+            - (True, None) if task already exists (skipped)
+            - (False, None) if generation failed after all attempts
+        """
+        if self.task_exists(task_id):
+            log(f"[Task {task_id}] Already exists, skipping")
+            return True, None
+
+        log(f"[Task {task_id}] Starting generation")
+
+        # Try original task_id first
+        params = self.decode_task_id(task_id)
+        success, result = await self._try_generate_with_params(
+            task_id, params, max_retries, attempt_label=""
+        )
+
+        if success and result is not None:
+            result["source_task_id"] = task_id
+            return True, result
+
+        # Fallback: try alternative instances
+        for fallback_idx in range(1, max_fallback_attempts + 1):
+            alternative_task_id = task_id + fallback_offset * fallback_idx
+            log(f"[Task {task_id}] Fallback {fallback_idx}: trying source task_id={alternative_task_id}")
+
+            params = self.decode_task_id(alternative_task_id)
+            success, result = await self._try_generate_with_params(
+                task_id, params, max_retries, attempt_label=f" [fallback {fallback_idx}]"
+            )
+
+            if success and result is not None:
+                result["source_task_id"] = alternative_task_id
+                log(f"[Task {task_id}] Fallback succeeded with source task_id={alternative_task_id}")
+                return True, result
+
+        log(f"[Task {task_id}] All attempts failed (original + {max_fallback_attempts} fallbacks)")
+        return False, None
 
     def _update_metadata(self, task_id: int, success: bool) -> None:
         """
