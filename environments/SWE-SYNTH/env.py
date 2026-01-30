@@ -113,7 +113,7 @@ class SynthActor:
         """
         try:
             cleaned_count = 0
-            for name_filter in ["ridge-proxy-", "ridges-sandbox-"]:
+            for name_filter in ["ridge-proxy-", "ridges-sandbox-", "swe-synth-fixer-", "minisweagent-"]:
                 # Get container IDs and creation times
                 result = subprocess.run(
                     ["docker", "ps", "-a", "--filter", f"name={name_filter}",
@@ -413,7 +413,7 @@ fi
         base_url: str = "https://llm.chutes.ai/v1",
         api_key: Optional[str] = None,
         # Agent type selection
-        fixer_agent: AgentType = "ridge",
+        fixer_agent: AgentType = "miniswe",
         # Common execution config
         timeout: int = 1800,
         temperature: float = 0.0,

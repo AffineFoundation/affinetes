@@ -3,7 +3,7 @@
 import os
 import sys
 import asyncio
-import base64
+import tempfile
 import time
 import logging
 import subprocess
@@ -14,14 +14,9 @@ import yaml
 
 from .base import BaseFixerAgent, FixerConfig, FixerResult
 
-# Enable minisweagent logging
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(name)s: %(levelname)s: %(message)s',
-    stream=sys.stdout,
-    force=True,
-)
-logging.getLogger("minisweagent").setLevel(logging.DEBUG)
+# Suppress verbose logging from minisweagent
+logging.getLogger("minisweagent").setLevel(logging.WARNING)
+logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
 
 class MiniSWEFixerAgent(BaseFixerAgent):
@@ -31,30 +26,35 @@ class MiniSWEFixerAgent(BaseFixerAgent):
         super().__init__(config)
         self._env = None
         self._agent = None
+        self._container_name = None
 
     def _apply_patches(
         self,
-        base_commit: Optional[str],
         gold_patch: Optional[str],
         bug_patch: Optional[str],
     ) -> bool:
-        """Apply gold_patch and bug_patch inside container"""
-        if not self._env:
+        """Apply gold_patch and bug_patch inside container using docker cp.
+
+        Note: SWE-bench Docker images are already at base_commit, no need to reset.
+        """
+        if not self._env or not self._container_name:
             return False
 
-        commands = ["cd /app"]
-
-        if base_commit:
-            commands.append(f"git reset --hard {base_commit}")
-            commands.append(f"git checkout {base_commit}")
-
-        for patch in [gold_patch, bug_patch]:
+        # Apply patches using docker cp to avoid argument length limits
+        for idx, patch in enumerate([gold_patch, bug_patch]):
             if patch:
-                patch_b64 = base64.b64encode(patch.encode('utf-8')).decode('ascii')
-                commands.append(f'echo "{patch_b64}" | base64 -d > /tmp/patch.diff')
-                commands.append("git apply -v /tmp/patch.diff || true")
+                with tempfile.NamedTemporaryFile(mode='w', suffix='.diff', delete=False) as f:
+                    f.write(patch)
+                    temp_path = f.name
+                try:
+                    subprocess.run(
+                        ["docker", "cp", temp_path, f"{self._container_name}:/tmp/patch_{idx}.diff"],
+                        check=True, capture_output=True, timeout=30
+                    )
+                    self._env.execute(f"cd /app && git apply -v /tmp/patch_{idx}.diff || true", timeout=120)
+                finally:
+                    os.unlink(temp_path)
 
-        self._env.execute(" && ".join(commands), timeout=60)
         return True
 
     async def fix(
@@ -102,6 +102,11 @@ class MiniSWEFixerAgent(BaseFixerAgent):
                     model_kwargs["api_base"] = self.config.api_base
                 model_kwargs["api_key"] = self.config.api_key
 
+            # Clear litellm's cached HTTP clients to prevent "client has been closed" errors
+            # This happens when cached httpx clients are reused across async/sync boundaries
+            import litellm
+            litellm.in_memory_llm_clients_cache = {}
+
             model_obj = LitellmModel(
                 model_name=model_name,
                 model_kwargs=model_kwargs,
@@ -109,19 +114,19 @@ class MiniSWEFixerAgent(BaseFixerAgent):
             )
 
             # Initialize Docker environment
-            container_name = f"swe-synth-fixer-{int(time.time() * 1000)}"
+            self._container_name = f"swe-synth-fixer-{int(time.time() * 1000)}"
             self._env = DockerEnvironment(
                 image=docker_image,
                 cwd=self.config.cwd,
                 timeout=self.config.timeout,
                 executable="docker",
-                run_args=["--rm", "--entrypoint", "", "--name", container_name],
+                run_args=["--rm", "--entrypoint", "", "--name", self._container_name],
                 container_timeout=str(self.config.timeout),
             )
 
-            # Apply patches
+            # Apply patches (image is already at base_commit)
             if gold_patch or bug_patch:
-                self._apply_patches(base_commit, gold_patch, bug_patch)
+                self._apply_patches(gold_patch, bug_patch)
 
             # Load agent config
             config_path = Path(__file__).parent.parent / "config.yaml"
@@ -185,3 +190,4 @@ class MiniSWEFixerAgent(BaseFixerAgent):
             except Exception:
                 pass
             self._env = None
+        self._container_name = None

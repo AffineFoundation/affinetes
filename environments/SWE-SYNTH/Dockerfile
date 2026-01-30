@@ -19,8 +19,8 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # Create cache directory
 RUN mkdir -p /app/swe-synth-cache
 
-# Copy source code and ridges data
-COPY env.py cache.py __init__.py ./
+# Copy source code, config, and ridges data
+COPY env.py cache.py __init__.py config.yaml ./
 COPY fixer/ ./fixer/
 COPY ridges/ ./ridges/
 
