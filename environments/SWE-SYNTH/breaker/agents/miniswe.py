@@ -208,13 +208,92 @@ class MiniSweAgent(BaseCodeAgent):
         )
         patch_cmd = f"cd /app && git diff -- {extensions}"
         result = self.env.execute(patch_cmd)
-        diff = result.get("output", "").strip()
+        # Don't use strip() - it can remove trailing content
+        # Only remove leading/trailing whitespace lines, preserve internal content
+        diff = result.get("output", "")
 
-        # Ensure diff ends with newline
-        if diff and not diff.endswith('\n'):
-            diff = diff + '\n'
+        # Remove only leading whitespace, preserve trailing content
+        diff = diff.lstrip()
+
+        # Ensure diff ends with exactly one newline
+        diff = diff.rstrip('\n') + '\n' if diff else ""
+
+        # Validate patch format
+        if diff and not self._validate_patch(diff):
+            print("[BREAKER] Warning: Generated patch may be incomplete or corrupted")
 
         return diff
+
+    def _validate_patch(self, patch: str) -> bool:
+        """Validate that patch format is correct and complete.
+
+        Checks that each hunk has the correct number of lines as declared
+        in the hunk header.
+
+        Returns:
+            True if patch is valid, False otherwise.
+        """
+        import re
+
+        if not patch or not patch.startswith("diff"):
+            return False
+
+        lines = patch.split('\n')
+        i = 0
+        valid = True
+
+        while i < len(lines):
+            line = lines[i]
+
+            # Find hunk header
+            if line.startswith('@@'):
+                # Parse @@ -old_start,old_count +new_start,new_count @@
+                match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
+                if not match:
+                    i += 1
+                    continue
+
+                old_count = int(match.group(2)) if match.group(2) else 1
+                new_count = int(match.group(4)) if match.group(4) else 1
+
+                # Count actual lines in hunk
+                actual_old = 0
+                actual_new = 0
+                i += 1
+
+                while i < len(lines):
+                    hunk_line = lines[i]
+                    if not hunk_line:
+                        # Empty line at end of patch
+                        break
+                    if hunk_line.startswith('diff ') or hunk_line.startswith('@@'):
+                        # Next file or hunk
+                        break
+                    if hunk_line.startswith(' '):
+                        actual_old += 1
+                        actual_new += 1
+                    elif hunk_line.startswith('-'):
+                        actual_old += 1
+                    elif hunk_line.startswith('+'):
+                        actual_new += 1
+                    elif hunk_line.startswith('\\'):
+                        # "\ No newline at end of file" - doesn't count
+                        pass
+                    else:
+                        # Unknown line format
+                        break
+                    i += 1
+
+                # Check counts match
+                if actual_old != old_count or actual_new != new_count:
+                    print(f"[BREAKER] Patch validation failed: "
+                          f"expected old={old_count}/new={new_count}, "
+                          f"got old={actual_old}/new={actual_new}")
+                    valid = False
+            else:
+                i += 1
+
+        return valid
 
     def _print_agent_history(self):
         """Print agent execution history for debugging."""

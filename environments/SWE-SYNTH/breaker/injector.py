@@ -111,6 +111,12 @@ class BugInjector:
                     f"Agent failed to produce valid diff. Output: {result.output_text[:500]}"
                 )
 
+            # Validate patch format is complete
+            if not self._validate_patch_format(result.diff):
+                raise BreakerException(
+                    f"Generated patch is incomplete or corrupted. Patch: {result.diff[:500]}"
+                )
+
             # Parse bug description from output
             bug_description = self._parse_bug_description(result.output_text)
 
@@ -238,6 +244,70 @@ pwd && ls -la
         rng = random.Random(seed)
         num_tests = min(max_tests, len(all_tests))
         return rng.sample(all_tests, num_tests)
+
+    def _validate_patch_format(self, patch: str) -> bool:
+        """Validate that patch format is correct and complete.
+
+        Checks that each hunk has the correct number of lines as declared
+        in the hunk header. This catches truncated patches.
+
+        Returns:
+            True if patch is valid, False otherwise.
+        """
+        if not patch or not patch.startswith("diff"):
+            return False
+
+        lines = patch.split('\n')
+        i = 0
+
+        while i < len(lines):
+            line = lines[i]
+
+            # Find hunk header
+            if line.startswith('@@'):
+                # Parse @@ -old_start,old_count +new_start,new_count @@
+                match = re.match(r'@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@', line)
+                if not match:
+                    i += 1
+                    continue
+
+                old_count = int(match.group(2)) if match.group(2) else 1
+                new_count = int(match.group(4)) if match.group(4) else 1
+
+                # Count actual lines in hunk
+                actual_old = 0
+                actual_new = 0
+                i += 1
+
+                while i < len(lines):
+                    hunk_line = lines[i]
+                    if not hunk_line:
+                        break
+                    if hunk_line.startswith('diff ') or hunk_line.startswith('@@'):
+                        break
+                    if hunk_line.startswith(' '):
+                        actual_old += 1
+                        actual_new += 1
+                    elif hunk_line.startswith('-'):
+                        actual_old += 1
+                    elif hunk_line.startswith('+'):
+                        actual_new += 1
+                    elif hunk_line.startswith('\\'):
+                        pass  # "\ No newline at end of file"
+                    else:
+                        break
+                    i += 1
+
+                # Check counts match
+                if actual_old != old_count or actual_new != new_count:
+                    print(f"[BREAKER] Patch validation failed: "
+                          f"hunk declares old={old_count}/new={new_count}, "
+                          f"actual old={actual_old}/new={actual_new}")
+                    return False
+            else:
+                i += 1
+
+        return True
 
     def _parse_bug_description(self, output_text: str) -> str:
         """Parse bug description from agent output"""

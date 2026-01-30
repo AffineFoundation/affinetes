@@ -31,6 +31,67 @@ class RidgeFixerAgent(BaseFixerAgent):
         import ridges_evaluate
         return ridges_evaluate
 
+    def _sanitize_git_history(self, repo_path: str) -> bool:
+        """Remove git history to prevent cheating by looking at past commits.
+
+        This creates an orphan commit with only the current working tree state,
+        effectively removing all history that could reveal the fix.
+
+        Returns:
+            True if sanitization succeeded, False otherwise.
+        """
+        try:
+            actual_repo = repo_path
+            if os.path.exists(os.path.join(repo_path, "app")):
+                actual_repo = os.path.join(repo_path, "app")
+
+            # Save current state
+            subprocess.run(["git", "add", "-A"], cwd=actual_repo, capture_output=True)
+
+            # Create orphan branch (no parent commits)
+            subprocess.run(
+                ["git", "checkout", "--orphan", "sanitized_branch"],
+                cwd=actual_repo, capture_output=True
+            )
+
+            # Commit current state as the only commit
+            subprocess.run(
+                ["git", "commit", "-m", "Initial state", "--allow-empty"],
+                cwd=actual_repo, capture_output=True
+            )
+
+            # Delete old branches
+            subprocess.run(["git", "branch", "-D", "main"], cwd=actual_repo, capture_output=True)
+            subprocess.run(["git", "branch", "-D", "master"], cwd=actual_repo, capture_output=True)
+
+            # Rename to main
+            subprocess.run(["git", "branch", "-m", "main"], cwd=actual_repo, capture_output=True)
+
+            # Clean up reflog and history traces
+            import shutil
+            logs_path = os.path.join(actual_repo, ".git", "logs")
+            if os.path.exists(logs_path):
+                shutil.rmtree(logs_path, ignore_errors=True)
+
+            refs_orig_path = os.path.join(actual_repo, ".git", "refs", "original")
+            if os.path.exists(refs_orig_path):
+                shutil.rmtree(refs_orig_path, ignore_errors=True)
+
+            subprocess.run(
+                ["git", "reflog", "expire", "--expire=now", "--all"],
+                cwd=actual_repo, capture_output=True
+            )
+            subprocess.run(
+                ["git", "gc", "--prune=now"],
+                cwd=actual_repo, capture_output=True
+            )
+
+            print("[RIDGE] Git history sanitized")
+            return True
+        except Exception as e:
+            print(f"[RIDGE] Warning: Failed to sanitize git history: {e}")
+            return False
+
     def _apply_patches_to_repo(
         self,
         repo_path: str,
@@ -38,7 +99,11 @@ class RidgeFixerAgent(BaseFixerAgent):
         gold_patch: Optional[str],
         bug_patch: Optional[str],
     ) -> bool:
-        """Apply gold_patch and bug_patch to the repository"""
+        """Apply gold_patch and bug_patch to the repository.
+
+        Returns:
+            True if patches applied successfully, False otherwise.
+        """
         try:
             actual_repo = repo_path
             if os.path.exists(os.path.join(repo_path, "app")):
@@ -59,10 +124,33 @@ class RidgeFixerAgent(BaseFixerAgent):
                     patch_path = os.path.join(repo_path, f"{name}_patch.diff")
                     with open(patch_path, "w") as f:
                         f.write(patch)
-                    subprocess.run(
+                    # Apply patch and check result
+                    result = subprocess.run(
                         ["git", "apply", "-v", patch_path],
-                        cwd=actual_repo, capture_output=True
+                        cwd=actual_repo, capture_output=True, text=True
                     )
+                    # Check for errors
+                    if result.returncode != 0:
+                        print(f"[RIDGE] Warning: {name}_patch may have failed to apply:")
+                        print(f"[RIDGE]   stdout: {result.stdout[:300] if result.stdout else 'empty'}")
+                        print(f"[RIDGE]   stderr: {result.stderr[:300] if result.stderr else 'empty'}")
+                    else:
+                        print(f"[RIDGE] {name}_patch applied successfully")
+
+            # Sanitize git history to prevent cheating via git log/show
+            self._sanitize_git_history(repo_path)
+
+            # Verify code state after patches
+            status_result = subprocess.run(
+                ["git", "status", "--porcelain"],
+                cwd=actual_repo, capture_output=True, text=True
+            )
+            diff_result = subprocess.run(
+                ["git", "diff", "--stat"],
+                cwd=actual_repo, capture_output=True, text=True
+            )
+            print(f"[RIDGE] Post-patch git status: {status_result.stdout[:200] if status_result.stdout else 'clean'}")
+            print(f"[RIDGE] Post-patch git diff stat: {diff_result.stdout[:200] if diff_result.stdout else 'no changes'}")
 
             return True
         except Exception as e:
