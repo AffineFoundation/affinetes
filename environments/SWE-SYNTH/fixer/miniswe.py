@@ -105,7 +105,10 @@ class MiniSWEFixerAgent(BaseFixerAgent):
             # Clear litellm's cached HTTP clients to prevent "client has been closed" errors
             # This happens when cached httpx clients are reused across async/sync boundaries
             import litellm
-            litellm.in_memory_llm_clients_cache = {}
+            if hasattr(litellm.in_memory_llm_clients_cache, 'flush_cache'):
+                litellm.in_memory_llm_clients_cache.flush_cache()
+            elif hasattr(litellm.in_memory_llm_clients_cache, 'cache_dict'):
+                litellm.in_memory_llm_clients_cache.cache_dict.clear()
 
             model_obj = LitellmModel(
                 model_name=model_name,
