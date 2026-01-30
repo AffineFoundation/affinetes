@@ -1,6 +1,7 @@
 """MiniSWE Fixer Agent - wraps minisweagent library"""
 
 import os
+import re
 import sys
 import asyncio
 import tempfile
@@ -13,6 +14,19 @@ from typing import Optional
 import yaml
 
 from .base import BaseFixerAgent, FixerConfig, FixerResult
+
+
+def _strip_thinking_tags(content: str) -> str:
+    """Strip <think>...</think> tags from model output.
+
+    Some models (e.g., DeepSeek R1) return thinking content wrapped in these tags
+    when using extended thinking mode via OpenAI-compatible API. This can interfere
+    with action parsing if the thinking content contains code blocks.
+    """
+    if "</think>" in content:
+        # Take only the content after the last </think> tag
+        content = content.split("</think>")[-1].strip()
+    return content
 
 # Suppress verbose logging from minisweagent
 logging.getLogger("minisweagent").setLevel(logging.WARNING)
@@ -144,9 +158,23 @@ echo "Git history sanitized"
     ) -> FixerResult:
         """Run MiniSWE agent to fix the bug"""
         try:
-            from minisweagent.agents.default import DefaultAgent
+            from minisweagent.agents.default import DefaultAgent, FormatError
             from minisweagent.environments.docker import DockerEnvironment
             from minisweagent.models.litellm_model import LitellmModel
+
+            # Custom agent that strips thinking tags before parsing actions
+            class ThinkingAwareAgent(DefaultAgent):
+                """DefaultAgent with support for models that output <think> tags."""
+
+                def parse_action(self, response: dict) -> dict:
+                    """Parse action, stripping thinking tags first."""
+                    content = _strip_thinking_tags(response["content"])
+                    actions = re.findall(self.config.action_regex, content, re.DOTALL)
+                    if len(actions) == 1:
+                        return {"action": actions[0].strip(), **response}
+                    raise FormatError(
+                        self.render_template(self.config.format_error_template, actions=actions)
+                    )
 
             # Pull image first (must succeed, otherwise fail fast)
             print(f"Pulling image: {docker_image}")
@@ -217,8 +245,8 @@ echo "Git history sanitized"
             agent_config["step_limit"] = self.config.max_iterations
             agent_config["cost_limit"] = self.config.cost_limit
 
-            # Run agent
-            self._agent = DefaultAgent(model_obj, self._env, **agent_config)
+            # Run agent (use ThinkingAwareAgent to handle <think> tags)
+            self._agent = ThinkingAwareAgent(model_obj, self._env, **agent_config)
             patch = ""
             error = None
 
