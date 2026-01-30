@@ -58,12 +58,12 @@ class MiniSWEFixerAgent(BaseFixerAgent):
             # Create orphan branch with current state (removes all history)
             sanitize_script = """
 cd /app
-# Save current state
-git add -A
 # Create orphan branch (no parent commits)
 git checkout --orphan sanitized_branch
+# Add all files to index (must be done AFTER checkout --orphan)
+git add -A
 # Commit current state as the only commit
-git commit -m "Initial state" --allow-empty
+git commit -m "Initial state"
 # Delete old branch and rename
 git branch -D main 2>/dev/null || git branch -D master 2>/dev/null || true
 git branch -m main
@@ -72,6 +72,11 @@ rm -rf .git/logs
 rm -rf .git/refs/original
 git reflog expire --expire=now --all 2>/dev/null || true
 git gc --prune=now 2>/dev/null || true
+# Verify clean state
+echo "=== Git status after sanitize ==="
+git status --short
+echo "=== Git log ==="
+git log --oneline -1
 echo "Git history sanitized"
 """
             result = self._env.execute(sanitize_script, timeout=60)

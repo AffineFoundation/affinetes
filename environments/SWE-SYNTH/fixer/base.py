@@ -14,8 +14,8 @@ class FixerConfig:
     api_base: str
     api_key: str
     temperature: float = 0.0
-    max_iterations: int = 30
-    cost_limit: float = 10.0
+    max_iterations: int = 100
+    cost_limit: float = 3.0
     timeout: int = 300
     seed: Optional[int] = None
     cwd: str = "/app"
