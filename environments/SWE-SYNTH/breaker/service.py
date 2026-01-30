@@ -716,7 +716,9 @@ class BreakerService:
                 agent_type=self.agent_type,
             )
             log(f"[Task {task_id}]{attempt_label} Generation successful")
-            return True, output.to_dict()
+            result_dict = output.to_dict()
+            result_dict["_docker_image"] = breaker_input.docker_image
+            return True, result_dict
         except BreakerException as e:
             log(f"[Task {task_id}]{attempt_label} Generation failed: {e}")
             return False, None
@@ -910,8 +912,16 @@ class BreakerService:
                         log(f"[Task {task_id}] ✓ Complete (total: {tasks_generated} generated, {tasks_failed} failed)")
                         # Only advance scan_from on successful upload
                         scan_from = max(scan_from, task_id + 1)
-                        # Clean up Docker resources to free disk space
-                        cleanup_docker_resources()
+                        # Remove the docker image to free disk space
+                        docker_image = result.pop("_docker_image", None)
+                        if docker_image:
+                            try:
+                                subprocess.run(
+                                    ["docker", "rmi", docker_image],
+                                    capture_output=True, timeout=60
+                                )
+                            except Exception:
+                                pass
                     else:
                         tasks_failed += 1
                         log(f"[Task {task_id}] ✗ Upload failed, will retry (total: {tasks_generated} generated, {tasks_failed} failed)")
@@ -927,6 +937,8 @@ class BreakerService:
             finally:
                 # Always release claim
                 self._release_claim(task_id)
+                # Clean up Docker resources after every task (success or failure)
+                cleanup_docker_resources()
 
             # Progress logging
             if tasks_processed % batch_size == 0:
