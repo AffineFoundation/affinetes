@@ -18,7 +18,7 @@ Usage:
         test_files="tests/auth/",
         bug_types=["off-by-one", "logic-inversion"],
         seed=42,
-        model="moonshotai/Kimi-K2.5-TEE",
+        model="Qwen/Qwen3-Coder-480B",
         api_base="https://xxx.chutes.ai/v1",
         api_key="xxx",
     )
