@@ -418,7 +418,7 @@ fi
         timeout: int = 1800,
         temperature: float = 0.0,
         seed: Optional[int] = None,
-        max_iterations: int = 30,
+        max_iterations: int = 100,
         cost_limit: float = 10.0,
     ) -> Dict[str, Any]:
         """

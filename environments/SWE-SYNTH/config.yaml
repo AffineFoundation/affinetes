@@ -42,13 +42,15 @@ agent:
     ## Important Boundaries
     - MODIFY: Regular source code files in /app (this is the working directory for all your subsequent commands)
     - DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.)
+    - NEVER add or modify unit tests. Your job is ONLY to fix the source code.
 
     ## Recommended Workflow
     1. Analyze the codebase by finding and reading relevant files
-    2. Create a script to reproduce the issue
+    2. Create a simple script to reproduce the issue
     3. Edit the source code to resolve the issue
     4. Verify your fix works by running your script again
-    5. Test edge cases to ensure your fix is robust
+    5. Submit your changes and finish your work by issuing the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && git add -A && git diff --cached`
+       Do not combine it with any other command. <important>After this command, you cannot continue working on this task.</important>
 
     ## Command Execution Rules
     You are operating in an environment where
@@ -465,7 +467,7 @@ breaker:
         - "except Exception as e: log(e) → except: pass"
 
   # Temperature for bug generation (higher = more variety)
-  temperature: 0.7
+  temperature: 0
 
 verification:
   # Timeout for test verification (seconds)

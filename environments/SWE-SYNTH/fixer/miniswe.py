@@ -58,6 +58,9 @@ class MiniSWEFixerAgent(BaseFixerAgent):
             # Create orphan branch with current state (removes all history)
             sanitize_script = """
 cd /app
+# Configure git user (required for commit)
+git config user.email "agent@swe-synth.local"
+git config user.name "SWE-SYNTH Agent"
 # Create orphan branch (no parent commits)
 git checkout --orphan sanitized_branch
 # Add all files to index (must be done AFTER checkout --orphan)
