@@ -3,7 +3,7 @@
 # Build (from SWE-SYNTH directory):
 #   docker build -f breaker/Dockerfile -t swe-synth-breaker .
 #
-# Run:
+# Run breaker:
 #   docker run -v /var/run/docker.sock:/var/run/docker.sock \
 #              -e CHUTES_API_KEY=xxx \
 #              -e R2_ENDPOINT_URL=xxx \
@@ -11,6 +11,15 @@
 #              -e R2_ACCESS_KEY_ID=xxx \
 #              -e R2_SECRET_ACCESS_KEY=xxx \
 #              swe-synth-breaker
+#
+# Run release (copy tasks from private to public R2):
+#   docker run -e R2_ENDPOINT_URL=xxx \
+#              -e R2_BUCKET=xxx \
+#              -e R2_PUBLIC_BUCKET=xxx \
+#              -e R2_ACCESS_KEY_ID=xxx \
+#              -e R2_SECRET_ACCESS_KEY=xxx \
+#              --entrypoint python swe-synth-breaker \
+#              -m breaker.release_tasks --up-to 99
 
 FROM python:3.11-slim
 
