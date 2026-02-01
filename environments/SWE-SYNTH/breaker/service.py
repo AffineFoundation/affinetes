@@ -976,9 +976,8 @@ class BreakerService:
 
                 tasks_processed += 1
 
-                # Update metadata every 10 tasks (best effort)
-                if task_id % 10 == 0:
-                    self._update_metadata(task_id, success)
+                # Update metadata after each task
+                self._update_metadata(task_id, success)
 
             finally:
                 # Always release claim
