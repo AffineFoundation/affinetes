@@ -92,8 +92,13 @@ def log(msg: str) -> None:
     print(f"[{ts}] {msg}")
 
 
-def cleanup_docker_resources() -> None:
-    """Clean up Docker resources to free disk space after each task."""
+def cleanup_docker_resources(current_image: str = None, max_images: int = 10) -> None:
+    """Clean up Docker resources to free disk space after each task.
+
+    Args:
+        current_image: The image used in current task (will be kept)
+        max_images: Maximum number of sweap-images to keep (default 10)
+    """
     try:
         # Remove stopped containers
         subprocess.run(
@@ -105,6 +110,54 @@ def cleanup_docker_resources() -> None:
             ["docker", "image", "prune", "-f"],
             capture_output=True, timeout=60
         )
+
+        # Clean up old sweap-images to prevent disk space exhaustion
+        # Keep only the most recent N images
+        try:
+            result = subprocess.run(
+                ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
+                 "--filter", "reference=*/sweap-images:*"],
+                capture_output=True, text=True, timeout=60
+            )
+            if result.returncode == 0 and result.stdout.strip():
+                images = []
+                for line in result.stdout.strip().split('\n'):
+                    if line and '\t' in line:
+                        image, created = line.split('\t', 1)
+                        images.append((image, created))
+
+                # Sort by creation time (newest first)
+                images.sort(key=lambda x: x[1], reverse=True)
+
+                # Remove images beyond max_images limit (keep current_image if specified)
+                images_to_remove = []
+                kept = 0
+                for image, _ in images:
+                    if current_image and image == current_image:
+                        continue  # Always keep current image
+                    if kept < max_images:
+                        kept += 1
+                    else:
+                        images_to_remove.append(image)
+
+                # Remove old images
+                for image in images_to_remove:
+                    subprocess.run(
+                        ["docker", "rmi", "-f", image],
+                        capture_output=True, timeout=60
+                    )
+
+                if images_to_remove:
+                    log(f"Cleaned up {len(images_to_remove)} old sweap-images")
+        except Exception as e:
+            log(f"Warning: Failed to clean sweap-images: {e}")
+
+        # Clean up Docker build cache
+        subprocess.run(
+            ["docker", "builder", "prune", "-f", "--filter", "until=24h"],
+            capture_output=True, timeout=60
+        )
+
         # Clean up old breaker workspaces
         workspace_base = Path("/tmp/breaker_workspaces")
         if workspace_base.exists():
@@ -902,26 +955,18 @@ class BreakerService:
                 continue
 
             # Generate the task
+            current_docker_image = None
             try:
                 success, result = await self.generate_task(task_id)
 
                 if success and result is not None:
+                    current_docker_image = result.pop("_docker_image", None)
                     upload_ok = self.save_task(task_id, result)
                     if upload_ok:
                         tasks_generated += 1
                         log(f"[Task {task_id}] ✓ Complete (total: {tasks_generated} generated, {tasks_failed} failed)")
                         # Only advance scan_from on successful upload
                         scan_from = max(scan_from, task_id + 1)
-                        # Remove the docker image to free disk space
-                        docker_image = result.pop("_docker_image", None)
-                        if docker_image:
-                            try:
-                                subprocess.run(
-                                    ["docker", "rmi", docker_image],
-                                    capture_output=True, timeout=60
-                                )
-                            except Exception:
-                                pass
                     else:
                         tasks_failed += 1
                         log(f"[Task {task_id}] ✗ Upload failed, will retry (total: {tasks_generated} generated, {tasks_failed} failed)")
@@ -938,7 +983,8 @@ class BreakerService:
                 # Always release claim
                 self._release_claim(task_id)
                 # Clean up Docker resources after every task (success or failure)
-                cleanup_docker_resources()
+                # Keep max 10 recent images to avoid disk space exhaustion
+                cleanup_docker_resources(current_image=current_docker_image, max_images=10)
 
             # Progress logging
             if tasks_processed % batch_size == 0:
