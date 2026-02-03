@@ -34,6 +34,9 @@ from fixer import create_fixer_agent, FixerConfig, AgentType
 # Import OpenEnv response type
 from affinetes.core.openenv import OpenEnvResponse
 
+# Import shared utilities
+from utils import SANITIZE_GIT_SCRIPT, DIFF_EXTENSIONS
+
 
 # Timeout constants (in seconds)
 DOCKER_PULL_TIMEOUT = 300
@@ -580,22 +583,7 @@ fi
 
     def _sanitize_git_history_in_container(self, container_id: str) -> bool:
         """Remove git history to prevent cheating"""
-        sanitize_script = """
-cd /app
-git config user.email "agent@swe-synth.local"
-git config user.name "SWE-SYNTH Agent"
-git checkout --orphan sanitized_branch
-git add -A
-git commit -m "Initial state"
-git branch -D main 2>/dev/null || git branch -D master 2>/dev/null || true
-git branch -m main
-rm -rf .git/logs
-rm -rf .git/refs/original
-git reflog expire --expire=now --all 2>/dev/null || true
-git gc --prune=now 2>/dev/null || true
-echo "Git history sanitized"
-"""
-        result = self._execute_in_container(container_id, sanitize_script, timeout=60)
+        result = self._execute_in_container(container_id, SANITIZE_GIT_SCRIPT, timeout=60)
         print(f"[SWE-SYNTH] Git history sanitization: {result.get('output', '')[:200]}")
         return True
 
@@ -612,14 +600,9 @@ echo "Git history sanitized"
 
     def _extract_diff_from_container(self, container_id: str) -> str:
         """Extract code diff from container"""
-        extensions = (
-            "'*.js' '*.ts' '*.jsx' '*.tsx' '*.py' '*.java' '*.go' "
-            "'*.c' '*.cpp' '*.h' '*.rs' '*.rb' '*.php' '*.cs' "
-            "'*.swift' '*.kt' '*.scala' '*.vue' '*.svelte'"
-        )
         result = self._execute_in_container(
             container_id,
-            f"cd /app && git add -A && git diff --cached -- {extensions}",
+            f"cd /app && git add -A && git diff --cached -- {DIFF_EXTENSIONS}",
             timeout=60
         )
         diff = result.get("output", "").lstrip()
