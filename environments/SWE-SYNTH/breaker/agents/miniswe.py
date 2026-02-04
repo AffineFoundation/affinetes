@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Dict, Any, Optional
 
 from .base import BaseCodeAgent, AgentConfig, AgentResult
+from utils import DIFF_EXTENSIONS
 
 # Configure logging - only show INFO and above
 logging.basicConfig(
@@ -200,13 +201,7 @@ class MiniSweAgent(BaseCodeAgent):
         if not self.env:
             return ""
 
-        # Get diff of source files only (exclude logs, generated files)
-        extensions = (
-            "'*.js' '*.ts' '*.jsx' '*.tsx' '*.py' '*.java' '*.go' "
-            "'*.c' '*.cpp' '*.h' '*.rs' '*.rb' '*.php' '*.cs' "
-            "'*.swift' '*.kt' '*.scala' '*.vue' '*.svelte'"
-        )
-        patch_cmd = f"cd /app && git diff -- {extensions}"
+        patch_cmd = f"cd /app && git diff -- {DIFF_EXTENSIONS}"
         result = self.env.execute(patch_cmd)
         # Don't use strip() - it can remove trailing content
         # Only remove leading/trailing whitespace lines, preserve internal content

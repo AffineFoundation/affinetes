@@ -14,6 +14,7 @@ from typing import Optional
 import yaml
 
 from .base import BaseFixerAgent, FixerConfig, FixerResult
+from utils import SANITIZE_GIT_SCRIPT
 
 
 def _strip_thinking_tags(content: str) -> str:
@@ -43,47 +44,12 @@ class MiniSWEFixerAgent(BaseFixerAgent):
         self._container_name = None
 
     def _sanitize_git_history(self) -> bool:
-        """Remove git history to prevent cheating by looking at past commits.
-
-        This creates an orphan commit with only the current working tree state,
-        effectively removing all history that could reveal the fix.
-
-        Returns:
-            True if sanitization succeeded, False otherwise.
-        """
+        """Remove git history to prevent cheating by looking at past commits."""
         if not self._env:
             return False
 
         try:
-            # Create orphan branch with current state (removes all history)
-            sanitize_script = """
-cd /app
-# Configure git user (required for commit)
-git config user.email "agent@swe-synth.local"
-git config user.name "SWE-SYNTH Agent"
-# Create orphan branch (no parent commits)
-git checkout --orphan sanitized_branch
-# Add all files to index (must be done AFTER checkout --orphan)
-git add -A
-# Commit current state as the only commit
-git commit -m "Initial state"
-# Delete old branch and rename
-git branch -D main 2>/dev/null || git branch -D master 2>/dev/null || true
-git branch -m main
-# Clean up reflog and other history traces
-rm -rf .git/logs
-rm -rf .git/refs/original
-git reflog expire --expire=now --all 2>/dev/null || true
-git gc --prune=now 2>/dev/null || true
-# Verify clean state
-echo "=== Git status after sanitize ==="
-git status --short
-echo "=== Git log ==="
-git log --oneline -1
-echo "Git history sanitized"
-"""
-            result = self._env.execute(sanitize_script, timeout=60)
-            # Handle result (may be dict or string)
+            result = self._env.execute(SANITIZE_GIT_SCRIPT, timeout=60)
             result_str = result.get("stdout", "") if isinstance(result, dict) else str(result or "")
             print(f"[SWE-SYNTH] Git history sanitization: {result_str[:200] if result_str else 'done'}")
             return True
