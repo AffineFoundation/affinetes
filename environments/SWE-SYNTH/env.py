@@ -16,6 +16,7 @@ import time
 import uuid
 import asyncio
 import tempfile
+import threading
 import subprocess
 from pathlib import Path
 from dataclasses import dataclass, field
@@ -148,8 +149,10 @@ class SynthActor:
         self.swe_instances = {idx: inst for idx, inst in enumerate(sorted_instances)}
         print(f"Loaded {len(self.swe_instances)} SWE-bench Pro instances")
 
-        # Cleanup stale containers from previous runs
+        # Cleanup stale containers and images from previous runs
         self._cleanup_stale_containers()
+        self._cleanup_stale_images()
+        self._start_periodic_cleanup()
 
         # OpenEnv: episode states for concurrent episodes
         self._episodes: Dict[str, EpisodeState] = {}
@@ -159,25 +162,33 @@ class SynthActor:
 
     def _cleanup_stale_containers(self, min_age_minutes: int = 2):
         """
-        Clean up stale ridge-proxy and ridges-sandbox containers from previous runs.
+        Clean up stale containers from previous runs.
+        Matches by container name prefixes and by sweap-images ancestor.
 
         Args:
             min_age_minutes: Only remove containers older than this many minutes (default: 2)
         """
         try:
-            cleaned_count = 0
+            from datetime import datetime, timezone
+
+            # Build filter args: by name prefix + by sweap-images ancestor
+            filter_args_list = []
             for name_filter in ["ridge-proxy-", "ridges-sandbox-", "swe-synth-fixer-", "swe-synth-openenv-", "minisweagent-"]:
-                # Get container IDs and creation times
+                filter_args_list.append(["--filter", f"name={name_filter}"])
+            filter_args_list.append(["--filter", f"ancestor={self.dockerhub_username}/sweap-images"])
+
+            now = datetime.now(timezone.utc)
+            cleaned_count = 0
+            seen_ids = set()
+
+            for filter_args in filter_args_list:
                 result = subprocess.run(
-                    ["docker", "ps", "-a", "--filter", f"name={name_filter}",
-                     "--format", "{{.ID}} {{.CreatedAt}}"],
+                    ["docker", "ps", "-a"] + filter_args +
+                    ["--format", "{{.ID}} {{.CreatedAt}}"],
                     capture_output=True, text=True, timeout=30
                 )
                 if not result.stdout.strip():
                     continue
-
-                from datetime import datetime, timezone
-                now = datetime.now(timezone.utc)
 
                 for line in result.stdout.strip().split('\n'):
                     if not line.strip():
@@ -186,10 +197,10 @@ class SynthActor:
                     if len(parts) < 2:
                         continue
                     cid, created_str = parts[0], parts[1]
+                    if cid in seen_ids:
+                        continue
 
-                    # Parse creation time (format: "2026-01-29 10:00:00 +0000 UTC")
                     try:
-                        # Remove timezone name suffix if present
                         created_str = created_str.rsplit(' ', 1)[0] if 'UTC' in created_str else created_str
                         created = datetime.strptime(created_str.strip(), "%Y-%m-%d %H:%M:%S %z")
                         age_minutes = (now - created).total_seconds() / 60
@@ -200,8 +211,8 @@ class SynthActor:
                                 capture_output=True, timeout=30
                             )
                             cleaned_count += 1
+                            seen_ids.add(cid)
                     except (ValueError, TypeError):
-                        # If we can't parse the time, skip this container
                         continue
 
             if cleaned_count > 0:
@@ -209,6 +220,60 @@ class SynthActor:
 
         except Exception as e:
             print(f"[SWE-SYNTH] Warning: Failed to cleanup stale containers: {e}")
+
+    def _cleanup_stale_images(self, min_age_hours: float = 60):
+        """Clean up sweap-images whose build time exceeds min_age_hours to free disk space."""
+        try:
+            result = subprocess.run(
+                ["docker", "images", "--format", "{{.Repository}}:{{.Tag}}\t{{.CreatedAt}}",
+                 "--filter", f"reference={self.dockerhub_username}/sweap-images:*"],
+                capture_output=True, text=True, timeout=30
+            )
+            if not result.stdout.strip():
+                return
+
+            from datetime import datetime, timezone
+            now = datetime.now(timezone.utc)
+            removed = 0
+
+            for line in result.stdout.strip().split('\n'):
+                if not line.strip() or '\t' not in line:
+                    continue
+                image, created_str = line.split('\t', 1)
+                try:
+                    # Format: "2025-08-27 01:56:16 +0000 UTC"
+                    created_str = created_str.rsplit(' ', 1)[0] if 'UTC' in created_str else created_str
+                    created = datetime.strptime(created_str.strip(), "%Y-%m-%d %H:%M:%S %z")
+                    age_hours = (now - created).total_seconds() / 3600
+                    if age_hours >= min_age_hours:
+                        rm_result = subprocess.run(
+                            ["docker", "rmi", image],
+                            capture_output=True, text=True, timeout=300
+                        )
+                        if rm_result.returncode == 0:
+                            removed += 1
+                except (ValueError, TypeError):
+                    continue
+
+            if removed > 0:
+                print(f"[SWE-SYNTH] Cleaned up {removed} stale images (built >{min_age_hours}h ago)")
+
+        except Exception as e:
+            print(f"[SWE-SYNTH] Warning: Failed to cleanup stale images: {e}")
+
+    def _start_periodic_cleanup(self, interval_hours: float = 6):
+        """Start background thread for periodic resource cleanup."""
+        def _cleanup_loop():
+            while True:
+                time.sleep(interval_hours * 3600)
+                try:
+                    self._cleanup_stale_containers()
+                    self._cleanup_stale_images()
+                except Exception as e:
+                    print(f"[SWE-SYNTH] Periodic cleanup error: {e}")
+
+        t = threading.Thread(target=_cleanup_loop, daemon=True, name="swe-synth-cleanup")
+        t.start()
 
     def _load_task(self, task_id: int) -> Dict[str, Any]:
         """
