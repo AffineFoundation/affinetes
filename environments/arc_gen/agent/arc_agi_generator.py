@@ -170,6 +170,17 @@ class ARC2Generator:
             if "zoom_2x" in compatible:
                 result_chain.append({"name": "zoom_2x", "params": None})
 
+        ### gravity
+        if rng.random() > 0.75:
+            result_chain.append({"name": "gravity_down", "params": None})
+        elif rng.random() > 0.5:
+            result_chain.append({"name": "gravity_up", "params": None})
+        elif rng.random() > 0.25:
+            result_chain.append({"name": "gravity_left", "params": None})
+        else:
+            result_chain.append({"name": "gravity_right", "params": None})            
+
+
         return result_chain
 
     def apply_transformation_chain(

@@ -349,11 +349,10 @@ TRANSFORMATIONS = {
     # 'highlight_color': (highlight_color, {'type': 'color', 'preserves_size': True}),
 
     # Physics - intuitive for humans, adds predictability
-    # 'gravity_down': (gravity_down, {'type': 'physics', 'preserves_size': True}),
-    # 'gravity_up': (gravity_up, {'type': 'physics', 'preserves_size': True}),
-    # 'gravity_left': (gravity_left, {'type': 'physics', 'preserves_size': True}),
-    # 'gravity_right': (gravity_right, {'type': 'physics', 'preserves_size': True}),
-
+    'gravity_down': (gravity_down, {'type': 'physics', 'preserves_size': True}),
+    'gravity_up': (gravity_up, {'type': 'physics', 'preserves_size': True}),
+    'gravity_left': (gravity_left, {'type': 'physics', 'preserves_size': True}),
+    'gravity_right': (gravity_right, {'type': 'physics', 'preserves_size': True}),
 }
 
 
