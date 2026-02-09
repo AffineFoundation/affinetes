@@ -61,12 +61,16 @@ def generate(width=None, height=None, rows=None, cols=None, bgcolors=None,
     brows, bcols, row, col = [], [], common.randint(2, 7), common.randint(2, 7)
     while True:  # First, choose horizontal stripes.
       spacing = common.randint(2, 5)
-      if row + spacing > height: break
+      if row + spacing > height:
+        brows.extend(range(row, height))    
+        break
       brows.extend(range(row, row + spacing))
       row += spacing + common.randint(4, 5)
     while True:  # Second, choose vertical stripes.
       spacing = common.randint(2, 5)
-      if col + spacing > width: break
+      if col + spacing > width: 
+        brows.extend(range(col, height)) 
+        break
       bcols.extend(range(col, col + spacing))
       col += spacing + common.randint(4, 5)
     while True:  # Keep choosing pixel locations until we land on two colors.

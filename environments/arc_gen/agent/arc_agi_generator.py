@@ -46,7 +46,7 @@ class ARC2Generator:
         Returns:
             Dict with "input", "output", and "task_num" keys
         """
-        max_retry = 10
+        max_retry = 100
         while max_retry > 0:
             try:
                 tmap = task_list.task_list()

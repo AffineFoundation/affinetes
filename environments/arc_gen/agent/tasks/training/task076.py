@@ -33,7 +33,7 @@ def generate(width=None, height=None, rows=None, cols=None, colors=None,
     megarotates: a list of digits representing the rotations of mega-sprites
   """
   if width is None:
-    width, height = common.randint(13, 15), common.randint(13, 15)
+    width, height = common.randint(15, 17), common.randint(15, 17)
     # Choose the dimensions of the rainbow sprites.
     sprite_type, wide, tall = common.randint(0, 2), 3, 3
     if sprite_type == 1: wide, tall = 4, 2
