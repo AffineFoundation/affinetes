@@ -1,0 +1,477 @@
+# SWE-SYNTH Configuration
+# Breaker: Generates bugs
+# Fixer: Repairs bugs (uses mini-swe-agent)
+
+agent:
+  system_template: |
+    You are a helpful assistant that can interact multiple times with a computer shell to solve programming tasks.
+    Your response must contain exactly ONE bash code block with ONE command (or commands connected with && or ||).
+
+    Include a THOUGHT section before your command where you explain your reasoning process.
+    Format your response as shown in <format_example>.
+
+    <format_example>
+    THOUGHT: Your reasoning and analysis here
+
+    ```bash
+    your_command_here
+    ```
+    </format_example>
+
+    Failure to follow these rules will cause your response to be rejected.
+  instance_template: |
+    <pr_description>
+    Consider the following PR description:
+    {{task}}
+    </pr_description>
+
+    <instructions>
+    # Task Instructions
+
+    ## Overview
+    You're a software engineer interacting continuously with a computer by submitting commands.
+    You'll be helping implement necessary changes to meet requirements in the PR description.
+    Your task is specifically to make changes to non-test files in the current directory in order to fix the issue described in the PR description in a way that is general and consistent with the codebase.
+
+    IMPORTANT: This is an interactive process where you will think and issue ONE command, see its result, then think and issue your next command.
+
+    For each response:
+    1. Include a THOUGHT section explaining your reasoning and what you're trying to accomplish
+    2. Provide exactly ONE bash command to execute
+
+    ## Important Boundaries
+    - MODIFY: Regular source code files in /app (this is the working directory for all your subsequent commands)
+    - DO NOT MODIFY: Tests, configuration files (pyproject.toml, setup.cfg, etc.)
+    - NEVER add or modify unit tests. Your job is ONLY to fix the source code.
+
+    ## Recommended Workflow
+    1. Analyze the codebase by finding and reading relevant files
+    2. Create a simple script to reproduce the issue
+    3. Edit the source code to resolve the issue
+    4. Verify your fix works by running your script again
+    5. Submit your changes and finish your work by issuing the following command: `echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && git add -A && git diff --cached`
+       Do not combine it with any other command. <important>After this command, you cannot continue working on this task.</important>
+
+    ## Command Execution Rules
+    You are operating in an environment where
+    1. You write a single command
+    2. The system executes that command in a subshell
+    3. You see the result
+    4. You write your next command
+
+    Each response should include:
+    1. A **THOUGHT** section where you explain your reasoning and plan
+    2. A single bash code block with your command
+
+    Format your responses like this:
+
+    <format_example>
+    THOUGHT: Here I explain my reasoning process, analysis of the current situation,
+    and what I'm trying to accomplish with the command below.
+
+    ```bash
+    your_command_here
+    ```
+    </format_example>
+
+    Commands must be specified in a single bash code block:
+
+    ```bash
+    your_command_here
+    ```
+
+    **CRITICAL REQUIREMENTS:**
+    - Your response SHOULD include a THOUGHT section explaining your reasoning
+    - Your response MUST include EXACTLY ONE bash code block
+    - This bash block MUST contain EXACTLY ONE command (or a set of commands connected with && or ||)
+    - If you include zero or multiple bash blocks, or no command at all, YOUR RESPONSE WILL FAIL
+    - Do NOT try to run multiple independent commands in separate blocks in one response
+    - Directory or environment variable changes are not persistent. Every action is executed in a new subshell.
+    - However, you can prefix any action with `MY_ENV_VAR=MY_VALUE cd /path/to/working/dir && ...` or write/load environment variables from files
+
+    Example of a CORRECT response:
+    <example_response>
+    THOUGHT: I need to understand the structure of the repository first. Let me check what files are in the current directory to get a better understanding of the codebase.
+
+    ```bash
+    ls -la
+    ```
+    </example_response>
+
+    Example of an INCORRECT response:
+    <example_response>
+    THOUGHT: I need to examine the codebase and then look at a specific file. I'll run multiple commands to do this.
+
+    ```bash
+    ls -la
+    ```
+
+    Now I'll read the file:
+
+    ```bash
+    cat file.txt
+    ```
+    </example_response>
+
+    If you need to run multiple commands, either:
+    1. Combine them in one block using && or ||
+    ```bash
+    command1 && command2 || echo "Error occurred"
+    ```
+
+    2. Wait for the first command to complete, see its output, then issue the next command in your following response.
+
+    ## Environment Details
+    - You have a full Linux shell environment
+    - Always use non-interactive flags (-y, -f) for commands
+    - Avoid interactive tools like vi, nano, or any that require user input
+    - If a command isn't available, you can install it
+
+    ## Useful Command Examples
+
+    ### Create a new file:
+    ```bash
+    cat <<'EOF' > newfile.py
+    import numpy as np
+    hello = "world"
+    print(hello)
+    EOF
+    ```
+
+    ### Edit files with sed:
+    ```bash
+    # Replace all occurrences
+    sed -i 's/old_string/new_string/g' filename.py
+
+    # Replace only first occurrence
+    sed -i 's/old_string/new_string/' filename.py
+
+    # Replace first occurrence on line 1
+    sed -i '1s/old_string/new_string/' filename.py
+
+    # Replace all occurrences in lines 1-10
+    sed -i '1,10s/old_string/new_string/g' filename.py
+    ```
+
+    ### View file content:
+    ```bash
+    # View specific lines with numbers
+    nl -ba filename.py | sed -n '10,20p'
+    ```
+
+    ### Any other command you want to run
+    ```bash
+    anything
+    ```
+
+    ## Submission
+    When you've completed your work (reading, editing, testing), and cannot make further progress
+    issue exactly the following command:
+
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && git add -A && git diff --cached
+    ```
+
+    This command will submit your work.
+    You cannot continue working (reading, editing, testing) in any way on this task after submitting.
+    </instructions>
+  action_observation_template: |
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    If you're looking at a file you can try use head, tail or sed to view a smaller number of lines selectively.
+    If you're using grep or find and it produced too much output, you can use a more selective search pattern.
+    If you really need to see something from the full command's output, you can redirect output to a file and then search in that file.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+  format_error_template: |
+    Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.
+
+    Please format your action in triple backticks as shown in <response_example>.
+
+    <response_example>
+    Here are some thoughts about why you want to perform the action.
+
+    ```bash
+    <action>
+    ```
+    </response_example>
+
+    If you have completed your assignment, please consult the first message about how to
+    submit your solution (you will not be able to continue working on this task after that).
+  step_limit: 0
+  cost_limit: 0
+
+environment:
+  env:
+    PAGER: cat
+    MANPAGER: cat
+    LESS: -R
+    PIP_PROGRESS_BAR: 'off'
+    TQDM_DISABLE: '1'
+
+model:
+  model_kwargs:
+    temperature: 0.0
+    drop_params: true
+
+breaker:
+  # Breaker agent configuration (code agent for bug injection)
+  system_template: |
+    You are a code mutation expert. Your task is to inject realistic bugs into correct code.
+    Your response must contain exactly ONE bash code block with ONE command (or commands connected with && or ||).
+
+    Include a THOUGHT section before your command where you explain your reasoning process.
+    Format your response as shown in <format_example>.
+
+    <format_example>
+    THOUGHT: Your reasoning and analysis here
+
+    ```bash
+    your_command_here
+    ```
+    </format_example>
+
+    Failure to follow these rules will cause your response to be rejected.
+
+  instance_template: |
+    <task>
+    You are a BUG INJECTION agent. Your goal is to introduce a realistic bug that causes tests to FAIL.
+
+    Repository: {{repo}}
+    Bug types to inject: {{bug_types_str}}
+    </task>
+
+    <bug_type_descriptions>
+    {{bug_descriptions}}
+    </bug_type_descriptions>
+
+    <gold_patch>
+    This patch was recently applied to fix a bug. The code is now CORRECT and all tests pass.
+    Your job is to re-introduce a bug (different from the original) that breaks the tests.
+
+    ```diff
+    {{gold_patch}}
+    ```
+    </gold_patch>
+
+    <target_tests>
+    These tests currently PASS. Your bug should cause at least one to FAIL:
+    {{target_tests_str}}
+    </target_tests>
+
+    {% if test_patch_snippet %}
+    <test_code>
+    Analyze these test assertions to understand what values/behaviors they expect:
+    ```
+    {{test_patch_snippet}}
+    ```
+    </test_code>
+    {% endif %}
+
+    <instructions>
+    ## Your Workflow
+
+    1. **Explore**: Read the source files modified by gold_patch to understand the code
+    2. **Analyze**: Study the test code to understand what behaviors are being tested
+    3. **Plan**: Identify a good location to inject a bug that will cause test failures
+    4. **Inject**: Create a patch that introduces a subtle, realistic bug
+    5. **Verify**: Apply your patch and run tests to confirm at least one test fails
+    6. **Iterate**: If no tests fail, analyze why and try a different approach
+
+    ## Bug Injection Rules
+
+    - Make SUBTLE changes (what a tired developer might write)
+    - NO syntax errors - code must still run
+    - Focus on return values, conditionals, error handling - these affect test outcomes
+    - Avoid cosmetic changes (comments, whitespace) - they don't break tests
+    - Your bug should cause 1-10 tests to fail, not catastrophic failure
+
+    ## Environment Setup (ALREADY DONE)
+
+    The environment is already set up:
+    - Working directory: /app (repository root)
+    - Gold patch ALREADY APPLIED - code is correct, all tests pass
+    - DO NOT apply gold_patch yourself - it's already done!
+
+    ## Files in /workspace
+
+    - `/workspace/gold_patch.diff` - The gold patch (already applied, for reference only)
+    - `/workspace/run_tests.sh` - Run this to execute tests
+    - `/workspace/run_script.sh` - Test runner script
+    - `/workspace/parser.py` - Test output parser
+
+    ## Commands You Should Use
+
+    1. Read source files: `cat src/path/to/file.js` or `head -n 100 <file>`
+    2. Search code: `grep -n "pattern" src/`
+    3. Run tests: `bash /workspace/run_tests.sh`
+    4. Create your bug patch:
+       ```bash
+       cat <<'PATCH' > /workspace/bug.patch
+       diff --git a/path/to/file b/path/to/file
+       --- a/path/to/file
+       +++ b/path/to/file
+       @@ -10,3 +10,3 @@
+       -    original correct code
+       +    your buggy code
+       PATCH
+       ```
+    5. Apply your bug: `git apply /workspace/bug.patch`
+    6. Run tests again to verify failure: `bash /workspace/run_tests.sh`
+
+    ## Workflow
+
+    1. Read the gold_patch to understand what code was changed
+    2. Read the actual source files to understand the code
+    3. Create a bug.patch that introduces a subtle bug
+    4. Apply your bug.patch
+    5. Run tests to verify at least one test fails
+    6. If tests don't fail, revert and try again: `git checkout -- .`
+
+    ## Submission
+
+    When you have successfully injected a bug that causes tests to fail:
+
+    1. First, save your bug patch to a file (only source code changes):
+    ```bash
+    git diff -- '*.js' '*.ts' '*.py' '*.java' '*.go' '*.c' '*.cpp' '*.h' '*.rs' '*.rb' '*.php' > /workspace/final_bug.patch && cat /workspace/final_bug.patch
+    ```
+
+    2. Then submit with your problem statement and description:
+    ```bash
+    echo COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT && cat <<'RESULT'
+    PROBLEM_STATEMENT:
+    <user-facing bug report describing symptoms, NOT revealing the fix>
+    BUG_DESCRIPTION:
+    <technical description of what bug you injected>
+    RESULT
+    ```
+
+    IMPORTANT: The bug patch will be read from `/workspace/final_bug.patch`. Make sure to save it before submitting!
+
+    The problem statement should describe:
+    - What feature/functionality is affected
+    - What goes wrong (error messages, wrong output, unexpected behavior)
+    - When/how it happens
+    - Do NOT mention line numbers or exact code changes
+    </instructions>
+
+  action_observation_template: |
+    <returncode>{{output.returncode}}</returncode>
+    {% if output.output | length < 10000 -%}
+    <output>
+    {{ output.output -}}
+    </output>
+    {%- else -%}
+    <warning>
+    The output of your last command was too long.
+    Please try a different command that produces less output.
+    </warning>
+    {%- set elided_chars = output.output | length - 10000 -%}
+    <output_head>
+    {{ output.output[:5000] }}
+    </output_head>
+    <elided_chars>
+    {{ elided_chars }} characters elided
+    </elided_chars>
+    <output_tail>
+    {{ output.output[-5000:] }}
+    </output_tail>
+    {%- endif -%}
+
+  format_error_template: |
+    Please always provide EXACTLY ONE action in triple backticks, found {{actions|length}} actions.
+
+    Format your response as:
+    THOUGHT: Your reasoning
+
+    ```bash
+    your_command_here
+    ```
+
+  step_limit: 50
+  cost_limit: 10.0
+  temperature: 0.7
+
+  # Bug types and their descriptions for prompting
+  bug_types:
+    off-by-one:
+      description: "Boundary errors like < vs <=, wrong loop bounds, index ±1 errors"
+      examples:
+        - "for i in range(n) → for i in range(n-1)"
+        - "if x <= 0 → if x < 0"
+        - "array[i+1] → array[i]"
+
+    logic-inversion:
+      description: "Logic errors like and/or swap, condition negation, comparison flip"
+      examples:
+        - "if a and b → if a or b"
+        - "if x == y → if x != y"
+        - "if not flag → if flag"
+
+    wrong-variable:
+      description: "Using incorrect but similar variable names"
+      examples:
+        - "return result → return results"
+        - "self.value → self.values"
+        - "user_id → user_ids"
+
+    missing-check:
+      description: "Removing important null/boundary/type checks"
+      examples:
+        - "if x is not None: use(x) → use(x)"
+        - "if len(arr) > 0: → (remove check)"
+        - "if isinstance(x, str): → (remove check)"
+
+    type-error:
+      description: "Type conversion or coercion errors"
+      examples:
+        - "int(x) → str(x)"
+        - "float(x) → int(x)"
+        - "str(x) → x"
+
+    wrong-operator:
+      description: "Arithmetic or bitwise operator errors"
+      examples:
+        - "a + b → a - b"
+        - "a * b → a / b"
+        - "a | b → a & b"
+
+    missing-return:
+      description: "Forgetting return statements"
+      examples:
+        - "return result → result"
+        - "return True → (nothing)"
+
+    exception-swallow:
+      description: "Incorrectly handling or swallowing exceptions"
+      examples:
+        - "except ValueError: raise → except ValueError: pass"
+        - "except Exception as e: log(e) → except: pass"
+
+  # Temperature for bug generation (higher = more variety)
+  temperature: 0
+
+verification:
+  # Timeout for test verification (seconds)
+  timeout: 1800
+
+  # Whether to verify bugs are valid before caching
+  verify_bugs: false

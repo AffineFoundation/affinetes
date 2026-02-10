@@ -354,8 +354,6 @@ class Common:
       for c in range(width):
         if self.random.random() > prob: continue
         pixels.append((r, c))
-    if len(pixels) == 0:
-      pixels = [(0,0)]
     return pixels
 
 

@@ -1,0 +1,38 @@
+version: '3.8'
+
+services:
+  breaker:
+    build:
+      context: ..
+      dockerfile: breaker/Dockerfile
+    volumes:
+      # Docker socket for Docker-in-Docker
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Shared workspace for volume mounts (host path = container path)
+      - /tmp/breaker_workspaces:/tmp/breaker_workspaces
+    environment:
+      - PYTHONUNBUFFERED=1
+      - CHUTES_API_KEY=${CHUTES_API_KEY}
+      - R2_ENDPOINT_URL=${R2_ENDPOINT_URL}
+      - R2_BUCKET=${R2_BUCKET}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+    # Unlimited mode by default
+    command: ["--start-from", "${START_FROM:-0}"]
+    # Or limit: command: ["--start-from", "0", "--max-tasks", "100"]
+
+  release:
+    build:
+      context: ..
+      dockerfile: breaker/Dockerfile
+    environment:
+      - PYTHONUNBUFFERED=1
+      - R2_ENDPOINT_URL=${R2_ENDPOINT_URL}
+      - R2_BUCKET=${R2_BUCKET}
+      - R2_PUBLIC_BUCKET=${R2_PUBLIC_BUCKET}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+    entrypoint: ["python", "-m", "breaker.release_tasks"]
+    # Default: daemon mode, 2 tasks per hour
+    # Override: docker-compose run release --up-to 99
+    command: ["--daemon", "--batch-size", "${RELEASE_BATCH_SIZE:-2}", "--interval", "${RELEASE_INTERVAL:-3600}"]

@@ -77,6 +77,8 @@ async def main():
 
     print(f"\nTotal reward: {total_reward}")
 
+    # Prefer explicit stop over relying on __del__ (more deterministic).
+    await sess.stop()
     await env.cleanup()
 
 

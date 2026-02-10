@@ -47,7 +47,7 @@ class OpenEnvSession:
 
     async def state(self) -> Dict[str, Any]:
         """Fetch current state/observation (no transition)."""
-        resp = await self._env.state(request={"episode_id": self.episode_id})
+        resp = await self._env.state(episode_id=self.episode_id)
         if not isinstance(resp, dict):
             raise TypeError(f"OpenEnv state expected dict response, got {type(resp)}")
         # state() should return an OpenEnvResponse-like dict; keep last if present
@@ -71,7 +71,7 @@ class OpenEnvSession:
 
         # Try stop() first (preferred)
         try:
-            return await self._env.stop(request={"episode_id": self.episode_id})
+            return await self._env.stop(episode_id=self.episode_id)
         except Exception:
             pass
 
@@ -81,23 +81,9 @@ class OpenEnvSession:
         except Exception:
             return None
 
-    async def step(
-        self,
-        action: str,
-        *,
-        kwargs: Optional[Dict[str, Any]] = None,
-        request: Optional[Dict[str, Any]] = None,
-    ) -> Dict[str, Any]:
+    async def step(self, action: str) -> Dict[str, Any]:
         """Call env.step while automatically providing episode_id."""
-        if request is None:
-            request = {"action": action, "episode_id": self.episode_id, "kwargs": kwargs}
-            resp = await self._env.step(request=request)
-        else:
-            # Ensure episode_id is present unless user intentionally overrides it.
-            request = dict(request)
-            request.setdefault("episode_id", self.episode_id)
-            resp = await self._env.step(request=request)
-
+        resp = await self._env.step(action=action, episode_id=self.episode_id)
         if not isinstance(resp, dict):
             raise TypeError(f"OpenEnv step expected dict response, got {type(resp)}")
         self.last = resp
@@ -137,16 +123,12 @@ class OpenEnvClient:
 
     async def reset(
         self,
-        *,
         task_id: Optional[int] = None,
         seed: Optional[int] = None,
-        kwargs: Optional[Dict[str, Any]] = None,
-        request: Optional[Dict[str, Any]] = None,
+        **kwargs,
     ) -> OpenEnvSession:
         """Call env.reset and return an OpenEnvSession bound to episode_id."""
-        if request is None:
-            request = {"task_id": task_id, "seed": seed, "kwargs": kwargs}
-        resp = await self._env.reset(request=request)
+        resp = await self._env.reset(task_id=task_id, seed=seed, **kwargs)
         if not isinstance(resp, dict):
             raise TypeError(f"OpenEnv reset expected dict response, got {type(resp)}")
         episode_id = _extract_episode_id(resp)

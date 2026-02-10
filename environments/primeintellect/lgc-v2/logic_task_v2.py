@@ -301,4 +301,9 @@ class LogicTaskV2:
             if "</think>" not in text:
                 return ""
             text = text.split("</think>")[-1].strip()
+
+        # Handle </think> tags for thinking models
+        if "</think>" in text:
+            text = text.split("</think>")[-1].strip()
+
         return text.strip()
