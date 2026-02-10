@@ -56,7 +56,7 @@ def generate(width=None, height=None, rows=None, cols=None, idxs=None,
     rows, cols, idxs, colors = [], [], [], []
     for idx in range(num_sprites):
       wide, tall = wides[idx], talls[idx]
-      pixels = common.continuous_creature(common.randint(6, 12), wide, tall)
+      pixels = common.continuous_creature(common.randint(7, 12), wide, tall)
       sprite_colors = [color_list[3]] * len(pixels)
       while True:  # Pick positions that aren't all in a line
         pos = common.sample(range(len(pixels)), 3)

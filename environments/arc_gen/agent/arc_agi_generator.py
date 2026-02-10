@@ -39,7 +39,13 @@ class ARC2Generator:
         task_num: Optional[int] = None,
         rng = None,
     ) -> Dict[str, Any]:
-        max_retry = 10
+        """
+        Generate a base ARC style problem from task_list.
+        
+        Returns:
+            Dict with "input", "output", and "task_num" keys
+        """
+        max_retry = 100
         while max_retry > 0:
             try:
                 """
@@ -175,6 +181,17 @@ class ARC2Generator:
 
             result_chain.append({"name": name, "params": params})
             cur = new_cur
+
+        ### gravity
+        if rng.random() > 0.75:
+            result_chain.append({"name": "gravity_down", "params": None})
+        elif rng.random() > 0.5:
+            result_chain.append({"name": "gravity_up", "params": None})
+        elif rng.random() > 0.25:
+            result_chain.append({"name": "gravity_left", "params": None})
+        else:
+            result_chain.append({"name": "gravity_right", "params": None})            
+
 
         return result_chain
 
