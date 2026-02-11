@@ -144,8 +144,13 @@ class LocalBackend(AbstractBackend):
                 self._env_type = labels.get("affinetes.env.type", EnvType.FUNCTION_BASED)
                 logger.info(f"Environment type (from container): {self._env_type}")
             
-            # Initialize connection address
-            local_host, local_port = self._initialize_connection_address()
+            # Check for published ports first (for Docker Desktop compatibility)
+            local_host, local_port = self._get_published_port()
+            if local_host and local_port:
+                logger.info(f"Using published port: {local_host}:{local_port}")
+            else:
+                # Fall back to container IP
+                local_host, local_port = self._initialize_connection_address()
             
             # Create HTTP executor with configurable timeout
             self._http_executor = HTTPExecutor(
@@ -353,9 +358,16 @@ class LocalBackend(AbstractBackend):
             
             # Network handling
             if self._host_network:
-                # Host network mode requested
-                container_config["network_mode"] = "host"
-                logger.info("Using host network mode (network_mode='host')")
+                # Check if we're on macOS (Docker Desktop) where host network doesn't work
+                import platform
+                if platform.system() == "Darwin":
+                    # On macOS Docker Desktop, use port publishing instead
+                    container_config["ports"] = {"8000/tcp": self._host_port}
+                    logger.info(f"macOS detected, using port publishing: {self._host_port}:8000")
+                else:
+                    # On Linux, use host network mode
+                    container_config["network_mode"] = "host"
+                    logger.info("Using host network mode (network_mode='host')")
             elif not self._is_remote:
                 # Only needed for local DOOD deployment
                 # Remote deployment uses SSH tunnel, so no network configuration needed
@@ -379,10 +391,10 @@ class LocalBackend(AbstractBackend):
             
             # Initialize connection address
             if self._host_network:
-                # Host network mode: use localhost with configured port
+                # Host network mode or port publishing: use localhost with configured port
                 local_host = "localhost"
                 local_port = self._host_port
-                logger.info(f"Host network mode, accessing via localhost: {local_host}:{local_port}")
+                logger.info(f"Accessing via localhost: {local_host}:{local_port}")
             else:
                 local_host, local_port = self._initialize_connection_address()
             
@@ -445,6 +457,40 @@ class LocalBackend(AbstractBackend):
         except:
             pass
         return False
+    
+    def _get_published_port(self) -> Tuple[Optional[str], Optional[int]]:
+        """
+        Check if container has published ports and return localhost address if available.
+        
+        This is needed for Docker Desktop on macOS where container IPs are not accessible.
+        
+        Returns:
+            (host, port) tuple if published port found, (None, None) otherwise
+        """
+        if not self._container:
+            return None, None
+        
+        try:
+            self._container.reload()
+            ports = self._container.attrs.get("NetworkSettings", {}).get("Ports", {})
+            
+            # Look for port 8000/tcp binding
+            port_bindings = ports.get("8000/tcp")
+            if port_bindings and len(port_bindings) > 0:
+                binding = port_bindings[0]
+                host_ip = binding.get("HostIp", "0.0.0.0")
+                host_port = int(binding.get("HostPort", 8000))
+                
+                # Use localhost for 0.0.0.0 or empty host
+                if host_ip in ("0.0.0.0", "", "::"):
+                    host_ip = "localhost"
+                
+                return host_ip, host_port
+            
+            return None, None
+        except Exception as e:
+            logger.debug(f"Failed to get published ports: {e}")
+            return None, None
     
     def _detect_runtime_environment(self) -> str:
         """
