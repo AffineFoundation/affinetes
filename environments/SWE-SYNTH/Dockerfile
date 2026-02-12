@@ -19,11 +19,11 @@ RUN pip install --no-cache-dir -r /tmp/requirements.txt
 # Create cache directory
 RUN mkdir -p /app/swe-synth-cache
 
-# Copy source code, config, and ridges data
+# Copy source code, config, and agent scaffolds
 COPY env.py cache.py __init__.py config.yaml utils.py ./
 COPY fixer/ ./fixer/
-COPY ridges/ ./ridges/
+COPY agent/ ./agent/
 
 # Set default paths for ridges data
-ENV RIDGE_PROJECT_PATH=/app/ridges
+ENV RIDGE_PROJECT_PATH=/app/agent/ridges
 ENV PYTHONUNBUFFERED=1

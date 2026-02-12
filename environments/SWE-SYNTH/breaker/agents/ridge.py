@@ -19,8 +19,8 @@ from .base import BaseCodeAgent, AgentConfig, AgentResult
 # Ridge project path configuration (relative to SWE-SYNTH)
 def _get_default_ridge_path() -> str:
     """Get default Ridge path relative to this file"""
-    # breaker/agents/ridge.py -> ../.. -> SWE-SYNTH -> ridges
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "ridges"))
+    # breaker/agents/ridge.py -> ../.. -> SWE-SYNTH -> agent/ridges
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..", "agent", "ridges"))
 
 
 def get_ridge_project_path() -> str:

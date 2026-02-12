@@ -5,8 +5,8 @@ import os
 
 def _get_default_ridge_path() -> str:
     """Get default Ridge path relative to this file"""
-    # fixer/config.py -> .. -> SWE-SYNTH -> ridges
-    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "ridges"))
+    # fixer/config.py -> .. -> SWE-SYNTH -> agent/ridges
+    return os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "agent", "ridges"))
 
 
 def get_ridge_project_path() -> str:

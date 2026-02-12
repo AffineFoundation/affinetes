@@ -112,8 +112,8 @@ class SynthActor:
         api_key: Optional[str] = None,
         cache_dir: str = "/tmp/swe-synth-cache",
         dockerhub_username: str = "jefzda",
-        dockerfiles_dir: str = "/app/ridges/dockerfiles",
-        run_scripts_dir: str = "/app/ridges/run_scripts",
+        dockerfiles_dir: str = "/app/agent/ridges/dockerfiles",
+        run_scripts_dir: str = "/app/agent/ridges/run_scripts",
         # R2 read-only cache (public URL, no auth needed)
         r2_public_read_url: str = "https://pub-4b43a94ed07d4ac38fae3f4cb5070d6c.r2.dev",
         r2_prefix: str = "bugs",
