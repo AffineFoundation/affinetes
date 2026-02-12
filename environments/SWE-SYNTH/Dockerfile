@@ -3,12 +3,17 @@
 
 FROM python:3.11-slim
 
-# Install system dependencies
+# Install system dependencies + Node.js (for codex CLI)
 RUN apt-get update && apt-get install -y \
     git \
     curl \
     docker.io \
+    nodejs \
+    npm \
     && rm -rf /var/lib/apt/lists/*
+
+# Install OpenAI Codex CLI
+RUN npm install -g @openai/codex
 
 WORKDIR /app
 

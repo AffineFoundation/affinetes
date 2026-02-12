@@ -18,7 +18,7 @@ def create_fixer_agent(agent_type: AgentType, config: FixerConfig) -> BaseFixerA
         from .stub import SWEAgentFixerAgent
         return SWEAgentFixerAgent(config)
     elif agent_type == "codex":
-        from .stub import CodexFixerAgent
+        from .codex import CodexFixerAgent
         return CodexFixerAgent(config)
     else:
         raise ValueError(f"Unknown agent type: {agent_type}")
