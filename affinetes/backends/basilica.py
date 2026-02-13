@@ -12,27 +12,19 @@ Key features:
 """
 
 import os
+import uuid
 import time
 import asyncio
 from concurrent.futures import ThreadPoolExecutor
-from typing import Optional, Any, Dict
+from typing import Optional, Any, Dict, Set
 from urllib.parse import urlparse
+
+import httpx
 
 from .base import AbstractBackend
 from ..infrastructure import HTTPExecutor, EnvType
 from ..utils.exceptions import BackendError
 from ..utils.logger import logger
-
-# Set AFFINETES_MAX_CONCURRENT_DEPLOYMENTS to limit concurrent SDK operations
-_max_concurrent_env = os.getenv("AFFINETES_MAX_CONCURRENT_DEPLOYMENTS")
-_sdk_executor = (
-    ThreadPoolExecutor(
-        max_workers=int(_max_concurrent_env),
-        thread_name_prefix="basilica_sdk_"
-    )
-    if _max_concurrent_env
-    else None  # None = use default executor (no limit)
-)
 
 
 class BasilicaBackend(AbstractBackend):
@@ -89,6 +81,16 @@ class BasilicaBackend(AbstractBackend):
                 "Set BASILICA_API_TOKEN environment variable"
             )
 
+        # Import and create SDK client once (thread-safe for concurrent use)
+        try:
+            from basilica import BasilicaClient, Deployment
+        except ImportError:
+            raise BackendError(
+                "basilica-sdk not installed. Install with: pip install basilica-sdk>=0.19.0"
+            )
+        self._client = BasilicaClient(api_key=self.api_token)
+        self._Deployment = Deployment
+
         # Resource configuration (use defaults if not provided)
         self.cpu = cpu_limit or "2000m"
         self.memory = mem_limit or "8Gi"
@@ -104,6 +106,20 @@ class BasilicaBackend(AbstractBackend):
         safe_image = image.split('/')[-1].replace(':', '-')
         self.name = f"basilica-pod-{safe_image}-{int(time.time())}"
 
+        # Large thread pool for blocking SDK calls -- threads are I/O-bound
+        # (network waits), so high count is safe. No client-side throttle;
+        # Basilica's API and K8s scheduler handle admission control.
+        self._executor = ThreadPoolExecutor(
+            max_workers=512,
+            thread_name_prefix="basilica_sdk_",
+        )
+
+        # Track in-flight cleanup tasks to await them on shutdown
+        self._cleanup_tasks: Set[asyncio.Task] = set()
+
+        # Guard env_type detection so it runs exactly once across concurrent tasks
+        self._env_type_lock = asyncio.Lock()
+
         logger.info(
             f"BasilicaBackend initialized: {image} "
             f"(cpu={self.cpu}, memory={self.memory}, ttl_buffer={self.ttl_buffer}s)"
@@ -113,8 +129,10 @@ class BasilicaBackend(AbstractBackend):
         """
         Generate unique deployment name
 
-        Format: {image-safe}-{method}-{task_id}-{timestamp}
-        Limited to 63 characters for Kubernetes compatibility
+        Format: {image-safe}-{method}-{task_id}-{uuid_suffix}
+        Limited to 63 characters for Kubernetes compatibility.
+        Uses uuid4 hex suffix to avoid collisions when spawning many tasks
+        in the same second.
 
         Args:
             method_name: Method being called (e.g., "evaluate")
@@ -123,17 +141,14 @@ class BasilicaBackend(AbstractBackend):
         Returns:
             Unique deployment name
         """
-        # Sanitize image name
         safe_image = self.image.split('/')[-1].replace(':', '-').replace('_', '-')[:15]
+        suffix = uuid.uuid4().hex[:8]
 
-        # Build name components
-        timestamp = int(time.time())
         if task_id is not None:
-            name = f"{safe_image}-{method_name[:8]}-t{task_id}-{timestamp}"
+            name = f"{safe_image}-{method_name[:8]}-t{task_id}-{suffix}"
         else:
-            name = f"{safe_image}-{method_name[:8]}-{timestamp}"
+            name = f"{safe_image}-{method_name[:8]}-{suffix}"
 
-        # Ensure length limit
         return name[:63].lower()
 
     def _calculate_ttl(self, timeout: Optional[int] = None) -> int:
@@ -169,17 +184,11 @@ class BasilicaBackend(AbstractBackend):
         Returns:
             Deployment object
         """
-        try:
-            from basilica import BasilicaClient, Deployment
-        except ImportError:
-            raise BackendError(
-                "basilica-sdk not installed. Install with: pip install basilica-sdk>=0.10.0"
-            )
-
         logger.info(f"Creating deployment: {deployment_name} (TTL: {ttl_seconds}s)")
 
         # Capture instance variables for closure
-        api_token = self.api_token
+        client = self._client
+        DeploymentCls = self._Deployment
         image = self.image
         cpu = self.cpu
         memory = self.memory
@@ -187,9 +196,6 @@ class BasilicaBackend(AbstractBackend):
 
         def _sync_create_and_wait() -> Any:
             """Synchronous SDK operations to run in thread pool."""
-            os.environ["BASILICA_API_TOKEN"] = api_token
-            client = BasilicaClient()
-
             response = client.create_deployment(
                 instance_name=deployment_name,
                 image=image,
@@ -203,62 +209,102 @@ class BasilicaBackend(AbstractBackend):
 
             logger.debug(f"Deployment created: {response.instance_name}")
 
-            deployment = Deployment._from_response(client, response)
+            deployment = DeploymentCls._from_response(client, response)
             logger.info(f"Waiting for deployment {deployment_name} to be ready...")
 
             # Wait for deployment - use 80% of TTL to allow time for task execution
-            # No arbitrary cap; let the TTL drive the timeout
             wait_timeout = int(ttl_seconds * 0.8)
-            deployment.wait_until_ready(timeout=wait_timeout, silent=True)
-            deployment.refresh()
+            try:
+                deployment.wait_until_ready(timeout=wait_timeout, silent=True)
+                deployment.refresh()
+            except Exception:
+                # Clean up orphaned deployment before propagating
+                try:
+                    client.delete_deployment(deployment_name)
+                    logger.info(f"Cleaned up orphaned deployment: {deployment_name}")
+                except Exception as cleanup_err:
+                    logger.warning(f"Failed to cleanup orphaned deployment {deployment_name}: {cleanup_err}")
+                raise
 
             return deployment
 
         try:
             loop = asyncio.get_running_loop()
-            deployment = await loop.run_in_executor(_sdk_executor, _sync_create_and_wait)
+            deployment = await loop.run_in_executor(self._executor, _sync_create_and_wait)
 
             logger.info(f"Deployment ready: {deployment.url}")
             return deployment
 
         except Exception as e:
             logger.error(f"Failed to create deployment {deployment_name}: {e}")
+            # Async-level cleanup for edge cases (thread pool rejection, event loop cancellation)
+            try:
+                await self._delete_deployment(deployment_name)
+            except Exception as cleanup_err:
+                logger.warning(f"Async cleanup failed for {deployment_name}: {cleanup_err}")
             raise BackendError(f"Deployment creation failed: {e}")
 
-    async def _delete_deployment(self, deployment_name: str) -> None:
+    async def _delete_deployment(
+        self,
+        deployment_name: str,
+        max_retries: int = 3,
+        base_delay: float = 1.0,
+    ) -> None:
         """
-        Delete Basilica deployment asynchronously.
+        Delete Basilica deployment asynchronously with retry.
 
-        Uses thread pool to avoid blocking the event loop during deletion.
+        Retries with exponential backoff to handle transient API failures.
+        If all retries fail, the deployment's TTL will still clean it up.
 
         Args:
             deployment_name: Deployment name to delete
+            max_retries: Maximum retry attempts (default: 3)
+            base_delay: Base delay in seconds, doubled each retry (default: 1.0)
         """
-        try:
-            from basilica import BasilicaClient
-        except ImportError:
-            logger.warning("basilica-sdk not available, skipping deletion")
-            return
-
-        api_token = self.api_token
+        client = self._client
 
         def _sync_delete() -> None:
             """Synchronous deletion to run in thread pool."""
-            os.environ["BASILICA_API_TOKEN"] = api_token
-            client = BasilicaClient()
-            logger.info(f"Deleting deployment: {deployment_name}")
             client.delete_deployment(deployment_name)
-            logger.debug(f"Deployment deleted: {deployment_name}")
 
-        try:
-            loop = asyncio.get_running_loop()
-            await loop.run_in_executor(_sdk_executor, _sync_delete)
-        except Exception as e:
-            logger.warning(f"Failed to delete deployment {deployment_name}: {e}")
+        loop = asyncio.get_running_loop()
+        for attempt in range(max_retries):
+            try:
+                await loop.run_in_executor(self._executor, _sync_delete)
+                logger.info(f"Deployment deleted: {deployment_name}")
+                return
+            except Exception as e:
+                if attempt == max_retries - 1:
+                    logger.error(f"Failed to delete deployment {deployment_name} after {max_retries} attempts: {e}")
+                    return
+                delay = base_delay * (2 ** attempt)
+                logger.warning(f"Delete attempt {attempt + 1}/{max_retries} failed for {deployment_name}: {e}, retrying in {delay:.0f}s")
+                await asyncio.sleep(delay)
+
+    def _create_http_executor(self, base_url: str) -> HTTPExecutor:
+        """Create an HTTPExecutor from a deployment URL."""
+        parsed = urlparse(base_url)
+        host = parsed.hostname or "localhost"
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+
+        executor = HTTPExecutor(
+            container_ip=host,
+            container_port=port,
+            env_type=self._env_type,
+        )
+        executor.base_url = base_url
+        return executor
 
     async def _detect_env_type(self, base_url: str) -> str:
         """
-        Detect environment type by checking endpoints
+        Detect environment type by checking endpoints.
+
+        function_based servers expose GET /methods (injected template).
+        http_based servers expose GET /openapi.json but NOT /methods.
+
+        Note: /openapi.json alone is ambiguous -- FastAPI serves it for all apps,
+        including the function_based template. We must check /methods first and
+        only fall back to /openapi.json if /methods is absent (not errored).
 
         Args:
             base_url: Deployment base URL
@@ -266,28 +312,22 @@ class BasilicaBackend(AbstractBackend):
         Returns:
             EnvType.FUNCTION_BASED or EnvType.HTTP_BASED
         """
-        import httpx
-
         async with httpx.AsyncClient(timeout=10) as client:
             try:
-                # Check for function_based endpoint
                 response = await client.get(f"{base_url}/methods")
                 if response.status_code == 200:
                     logger.debug("Detected function_based environment")
                     return EnvType.FUNCTION_BASED
-            except Exception:
-                pass
+                # /methods exists but returned non-200 -- server is up but
+                # doesn't have the function_based template. Check http_based.
+                if response.status_code == 404:
+                    response = await client.get(f"{base_url}/openapi.json")
+                    if response.status_code == 200:
+                        logger.debug("Detected http_based environment")
+                        return EnvType.HTTP_BASED
+            except Exception as e:
+                logger.warning(f"Env type detection failed: {e}")
 
-            try:
-                # Check for http_based endpoint
-                response = await client.get(f"{base_url}/openapi.json")
-                if response.status_code == 200:
-                    logger.debug("Detected http_based environment")
-                    return EnvType.HTTP_BASED
-            except Exception:
-                pass
-
-            # Default to function_based
             logger.warning("Could not detect environment type, defaulting to function_based")
             return EnvType.FUNCTION_BASED
 
@@ -309,29 +349,24 @@ class BasilicaBackend(AbstractBackend):
             max_retries: Maximum number of retries
             retry_delay: Delay between retries in seconds
         """
-        import httpx
-
-        for attempt in range(max_retries):
-            try:
-                async with httpx.AsyncClient(timeout=10) as client:
+        async with httpx.AsyncClient(timeout=10) as client:
+            for attempt in range(max_retries):
+                try:
                     response = await client.get(f"{base_url}/health")
                     if response.status_code == 200:
                         logger.info(f"HTTP server ready after {attempt + 1} attempts ({(attempt + 1) * retry_delay:.0f}s)")
                         return
-            except (httpx.ConnectTimeout, httpx.ConnectError) as e:
-                if attempt < max_retries - 1:
+                except (httpx.ConnectTimeout, httpx.ConnectError) as e:
+                    if attempt == max_retries - 1:
+                        raise BackendError(
+                            f"HTTP server not ready after {max_retries} attempts: {e}"
+                        )
                     logger.debug(f"HTTP not ready (attempt {attempt + 1}/{max_retries}): {e}")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    raise BackendError(
-                        f"HTTP server not ready after {max_retries} attempts: {e}"
-                    )
-            except Exception as e:
-                if attempt < max_retries - 1:
+                except Exception as e:
+                    if attempt == max_retries - 1:
+                        raise BackendError(f"Health check failed: {e}")
                     logger.debug(f"Health check failed (attempt {attempt + 1}/{max_retries}): {e}")
-                    await asyncio.sleep(retry_delay)
-                else:
-                    raise BackendError(f"Health check failed: {e}")
+                await asyncio.sleep(retry_delay)
 
     async def call_method(self, method_name: str, *args, **kwargs) -> Any:
         """
@@ -357,39 +392,36 @@ class BasilicaBackend(AbstractBackend):
 
         deployment = None
         http_executor = None
+        t_start = time.monotonic()
 
         try:
             # Create deployment
             deployment = await self._create_deployment(deployment_name, ttl_seconds)
             base_url = deployment.url
+            t_deploy = time.monotonic()
 
             # Wait for HTTP server to be ready (handles container startup delay)
             await self._wait_for_http_ready(base_url)
+            t_ready = time.monotonic()
 
-            # Detect environment type if not overridden
-            if not self._env_type:
-                self._env_type = await self._detect_env_type(base_url)
+            # Detect environment type once (guarded by lock for concurrent tasks)
+            async with self._env_type_lock:
+                if not self._env_type:
+                    self._env_type = await self._detect_env_type(base_url)
 
-            # Parse URL for HTTPExecutor
-            parsed = urlparse(base_url)
-            host = parsed.hostname or "localhost"
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-
-            # Create HTTP executor
-            http_executor = HTTPExecutor(
-                container_ip=host,
-                container_port=port,
-                env_type=self._env_type,
-            )
-            http_executor.base_url = base_url
+            # Create HTTP executor from deployment URL
+            http_executor = self._create_http_executor(base_url)
 
             # Execute method
             logger.debug(f"Calling method '{method_name}' on {base_url}")
             result = await http_executor.call_method(method_name, *args, **kwargs)
+            t_done = time.monotonic()
 
             logger.info(
-                f"Method '{method_name}' completed successfully "
-                f"(deployment: {deployment_name})"
+                f"[{deployment_name}] deploy={t_deploy - t_start:.1f}s "
+                f"ready={t_ready - t_deploy:.1f}s "
+                f"exec={t_done - t_ready:.1f}s "
+                f"total={t_done - t_start:.1f}s"
             )
             return result
 
@@ -404,10 +436,11 @@ class BasilicaBackend(AbstractBackend):
             if http_executor:
                 await http_executor.close()
 
-            # Delete deployment (async, don't wait)
+            # Delete deployment (async, tracked for cleanup)
             if deployment:
-                # Note: TTL will auto-delete, but we clean up immediately to save resources
-                asyncio.create_task(self._delete_deployment(deployment.name))
+                task = asyncio.create_task(self._delete_deployment(deployment.name))
+                self._cleanup_tasks.add(task)
+                task.add_done_callback(self._cleanup_tasks.discard)
 
     async def list_methods(self) -> list:
         """
@@ -434,19 +467,11 @@ class BasilicaBackend(AbstractBackend):
             deployment = await self._create_deployment(deployment_name, ttl_seconds)
             base_url = deployment.url
 
-            if not self._env_type:
-                self._env_type = await self._detect_env_type(base_url)
+            async with self._env_type_lock:
+                if not self._env_type:
+                    self._env_type = await self._detect_env_type(base_url)
 
-            parsed = urlparse(base_url)
-            host = parsed.hostname or "localhost"
-            port = parsed.port or (443 if parsed.scheme == "https" else 80)
-
-            http_executor = HTTPExecutor(
-                container_ip=host,
-                container_port=port,
-                env_type=self._env_type,
-            )
-            http_executor.base_url = base_url
+            http_executor = self._create_http_executor(base_url)
 
             return await http_executor.list_methods()
 
@@ -454,7 +479,9 @@ class BasilicaBackend(AbstractBackend):
             if http_executor:
                 await http_executor.close()
             if deployment:
-                asyncio.create_task(self._delete_deployment(deployment_name))
+                task = asyncio.create_task(self._delete_deployment(deployment_name))
+                self._cleanup_tasks.add(task)
+                task.add_done_callback(self._cleanup_tasks.discard)
 
     async def health_check(self) -> bool:
         """
@@ -471,10 +498,15 @@ class BasilicaBackend(AbstractBackend):
         """
         Cleanup backend
 
-        For pod backend, no persistent resources to clean up.
-        Individual pods are cleaned up after each call_method().
+        Awaits all in-flight pod deletion tasks and shuts down the thread pool.
         """
-        logger.debug(f"BasilicaBackend cleanup: {self.name}")
+        if self._cleanup_tasks:
+            logger.debug(f"Awaiting {len(self._cleanup_tasks)} pending pod deletions...")
+            await asyncio.gather(*self._cleanup_tasks, return_exceptions=True)
+            self._cleanup_tasks.clear()
+
+        self._executor.shutdown(wait=False)
+        logger.debug(f"BasilicaBackend cleanup complete: {self.name}")
 
     def is_ready(self) -> bool:
         """
