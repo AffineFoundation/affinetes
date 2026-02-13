@@ -275,6 +275,14 @@ class SynthActor:
         t = threading.Thread(target=_cleanup_loop, daemon=True, name="swe-synth-cleanup")
         t.start()
 
+    @staticmethod
+    def _select_agent(task_id: int) -> AgentType:
+        """Select fixer agent based on task_id."""
+        if task_id > 1200:
+            # Alternate between miniswe and codex
+            return "codex" if task_id % 2 == 1 else "miniswe"
+        return "miniswe"
+
     def _load_task(self, task_id: int) -> Dict[str, Any]:
         """
         Load pre-generated task from R2.
@@ -1032,8 +1040,8 @@ fi
         model: str = "Qwen/Qwen3-Coder-480B-A35B-Instruct-FP8-TEE",
         base_url: str = "https://llm.chutes.ai/v1",
         api_key: Optional[str] = None,
-        # Agent type selection
-        fixer_agent: AgentType = "miniswe",
+        # Agent type override (None = auto-select)
+        fixer_agent: Optional[AgentType] = None,
         # Common execution config
         timeout: int = 1800,
         temperature: float = 0.0,
@@ -1075,7 +1083,9 @@ fi
         bug_instance = self._load_task(task_id)
         print(f"Loaded task {task_id}: {bug_instance['source']['swe_instance_id']}")
 
-        # Fix bug using selected agent
+        # Select agent type
+        if fixer_agent is None:
+            fixer_agent = self._select_agent(task_id)
         print(f"Fixing bug with {model} using {fixer_agent} agent...")
 
         # Get Docker image for the bug instance
@@ -1177,6 +1187,7 @@ fi
                 "task_type": "swe-synth",
                 "swe_instance_id": instance_id,
                 "bug_types": bug_types,
+                "fixer_agent": fixer_agent,
                 # Problem and solution
                 "problem_statement": problem_statement,
                 "fix_patch": fix_patch or "",
