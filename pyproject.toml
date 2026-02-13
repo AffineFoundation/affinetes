@@ -7,7 +7,7 @@ name = "affinetes"
 version = "0.2.0"
 description = "Container-based Environment Management System"
 readme = "README.md"
-requires-python = ">=3.9"
+requires-python = ">=3.10"
 license = {text = "MIT"}
 authors = [
     {name = "Affinetes Team", email = "contact@affinetes.io"}
@@ -17,8 +17,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
-    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Topic :: Software Development :: Libraries :: Python Modules",
@@ -37,6 +36,9 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+basilica = [
+    "basilica-sdk>=0.19.0",
+]
 dev = [
     "pytest>=7.0.0",
     "pytest-asyncio>=0.21.0",
