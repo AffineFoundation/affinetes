@@ -292,7 +292,7 @@ class CodexFixerAgent(BaseFixerAgent):
                 total_tokens=total_tokens,
                 conversation=conversation,
                 success=bool(patch),
-                error=None if patch else "No changes produced by codex",
+                error=None,
             )
 
         except subprocess.TimeoutExpired:
