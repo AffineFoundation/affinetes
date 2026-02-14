@@ -277,6 +277,16 @@ class CodexFixerAgent(BaseFixerAgent):
                 if result.stdout:
                     print(f"[CODEX] stdout: {result.stdout[:1000]}")
 
+            # Codex crashed / API failed without any interaction
+            if result.returncode != 0 and model_calls == 0:
+                error_detail = (result.stderr or result.stdout or "")[:500]
+                return FixerResult(
+                    patch="", success=False,
+                    model_calls=0, total_tokens=0,
+                    conversation=conversation,
+                    error=f"Codex failed to start (exit {result.returncode}): {error_detail}",
+                )
+
             # 9. Extract diff from container
             diff_result = self._exec_in_container(
                 f"cd /app && git add -A && git diff --cached -- {DIFF_EXTENSIONS}",
