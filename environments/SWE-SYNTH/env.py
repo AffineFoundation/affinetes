@@ -278,9 +278,8 @@ class SynthActor:
     @staticmethod
     def _select_agent(task_id: int) -> AgentType:
         """Select fixer agent based on task_id."""
-        if task_id > 1150:
-            # Alternate between miniswe and codex
-            return "codex" if task_id % 2 == 1 else "miniswe"
+        # TODO: re-enable codex after downstream endpoints support
+        # 'developer' role and proper function calling
         return "miniswe"
 
     def _load_task(self, task_id: int) -> Dict[str, Any]:
