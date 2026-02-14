@@ -206,6 +206,7 @@ class CodexFixerAgent(BaseFixerAgent):
                 [
                     "docker", "run", "-d",
                     "--name", self._container_name,
+                    "--memory", "4g",
                     "--entrypoint", "",
                     docker_image,
                     "sleep", str(self.config.timeout + 300),

@@ -201,7 +201,7 @@ class MiniSWEFixerAgent(BaseFixerAgent):
                 cwd=self.config.cwd,
                 timeout=self.config.timeout,
                 executable="docker",
-                run_args=["--rm", "--entrypoint", "", "--name", self._container_name],
+                run_args=["--rm", "--entrypoint", "", "--memory", "4g", "--name", self._container_name],
                 container_timeout=str(self.config.timeout),
             )
 
