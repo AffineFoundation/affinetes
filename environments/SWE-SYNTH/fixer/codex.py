@@ -10,11 +10,10 @@ from .base import BaseFixerAgent, FixerConfig, FixerResult
 from utils import SANITIZE_GIT_SCRIPT, DIFF_EXTENSIONS
 
 DOCKER_PULL_TIMEOUT = 300
-CODEX_INSTALL_TIMEOUT = 180
 
-# Pin to the last version supporting wire_api="chat" for OpenAI-compatible endpoints.
-# v0.95+ removed chat completions support, requiring the /v1/responses API.
-CODEX_NPM_PACKAGE = "@openai/codex@0.94.0"
+# Pre-built static codex binary path inside the SWE-SYNTH container (pinned to 0.94.0).
+# Copied into SWE-bench containers via docker cp, avoiding npm install at runtime.
+CODEX_STATIC_BINARY = "/usr/local/bin/codex-static"
 
 
 class CodexFixerAgent(BaseFixerAgent):
@@ -85,19 +84,22 @@ class CodexFixerAgent(BaseFixerAgent):
         return True
 
     def _install_codex(self) -> bool:
-        """Install Codex CLI inside the container."""
-        print("[CODEX] Installing Codex CLI in container...")
-        result = self._exec_in_container(
-            "apt-get update -qq && "
-            "apt-get install -y -qq nodejs npm > /dev/null 2>&1 && "
-            f"npm install -g {CODEX_NPM_PACKAGE} > /dev/null 2>&1 && "
-            "codex --version",
-            timeout=CODEX_INSTALL_TIMEOUT,
+        """Copy pre-built codex binary into the SWE-bench container."""
+        print("[CODEX] Copying codex binary into container...")
+        # docker cp from SWE-SYNTH host into the SWE-bench container
+        cp_result = subprocess.run(
+            ["docker", "cp", CODEX_STATIC_BINARY,
+             f"{self._container_name}:/usr/local/bin/codex"],
+            capture_output=True, text=True, timeout=30,
         )
-        if result.returncode != 0:
-            print(f"[CODEX] Failed to install codex: {result.stderr[:500]}")
+        if cp_result.returncode != 0:
+            print(f"[CODEX] Failed to copy codex binary: {cp_result.stderr[:500]}")
             return False
-        print(f"[CODEX] Codex installed: {result.stdout.strip()}")
+        result = self._exec_in_container("codex --version", timeout=10)
+        if result.returncode != 0:
+            print(f"[CODEX] Codex binary not working: {result.stderr[:500]}")
+            return False
+        print(f"[CODEX] Codex ready: {result.stdout.strip()}")
         return True
 
     def _write_codex_config(self) -> None:
