@@ -278,7 +278,7 @@ class SynthActor:
     @staticmethod
     def _select_agent(task_id: int) -> AgentType:
         """Select fixer agent based on task_id."""
-        if task_id > 1200:
+        if task_id > 1150:
             # Alternate between miniswe and codex
             return "codex" if task_id % 2 == 1 else "miniswe"
         return "miniswe"
