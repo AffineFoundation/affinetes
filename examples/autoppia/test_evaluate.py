@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import argparse
 import json
 import sys
 from pathlib import Path
@@ -12,8 +11,7 @@ import pytest
 
 # Ensure we import the local evaluate module from this directory
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-import evaluate  # noqa: E402
-from evaluate import (
+from evaluate import (  # noqa: E402
     build_env_vars,
     build_eval_kwargs,
     get_output_dir,
@@ -32,6 +30,7 @@ def test_parse_args_defaults() -> None:
     assert args.max_steps == 30
     assert args.timeout == 600
     assert args.output_dir is None
+    assert getattr(args, "require_chutes", False) is False
 
 
 def test_parse_args_overrides() -> None:
@@ -43,11 +42,13 @@ def test_parse_args_overrides() -> None:
             "50",
             "--output-dir",
             "/tmp/out",
+            "--require-chutes",
         ]
     )
     assert args.task_id == "task-1"
     assert args.max_steps == 50
     assert args.output_dir == "/tmp/out"
+    assert args.require_chutes is True
 
 
 def test_build_eval_kwargs_all_tasks() -> None:
@@ -77,16 +78,21 @@ def test_build_env_vars_includes_chutes() -> None:
     assert env_vars.get("CHUTES_API_KEY") == "secret"
 
 
-def test_validate_env_exits_when_chutes_missing() -> None:
+def test_validate_env_exits_when_chutes_missing_and_required() -> None:
     with patch.dict("os.environ", {}, clear=True):
         with pytest.raises(SystemExit) as exc_info:
-            validate_env()
+            validate_env(require_chutes=True)
     assert exc_info.value.code == 1
 
 
 def test_validate_env_passes_when_chutes_set() -> None:
     with patch.dict("os.environ", {"CHUTES_API_KEY": "x"}, clear=False):
-        validate_env()
+        validate_env(require_chutes=True)
+
+
+def test_validate_env_optional_does_not_exit() -> None:
+    with patch.dict("os.environ", {}, clear=True):
+        validate_env(require_chutes=False)
 
 
 def test_print_result_no_details(capsys: pytest.CaptureFixture[str]) -> None:

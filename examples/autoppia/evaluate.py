@@ -6,8 +6,10 @@ The environment uses DOOD (Docker-out-of-Docker) to spawn demo website
 containers as siblings, so the Docker socket is mounted automatically.
 
 Prerequisites:
-    1. Build the autoppia-affine-env image: cd autoppia_affine && ./startup.sh build
-    2. Build and run the model container: cd autoppia_affine && docker compose -f model/docker-compose.yml up -d
+    1. Build the autoppia-affine-env image:
+       cd autoppia_affine && ./startup.sh build
+    2. Build and run the model container:
+       cd autoppia_affine && docker compose -f model/docker-compose.yml up -d
 
 Usage:
     python examples/autoppia/evaluate.py
@@ -31,7 +33,7 @@ from dotenv import load_dotenv
 
 load_dotenv(override=True)
 
-import affinetes as af
+import affinetes as af  # noqa: E402
 
 DEFAULT_IMAGE = "autoppia-affine-env:latest"
 DEFAULT_MODEL_URL = "http://autoppia-affine-model:9000/act"
@@ -55,13 +57,13 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--model",
         type=str,
         default="test-model",
-        help="Model identifier passed to /evaluate (default: test-model)",
+        help="Model identifier for /evaluate (default: test-model)",
     )
     parser.add_argument(
         "--base-url",
         type=str,
         default=DEFAULT_MODEL_URL,
-        help=f"Full URL of the model's /act endpoint (default: {DEFAULT_MODEL_URL})",
+        help="Full URL of the model's /act endpoint",
     )
     parser.add_argument(
         "--task-id",
@@ -81,7 +83,9 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=600,
         help="Timeout in seconds (default: 600)",
     )
-    parser.add_argument("--pull", action="store_true", help="Pull image from registry")
+    parser.add_argument(
+        "--pull", action="store_true", help="Pull image from registry"
+    )
     parser.add_argument(
         "--no-force-recreate",
         action="store_false",
@@ -93,7 +97,12 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         "--output-dir",
         type=str,
         default=None,
-        help="Directory for result JSON (default: examples/autoppia/eval)",
+        help="Directory for result JSON",
+    )
+    parser.add_argument(
+        "--require-chutes",
+        action="store_true",
+        help="Require CHUTES_API_KEY (default: optional)",
     )
     return parser.parse_args(argv)
 
@@ -107,17 +116,22 @@ def build_env_vars() -> dict[str, str]:
     return env_vars
 
 
-def validate_env() -> None:
-    """Validate required environment; exit with clear message if missing."""
+def validate_env(require_chutes: bool = False) -> None:
+    """Validate env; exit if require_chutes and CHUTES_API_KEY missing."""
+    if not require_chutes:
+        return
     chutes_key = os.getenv("CHUTES_API_KEY")
     if not chutes_key:
-        print("Error: CHUTES_API_KEY environment variable not set.", file=sys.stderr)
+        print(
+            "Error: CHUTES_API_KEY environment variable not set.",
+            file=sys.stderr,
+        )
         print("Set it with: export CHUTES_API_KEY='your-key'", file=sys.stderr)
         sys.exit(1)
 
 
 def load_autoppia_env(args: argparse.Namespace) -> Any:
-    """Load the Autoppia affinetes environment with DOOD socket mount."""
+    """Load Autoppia affinetes environment with DOOD socket mount."""
     env_vars = build_env_vars()
     return af.load_env(
         image=args.image,
@@ -169,12 +183,14 @@ def print_result(result: dict[str, Any]) -> None:
         print("\n--- Task Details ---")
         for detail in details:
             status = "PASS" if detail.get("success") else "FAIL"
-            print(
-                f"  [{status}] {detail.get('task_id', 'N/A')}"
-                f"  score={detail.get('score', 0):.2f}"
-                f"  steps={detail.get('steps', 0)}"
-                f"  tests={detail.get('tests_passed', 0)}/{detail.get('total_tests', 0)}"
-            )
+            tid = detail.get("task_id", "N/A")
+            sc = detail.get("score", 0)
+            st = detail.get("steps", 0)
+            tp = detail.get("tests_passed", 0)
+            tt = detail.get("total_tests", 0)
+            part = f"  [{status}] {tid}  score={sc:.2f}"
+            part2 = f"  steps={st}  tests={tp}/{tt}"
+            print(part + "  " + part2)
 
     if result.get("error"):
         print(f"\nError: {result['error']}")
@@ -190,16 +206,18 @@ def get_output_dir(args: argparse.Namespace) -> Path:
 def save_result(result: dict[str, Any], output_dir: Path) -> Path:
     """Write full result to a timestamped JSON file; return path."""
     output_dir.mkdir(parents=True, exist_ok=True)
-    output_path = output_dir / f"autoppia_{datetime.now().strftime('%Y_%m_%d_%H_%M_%S')}.json"
+    ts = datetime.now().strftime("%Y_%m_%d_%H_%M_%S")
+    output_path = output_dir / f"autoppia_{ts}.json"
     with open(output_path, "w", encoding="utf-8") as f:
         json.dump(result, f, indent=2, ensure_ascii=False)
     return output_path
 
 
 async def main(argv: list[str] | None = None) -> int:
-    """Entry point: parse args, load env, run evaluation, print and save results."""
+    """Entry: parse args, load env, run evaluation, print and save results."""
     args = parse_args(argv)
-    validate_env()
+    require = getattr(args, "require_chutes", False)
+    validate_env(require_chutes=require)
 
     print("\n" + "=" * 60)
     print("Affinetes: Autoppia IWA Evaluation Example")
