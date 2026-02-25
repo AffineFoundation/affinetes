@@ -141,29 +141,38 @@ async def build_and_push(
     quiet: bool,
     build_args: Optional[Dict[str, str]] = None
 ) -> None:
-    """Build environment image and optionally push to registry"""
-    
+    """Build environment image and optionally push to registry.
+
+    *env_dir* may be a local directory path or a Git repository URL.
+    """
+    from ..infrastructure.image_builder import ImageBuilder
+
     try:
-        env_path = Path(env_dir).resolve()
-        
-        # Validate environment directory
-        if not env_path.exists():
-            logger.error(f"Environment directory not found: {env_dir}")
-            return
-        
-        if not (env_path / "env.py").exists():
-            logger.error(f"Missing env.py in {env_dir}")
-            return
-        
-        if not (env_path / "Dockerfile").exists():
-            logger.error(f"Missing Dockerfile in {env_dir}")
-            return
-        
-        logger.info(f"Building image '{tag}' from '{env_dir}'")
-        
-        # Build image
+        is_url = ImageBuilder.is_repo_url(env_dir)
+
+        if is_url:
+            logger.info(f"Building image '{tag}' from repo '{env_dir}'")
+            source = env_dir
+        else:
+            env_path = Path(env_dir).resolve()
+
+            if not env_path.exists():
+                logger.error(f"Environment directory not found: {env_dir}")
+                return
+
+            if not (env_path / "env.py").exists():
+                logger.error(f"Missing env.py in {env_dir}")
+                return
+
+            if not (env_path / "Dockerfile").exists():
+                logger.error(f"Missing Dockerfile in {env_dir}")
+                return
+
+            logger.info(f"Building image '{tag}' from '{env_dir}'")
+            source = str(env_path)
+
         final_tag = build_image_from_env(
-            env_path=str(env_path),
+            env_path=source,
             image_tag=tag,
             nocache=no_cache,
             quiet=quiet,

@@ -2,14 +2,22 @@
 
 import docker
 import importlib.util
+import os
+import re
+import subprocess
 import tempfile
 import shutil
 from pathlib import Path
-from typing import Optional
+from typing import Optional, Tuple
 
 from ..utils.exceptions import ImageBuildError, ValidationError
 from ..utils.logger import logger
 from .env_detector import EnvDetector, EnvType
+
+_REPO_URL_PREFIXES = ("http://", "https://", "git://", "git@")
+_REPO_URL_PATTERN = re.compile(
+    r"^(?:https?://|git://|git@)[\w.@:/~-]+(?:\.git)?(?:#[\w./-]+(?::[\w./-]+)?)?$"
+)
 
 
 class ImageBuilder:
@@ -22,6 +30,111 @@ class ImageBuilder:
         except Exception as e:
             raise ImageBuildError(f"Failed to connect to Docker daemon: {e}")
     
+    @staticmethod
+    def is_repo_url(source: str) -> bool:
+        """Return True if *source* looks like a Git repository URL."""
+        return source.startswith(_REPO_URL_PREFIXES) and bool(_REPO_URL_PATTERN.match(source))
+
+    @staticmethod
+    def parse_repo_url(url: str) -> Tuple[str, Optional[str], Optional[str]]:
+        """Parse a repo URL into (clone_url, ref, subfolder).
+
+        Supports the Docker-style fragment syntax::
+
+            https://github.com/org/repo.git#branch
+            https://github.com/org/repo.git#branch:path/to/env
+            git@github.com:org/repo.git#v1.0:environments/web
+
+        Returns:
+            (clone_url, ref, subfolder) – *ref* and *subfolder* may be None.
+        """
+        ref: Optional[str] = None
+        subfolder: Optional[str] = None
+
+        if "#" in url:
+            clone_url, fragment = url.split("#", 1)
+            if ":" in fragment:
+                ref, subfolder = fragment.split(":", 1)
+            else:
+                ref = fragment
+        else:
+            clone_url = url
+
+        return clone_url, ref or None, subfolder or None
+
+    def _clone_repo(
+        self,
+        clone_url: str,
+        dest: Path,
+        ref: Optional[str] = None,
+    ) -> None:
+        """Shallow-clone *clone_url* into *dest*, optionally checking out *ref*."""
+        cmd = ["git", "clone", "--depth", "1"]
+        if ref:
+            cmd += ["--branch", ref]
+        cmd += [clone_url, str(dest)]
+
+        logger.info(f"Cloning {clone_url}" + (f" (ref={ref})" if ref else ""))
+        try:
+            result = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=300,
+                env={**os.environ, "GIT_TERMINAL_PROMPT": "0"},
+            )
+        except subprocess.TimeoutExpired:
+            raise ImageBuildError(
+                f"git clone timed out after 300s: {clone_url}"
+            )
+        if result.returncode != 0:
+            raise ImageBuildError(
+                f"git clone failed (exit {result.returncode}): {result.stderr.strip()}"
+            )
+
+    def build_from_repo(
+        self,
+        repo_url: str,
+        image_tag: str,
+        nocache: bool = False,
+        quiet: bool = False,
+        buildargs: Optional[dict] = None,
+    ) -> str:
+        """Clone a Git repository and build the environment image from it.
+
+        Accepts the same URL#ref:subfolder syntax as ``docker build``.
+        After cloning, delegates to :meth:`build_from_env`.
+
+        Args:
+            repo_url: Git repository URL (may include #ref:subfolder).
+            image_tag: Docker image tag for the built image.
+            nocache: Don't use Docker build cache.
+            quiet: Suppress build output.
+            buildargs: Docker build arguments.
+
+        Returns:
+            Built image tag.
+        """
+        clone_url, ref, subfolder = self.parse_repo_url(repo_url)
+
+        with tempfile.TemporaryDirectory(prefix="affinetes-repo-") as tmpdir:
+            clone_dest = Path(tmpdir) / "repo"
+            self._clone_repo(clone_url, clone_dest, ref=ref)
+
+            env_path = clone_dest / subfolder if subfolder else clone_dest
+            if not env_path.is_dir():
+                raise ValidationError(
+                    f"Subfolder '{subfolder}' not found in cloned repository"
+                )
+
+            return self.build_from_env(
+                env_path=str(env_path),
+                image_tag=image_tag,
+                nocache=nocache,
+                quiet=quiet,
+                buildargs=buildargs,
+            )
+
     def build_from_env(
         self,
         env_path: str,

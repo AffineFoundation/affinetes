@@ -22,10 +22,17 @@ def build_image_from_env(
     registry: Optional[str] = None
 ) -> str:
     """
-    Build Docker image from environment definition and optionally push to registry
+    Build Docker image from environment definition and optionally push to registry.
+
+    *env_path* can be either a **local directory** (must contain env.py and
+    Dockerfile) or a **Git repository URL**.  When a URL is given the repo is
+    cloned into a temporary directory before building.  The Docker-style
+    fragment syntax is supported::
+
+        https://github.com/org/repo.git#branch:path/to/env
     
     Args:
-        env_path: Path to environment directory (must contain env.py and Dockerfile)
+        env_path: Local directory path **or** Git repository URL.
         image_tag: Image tag (e.g., "affine:latest")
         nocache: Don't use build cache
         quiet: Suppress build output
@@ -37,30 +44,49 @@ def build_image_from_env(
         Built image tag (with registry prefix if specified)
         
     Examples:
-        >>> # Build only
+        >>> # Build from local directory
         >>> build_image_from_env("environments/affine", "affine:latest")
         'affine:latest'
         
-        >>> # Build and push to Docker Hub
-        >>> build_image_from_env("environments/affine", "affine:latest",
-        ...                      push=True, registry="docker.io/myuser")
-        'docker.io/myuser/affine:latest'
+        >>> # Build from Git repo URL
+        >>> build_image_from_env(
+        ...     "https://github.com/AffineFoundation/liveweb-arena.git#main",
+        ...     "liveweb-arena:latest"
+        ... )
+        'liveweb-arena:latest'
         
-        >>> # Build and push (image_tag already contains registry)
-        >>> build_image_from_env("environments/affine", "myregistry.com/affine:latest", push=True)
-        'myregistry.com/affine:latest'
+        >>> # Build from repo URL with subfolder
+        >>> build_image_from_env(
+        ...     "https://github.com/org/monorepo.git#main:environments/web",
+        ...     "web-env:v1"
+        ... )
+        'web-env:v1'
     """
     try:
-        logger.info(f"Building image '{image_tag}' from '{env_path}'")
-        
         builder = ImageBuilder()
-        image_id = builder.build_from_env(
-            env_path=env_path,
-            image_tag=image_tag,
-            nocache=nocache,
-            quiet=quiet,
-            buildargs=buildargs
+        is_url = ImageBuilder.is_repo_url(env_path)
+
+        logger.info(
+            f"Building image '{image_tag}' from "
+            f"{'repo ' if is_url else ''}{env_path!r}"
         )
+
+        if is_url:
+            builder.build_from_repo(
+                repo_url=env_path,
+                image_tag=image_tag,
+                nocache=nocache,
+                quiet=quiet,
+                buildargs=buildargs,
+            )
+        else:
+            builder.build_from_env(
+                env_path=env_path,
+                image_tag=image_tag,
+                nocache=nocache,
+                quiet=quiet,
+                buildargs=buildargs,
+            )
         
         logger.info(f"Image '{image_tag}' built successfully")
         

@@ -85,7 +85,7 @@ Examples:
     )
     build_parser.add_argument(
         'env_dir',
-        help='Environment directory path'
+        help='Environment directory path or Git repo URL (e.g. https://github.com/org/repo.git#branch:subfolder)'
     )
     build_parser.add_argument(
         '--tag',
