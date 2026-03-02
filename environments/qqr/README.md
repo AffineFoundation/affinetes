@@ -38,7 +38,7 @@ Episode 流程:
 
 - **Step rewards**：每步返回即时奖励（0.4×工具选择 + 0.3×参数质量 + 0.3×结果有效性），引导模型学习工具调用策略
 - **确定性评分**：相同 task_id + 相同 epoch salt = 完全相同的交通数据和评分，训练可复现
-- **平滑 LLM-code coupling**：`llm_score *= min(1.0, code / (max_code × 0.75))`，防止模型只优化一个维度
+- **平滑 LLM-code coupling**：`llm_score *= min(1.0, code / (50 × 0.75))`，防止模型只优化一个维度
 - **10K+ 任务空间**：7 类型 × 3 难度 × 70+ 城市 × 每周 salt 轮换，避免过拟合
 
 ---
@@ -80,23 +80,24 @@ Episode 流程:
 │         ↓ (模型输出最终方案)                                      │
 │  scorer.py + llm_validator.py                                   │
 │  ┌─────────────────────────────────────────────────────────┐    │
-│  │  多层评分 (max 100)                                      │    │
+│  │  多层评分 (max 100, 50/50 code-LLM split)                │    │
 │  │                                                         │    │
-│  │  1. Hard Constraints (门槛检查)                          │    │
+│  │  1. Code Score (always computed first, 50 分)            │    │
+│  │     tool_info_used ──→ 纯代码判定 (IC≥6+Comp≥6)          │    │
+│  │     info_consistency (25) ← 10 类别对比工具事实与输出      │    │
+│  │     completeness (25) ← proximity-based grounding         │    │
+│  │     fabrication_penalty (0 ~ -12.5) ← 编造扣分            │    │
+│  │                                                         │    │
+│  │  2. Hard Constraints (门槛检查)                          │    │
 │  │     format_valid ──→ 不通过 = ×0.15 (近零分,保留RL梯度)   │    │
-│  │     tool_info_used ──→ 不通过 = 0 分                     │    │
+│  │     tool_info_used ──→ 不通过 = 0 分 (code-determined)    │    │
 │  │     required_tools ──→ 不通过 = ×0.5                     │    │
 │  │     poi_names ──→ 不通过 = ×0.7                          │    │
 │  │     transport_grounded ──→ 不通过 = ×0.3 (渐进)          │    │
 │  │     tool_quality ──→ 不通过 = ×0.5                       │    │
 │  │                                                         │    │
-│  │  2. Code Score (70 分)                                   │    │
-│  │     info_consistency (35) ← 10 类别对比工具事实与输出      │    │
-│  │     completeness (35) ← 分层验证 (keyword+context+fact)   │    │
-│  │     fabrication_penalty (0 ~ -17.5) ← 编造扣分            │    │
-│  │                                                         │    │
-│  │  3. LLM Score (30 分)                                    │    │
-│  │     practicality + informativeness + logic + ux           │    │
+│  │  3. LLM Score (optional enhancement, 50 分)              │    │
+│  │     practicality + analysis_depth + logic + ux            │    │
 │  │     × smooth coupling with code score                    │    │
 │  │                                                         │    │
 │  │  Final = (code + llm) × HC_multipliers                   │    │
@@ -116,7 +117,7 @@ environments/qqr/
 ├── problem_generator.py    # 确定性问题生成器：7 类型、DifficultyProfile、prompt 模板
 ├── knowledge_graph.py      # 城市知识图谱：71 城市的特色/地标/美食主题/季节/交通枢纽
 ├── parser.py               # 输出解析：JSON 优先 + regex fallback 结构化提取
-├── llm_validator.py        # LLM 语义评估：4 维度 × 7.5 分，含反注入过滤
+├── llm_validator.py        # LLM 语义评估：4 维度 × 12.5 分，含反注入过滤 + anti-data-dumping
 ├── mcp_wrapper.py          # MCP 协议封装（从 QQR 移植，避免 slime 依赖）
 ├── mock_transport/
 │   ├── __init__.py
@@ -159,15 +160,15 @@ environments/qqr/
   code_total = max(0, info_consistency + completeness + fabrication_penalty)
              = max(0, IC + Comp + Fab)
 
-  llm_raw    = practicality + informativeness + logic + user_experience
-  code_ratio = min(1.0, code_total / (70 × 0.75))     ← LLM-Code Coupling
+  llm_raw    = practicality + analysis_depth + logic + user_experience
+  code_ratio = min(1.0, code_total / (50 × 0.75))     ← LLM-Code Coupling
   llm_adjusted = llm_raw × code_ratio
 
   HC_multiplier = ∏(penalty_i for each failed constraint)   ← 所有失败的 HC 相乘
 
 范围:
-  Code Score:  0 ~ 70   (info_consistency 35 + completeness 35 + fabrication 0~-17.5)
-  LLM Score:   0 ~ 30   (4 维度 × 7.5)
+  Code Score:  0 ~ 50   (info_consistency 25 + completeness 25 + fabrication 0~-12.5)
+  LLM Score:   0 ~ 50   (4 维度 × 12.5)
   Total:       0 ~ 100
 ```
 
@@ -176,40 +177,39 @@ environments/qqr/
 | 评分项 | 满分 | 评分方式 | 说明 |
 |--------|------|----------|------|
 | **Hard Constraints** | | | |
-| format_valid | ×0.15 | **算法** | 正则匹配问题类型关键词 |
-| tool_info_used | ×0.0 | **LLM** + 算法交叉验证 | LLM 判定是否引用工具事实；算法在 IC+Comp 极低时可覆盖 |
+| format_valid | ×0.15 | **算法** | 正则匹配问题类型关键词 + 最小长度 ≥ 200 字符 |
+| tool_info_used | ×0.0 | **算法** (纯代码判定) | IC≥6 + Comp≥6 (交通类型) 或 IC≥4 + Comp≥4 (非交通) |
 | required_tools_called | ×0.5 | **算法** | 覆盖率阈值 + 核心工具 + 交通工具检查 |
 | poi_names_verified | ×0.7 | **算法** | 模糊匹配 POI 名称 ≥ 2 个 |
 | transport_grounded | ×0.3~1.0 | **算法** | 集合交集验证航班号/车次/价格/时间 |
 | tool_quality | ×0.5 | **算法** | coverage_ratio + validity_ratio ≥ 50% |
-| **Code Score (70)** | | | |
-| info_consistency | 35 | **算法** | 10 类别事实提取 → 集合交集/模糊匹配 → 比例评分 |
-| completeness | 35 | **算法** | 4 级分层验证（keyword+context+tool_fact）× 数量缩放 |
-| fabrication_penalty | 0~-17.5 | **算法** | 价格误差检测 + 天气编造检测 + 交通编造扣分 |
-| **LLM Score (30)** | | | |
-| practicality | 7.5 | **LLM** | 方案可行性（时间衔接、交通合理性） |
-| informativeness | 7.5 | **LLM** | 信息丰富度（具体名称、价格、时间数量） |
-| logic | 7.5 | **LLM** | 逻辑连贯性（路线规划、前后呼应） |
-| user_experience | 7.5 | **LLM** | 用户需求满足度（约束回应、偏好体现） |
+| **Code Score (50)** | | | |
+| info_consistency | 25 | **算法** | 10 类别事实提取 → 集合交集/模糊匹配 → 比例评分 + 最低数量门槛 |
+| completeness | 25 | **算法** | proximity-based 分层验证 × 数量缩放 (无免费层级) |
+| fabrication_penalty | 0~-12.5 | **算法** | 价格误差检测 + 天气编造检测 + 交通编造扣分 |
+| **LLM Score (50)** | | | |
+| practicality | 12.5 | **LLM** | 方案可行性（时间衔接、交通合理性） |
+| analysis_depth | 12.5 | **LLM** | 分析深度（惩罚数据搬运，奖励推理分析） |
+| logic | 12.5 | **LLM** | 逻辑连贯性（路线规划、前后呼应） |
+| user_experience | 12.5 | **LLM** | 用户需求满足度（约束回应、偏好体现） |
 
-> **总结**：100 分中 **70 分完全由算法评定**（确定性、可复现），**30 分由 LLM 评审**（语义质量）。`tool_info_used` 是唯一的"LLM 判定 + 算法兜底"混合项。LLM 分通过 coupling 机制受算法分约束（code < 52.5 时线性压缩），确保算法分占主导地位。
+> **总结**：100 分中 **50 分完全由算法评定**（确定性、可复现），**50 分由 LLM 评审**（语义质量）。`tool_info_used` 完全由代码判定（基于 IC/Comp 阈值），不依赖 LLM。LLM 分通过 coupling 机制受算法分约束（code < 37.5 时线性压缩），确保高 LLM 分必须有代码分支撑。LLM 不可用时仍可获得最高 50 分的代码评分。
 
-**评分执行顺序**（`TravelScorer.score()` 中的实际流程）：
+**评分执行顺序**（`TravelScorer.score()` 中的实际流程 — code-first 架构）：
 
 ```
 1. 解析输出 → ParsedOutput（JSON 优先 + regex fallback）
 2. Hard Constraint 检查 → format_valid, required_tools_called, poi_names_verified, transport_grounded
-3. LLM 验证 → tool_info_used 判定 + 4 维度评分
-   ├── LLM 全部失败 → return (score=0, error="LLM validator unavailable")
-   ├── tool_info_used=False → return (score=0, HC 归零)
-   └── 成功 → 填充 LLM 分数
-4. format_valid=False → return (乘数 0.15，近零分但保留 RL 梯度)
-5. tool_quality 门控 → coverage_ratio < 0.5 OR validity_ratio < 0.5 → HC 标记
-6. 计算 info_consistency (35 分)
-7. 计算 completeness (35 分)
-8. 交叉验证 → LLM 说 tool_info_used=True 但 IC 和 Comp 均极低 → 覆盖为 False, return
-9. 编造检测 → fabrication_penalty (0 ~ -17.5)
-10. 组装 ScoreBreakdown → .total 属性自动计算最终分数
+3. tool_quality 门控 → coverage_ratio < 0.5 OR validity_ratio < 0.5 → HC 标记
+4. 计算 info_consistency (25 分) ← 含最低数量门槛 + context-sensitive matching
+5. 计算 completeness (25 分) ← proximity-based grounding (无免费层级)
+6. 纯代码判定 tool_info_used → IC≥阈值 AND Comp≥阈值 (交通6/非交通4)
+   └── tool_info_used=False → total=0 (hard fail)
+7. 编造检测 → fabrication_penalty (0 ~ -12.5)
+8. LLM 验证（可选增强）→ 4 维度评分 (50 分)
+   ├── LLM 可用 → 填充 analysis_depth/practicality/logic/ux
+   └── LLM 不可用 → 仅用 code score, 记录 error (不归零)
+9. 组装 ScoreBreakdown → .total 属性自动计算最终分数
 ```
 
 ### 3.2 Hard Constraints（门槛检查）
@@ -230,17 +230,23 @@ environments/qqr/
 | business | 匹配 `(航班\|火车\|高铁\|酒店\|商务)` |
 | family_study | 匹配 `(亲子\|儿童\|学习\|博物馆\|科技馆\|体验)` |
 
-此外要求输出长度 ≥ 100 字符。失败后乘数 0.15（不是 0），保留 RL 梯度。
+此外要求输出长度 ≥ 200 字符（`FORMAT_MIN_LENGTH`）。失败后乘数 0.15（不是 0），保留 RL 梯度。
 
 #### 3.2.2 tool_info_used（乘数 0.0 — 总分归零）
 
-由**LLM 评审**判定模型输出是否引用了工具返回的事实。LLM 评审 prompt 中明确要求检查：
-- "模型输出中的关键信息（地点名称、航班/火车信息、路线数据等）**大部分**来自工具返回 → TRUE"
-- "模型**忽略**了工具返回的结果，自己编造了信息 → FALSE"
+**完全由代码判定**，不依赖 LLM。基于 epoch-salted 事实重叠率（IC 和 Comp 分数），无法伪造：
 
-**code-based 交叉验证**（防止 LLM 误判）：即使 LLM 说 `tool_info_used=True`，如果同时满足以下条件，则覆盖为 `False`：
-- `info_consistency < threshold` **且** `completeness < threshold`
-- threshold：交通类型（intercity/hybrid/business）= 3.0，非交通类型 = 1.0
+```
+交通类型 (intercity/hybrid/business):
+  IC ≥ 6.0 AND Comp ≥ 6.0 → tool_info_used = True
+
+非交通类型 (multiday/single_poi/food_tour/family_study):
+  IC ≥ 4.0 AND Comp ≥ 4.0 → tool_info_used = True
+
+否则 → tool_info_used = False → total = 0
+```
+
+生产数据验证：真正使用工具时 IC≈25、Comp≈25；编造/未用工具时 IC≈0、Comp≈0。阈值 4-6 有足够安全边际。
 
 #### 3.2.3 required_tools_called（乘数 0.5）
 
@@ -303,7 +309,7 @@ if fab_ratio = 1.0:    multiplier = 0.3      (最大惩罚)
   - 参数齐全但返回错误 → 0.5 分
   - 参数缺失 → 0 分
 
-### 3.3 Info Consistency（信息一致性，35 分）
+### 3.3 Info Consistency（信息一致性，25 分）
 
 衡量"模型输出中有多少信息可追溯到工具返回的真实数据"。
 
@@ -337,43 +343,63 @@ normalized    = min(1.0, overlap_ratio / 0.6)   # 60% overlap = 满分
 - pois → **模糊匹配计数** `sum(1 for poi in tool_pois if fuzzy_match(poi, output))`
 - distances/travel_durations/road_names → **文本包含计数** `sum(1 for d in tool_facts if d in output)`
 
-#### 3.3.3 汇总与广度惩罚
+#### 3.3.3 最低数量门槛 (Anti-Hack)
+
+当工具返回的某类别事实数 ≥ `IC_MIN_QUANTITY_THRESHOLD`(4) 时，要求模型匹配至少 `IC_MIN_QUANTITY_RATIO`(30%) 的事实（上限 `IC_MIN_QUANTITY_CAP`=3）。未达到则该类别评分封顶 50%。
 
 ```python
-IC = 35 × (sum(normalized_scores) / num_categories_with_data)
+if len(tool_facts) >= 4:
+    required = min(3, ceil(len(tool_facts) * 0.3))
+    if matched_count < required:
+        category_score *= 0.5  # IC_BELOW_MINIMUM_SCALE
+```
 
-# 广度惩罚：引用类别太少 → ×0.5
-if num_categories_with_data >= 4:
+#### 3.3.4 Context-Sensitive Matching
+
+航班/火车事实采用上下文敏感匹配：不在相关上下文关键词附近的事实权重降为 50%（`IC_OUT_OF_CONTEXT_WEIGHT`=0.5）。防止模型在不相关位置堆叠事实。
+
+#### 3.3.5 汇总与广度惩罚
+
+```python
+IC = 25 × (sum(normalized_scores) / num_categories_with_data)
+
+# 广度惩罚：引用类别太少 → ×0.3
+if num_categories_with_data >= 3:  # INFO_CONSISTENCY_MIN_BREADTH_TOTAL
     min_breadth = max(2, (num_categories_with_data + 1) // 2)
     if categories_matched < min_breadth:
-        IC *= 0.5
+        IC *= 0.3  # IC_BREADTH_PENALTY_MULTIPLIER (was 0.5)
 ```
 
 **边界情况**：
-- 工具无返回数据（`tool_facts.is_empty()`）→ IC = 35 × 0.5 = 17.5（给半分）
+- 工具无返回数据（`tool_facts.is_empty()`）→ IC = 25 × 0.5 = 12.5（给半分）
 - 无工具调用 → IC = 0
 
-### 3.4 Completeness（完整度，35 分）
+### 3.4 Completeness（完整度，25 分）
 
 衡量"输出是否覆盖了所有必要的规划维度"。每个问题类型有不同的维度分配。
 
 #### 3.4.1 两种验证函数
 
-**`_check_with_grounded_context`**（常规维度）：
+**`_check_with_grounded_context`**（常规维度，proximity-based anti-echo）：
 
 ```
 输入: text, keyword, context, tool_facts_set, max_pts, target_count
 
-4 级评分:
-  keyword + context + tool_fact   → 100% × max_pts
-  keyword + tool_fact             →  50% × max_pts
-  keyword + context               →  15% × max_pts   (可伪造，给极少分)
-  keyword only                    →   0%             (无证据 = 不给分)
+Proximity-based 评分 (无免费层级):
+  keyword + context + tool_fact (proximate ≤500 chars)  → 100% × max_pts
+  keyword + tool_fact (proximate ≤500 chars)            →  50% × max_pts
+  keyword + tool_fact (distant >500 chars)              →  20% × max_pts (anti-echo)
+  keyword + context (无 tool_fact)                      →   0%          (无证据)
+  keyword only                                          →   0%          (无证据)
+  无 tool data 时                                       →  10% × max_pts (structural credit)
 
 数量缩放 (target_count > 0):
-  grounded_count = 工具事实出现在输出中的数量
-  tier_score *= max(0.25, grounded_count / target_count)
-  → 引用越多工具事实，得分越高；最低保底 25%
+  grounded_count = 工具事实出现在输出中且 proximate 的数量
+  tier_score *= grounded_count / target_count  (线性，无保底)
+  → 引用越多工具事实，得分越高
+
+预算/tips 无价格数据时:
+  → 最高 10% structural credit (STRUCTURAL_CREDIT_RATIO)
 ```
 
 **`_check_with_verified_context`**（交通 ID 维度，更严格）：
@@ -394,81 +420,81 @@ if num_categories_with_data >= 4:
 
 #### 3.4.2 各问题类型的维度分配
 
-**intercity（城际交通，35 = 7+7+7+7+7）**
+**intercity（城际交通，25 = 5+5+5+5+5）**
 
 | 维度 | 分值 | 验证函数 | keyword | grounding source | target |
 |------|------|----------|---------|-----------------|--------|
-| 航班推荐 | 7 | verified_context | `(航班\|飞机\|机票)` | `tool_facts.flights` | 2 |
-| 火车推荐 | 7 | verified_context | `(火车\|高铁\|动车\|车次)` | `tool_facts.trains` | 2 |
-| 出发/到达时间 | 7 | grounded_context | `(出发\|到达\|发车\|起飞)` | `time_strs` | 3 |
-| 价格信息 | 7 | grounded_context | `(价格\|费用\|票价)` | `price_strs` | 3 |
-| 推荐建议 | 7 | grounded_context | `(推荐\|建议\|最佳)` | `tool_facts.pois` (fuzzy) | 2 |
+| 航班推荐 | 5 | verified_context | `(航班\|飞机\|机票)` | `tool_facts.flights` | 2 |
+| 火车推荐 | 5 | verified_context | `(火车\|高铁\|动车\|车次)` | `tool_facts.trains` | 2 |
+| 出发/到达时间 | 5 | grounded_context | `(出发\|到达\|发车\|起飞)` | `time_strs` | 3 |
+| 价格信息 | 5 | grounded_context | `(价格\|费用\|票价)` | `price_strs` | 3 |
+| 推荐建议 | 5 | grounded_context | `(推荐\|建议\|最佳)` | `tool_facts.pois` (fuzzy) | 2 |
 
-**multiday（多日游，35 = 7+7+6+5+5+5）**
+**multiday（多日游，25 = 5+5+4+4+4+3）**
 
 | 维度 | 分值 | 验证函数 | 说明 |
 |------|------|----------|------|
-| 日结构 | 7 | 渐进 POI grounding | `7.0 × day_ratio × (0.3 + 0.7 × min(1, poi_count / target))` |
-| 景点安排 | 7 | grounded_context | keyword `(景点\|游览\|参观)` + POI 名模糊匹配，target=days×2 |
-| 餐饮推荐 | 6 | grounded_context | keyword `(餐\|吃\|美食)` + POI 名模糊匹配，target=days |
-| 住宿推荐 | 5 | grounded_context | keyword `(住宿\|酒店\|宾馆)` + POI 名模糊匹配，target=days-1 |
-| 交通安排 | 5 | grounded_context | keyword `(交通\|出行)` + distances/durations |
-| 预算明细 | 5 | grounded_context | keyword `(预算\|费用\|花费)` + price_strs |
+| 日结构 | 5 | 渐进 POI grounding | 需匹配 POI 才有基线分 (无 POI = 0) |
+| 景点安排 | 5 | grounded_context | keyword `(景点\|游览\|参观)` + POI 名模糊匹配，target=days×2 |
+| 餐饮推荐 | 4 | grounded_context | keyword `(餐\|吃\|美食)` + POI 名模糊匹配，target=days |
+| 住宿推荐 | 4 | grounded_context | keyword `(住宿\|酒店\|宾馆)` + POI 名模糊匹配，target=days-1 |
+| 交通安排 | 4 | grounded_context | keyword `(交通\|出行)` + distances/durations |
+| 预算明细 | 3 | grounded_context | keyword `(预算\|费用\|花费)` + price_strs |
 
-**hybrid（综合规划，35 = 8+7+6+5+5+4）**
-
-| 维度 | 分值 | 验证函数 | grounding source |
-|------|------|----------|-----------------|
-| 交通方案 | 8 | verified_context | flights ∪ trains (精确 ID) |
-| 日结构 | 7 | 渐进 POI grounding | 同 multiday |
-| 景点安排 | 6 | grounded_context | POI 名 (fuzzy) |
-| 餐饮推荐 | 5 | grounded_context | POI 名 (fuzzy) |
-| 预算总计 | 5 | grounded_context | price_strs |
-| 天气信息 | 4 | grounded_context | weather facts |
-
-**single_poi（单景点深度游，35 = 8+7+7+7+6）**
+**hybrid（综合规划，25 = 6+5+4+4+3+3）**
 
 | 维度 | 分值 | 验证函数 | grounding source |
 |------|------|----------|-----------------|
-| 游览安排 | 8 | grounded_context | POI 名 (fuzzy) |
-| 周边推荐 | 7 | grounded_context | POI 名 (fuzzy) |
-| 交通距离 | 7 | grounded_context | distances ∪ durations |
-| 门票/建议 | 7 | grounded_context | prices ∪ times（无则用 POI+distance fallback） |
-| 预算估算 | 6 | grounded_context | price_strs |
+| 交通方案 | 6 | verified_context | flights ∪ trains (精确 ID) |
+| 日结构 | 5 | 渐进 POI grounding | 同 multiday |
+| 景点安排 | 4 | grounded_context | POI 名 (fuzzy) |
+| 餐饮推荐 | 4 | grounded_context | POI 名 (fuzzy) |
+| 预算总计 | 3 | grounded_context | price_strs |
+| 天气信息 | 3 | grounded_context | weather facts |
 
-**food_tour（美食之旅，35 = 8+7+7+7+6）**
-
-| 维度 | 分值 | 验证函数 | grounding source |
-|------|------|----------|-----------------|
-| 美食/餐厅 | 8 | grounded_context | POI 名 (fuzzy) |
-| 推荐菜品 | 7 | grounded_context | POI 名 (fuzzy) |
-| 路线顺序 | 7 | grounded_context | distances ∪ durations |
-| 花费预估 | 7 | grounded_context | price_strs（无则用 POI+distance fallback） |
-| 小贴士 | 6 | grounded_context | POI ∪ weather |
-
-**business（商务出行，35 = 8+7+6+7+7）**
+**single_poi（单景点深度游，25 = 6+5+5+5+4）**
 
 | 维度 | 分值 | 验证函数 | grounding source |
 |------|------|----------|-----------------|
-| 交通方案 | 8 | verified_context | flights ∪ trains (精确 ID) |
-| 酒店推荐 | 7 | grounded_context | POI 名 (fuzzy) |
-| 餐饮推荐 | 6 | grounded_context | POI 名 (fuzzy) |
-| 费用预估 | 7 | grounded_context | price_strs |
-| 商务配套 | 7 | grounded_context | POI 名 (fuzzy) |
+| 游览安排 | 6 | grounded_context | POI 名 (fuzzy) |
+| 周边推荐 | 5 | grounded_context | POI 名 (fuzzy) |
+| 交通距离 | 5 | grounded_context | distances ∪ durations |
+| 门票/建议 | 5 | grounded_context | prices ∪ times（无则用 POI+distance fallback） |
+| 预算估算 | 4 | grounded_context | price_strs |
 
-**family_study（亲子研学，35 = 7+7+7+7+7）**
+**food_tour（美食之旅，25 = 6+5+5+5+4）**
 
 | 维度 | 分值 | 验证函数 | grounding source |
 |------|------|----------|-----------------|
-| 日结构 | 7 | 渐进 POI grounding | 同 multiday |
-| 亲子内容 | 7 | grounded_context | POI 名 (fuzzy) |
-| 教育体验 | 7 | grounded_context | POI 名 (fuzzy) |
-| 餐厅/住宿 | 7 | grounded_context | POI 名 (fuzzy) |
-| 预算明细 | 7 | grounded_context | price_strs（无则用 POI+distance fallback） |
+| 美食/餐厅 | 6 | grounded_context | POI 名 (fuzzy) |
+| 推荐菜品 | 5 | grounded_context | POI 名 (fuzzy) |
+| 路线顺序 | 5 | grounded_context | distances ∪ durations |
+| 花费预估 | 5 | grounded_context | price_strs（无则用 POI+distance fallback） |
+| 小贴士 | 4 | grounded_context | POI ∪ weather |
 
-### 3.5 Fabrication Penalty（编造扣分，0 ~ -17.5）
+**business（商务出行，25 = 6+5+4+5+5）**
 
-从 code score 中扣除，由 `ClaimVerifier` 和交通编造检测两部分组成：
+| 维度 | 分值 | 验证函数 | grounding source |
+|------|------|----------|-----------------|
+| 交通方案 | 6 | verified_context | flights ∪ trains (精确 ID) |
+| 酒店推荐 | 5 | grounded_context | POI 名 (fuzzy) |
+| 餐饮推荐 | 4 | grounded_context | POI 名 (fuzzy) |
+| 费用预估 | 5 | grounded_context | price_strs |
+| 商务配套 | 5 | grounded_context | POI 名 (fuzzy) |
+
+**family_study（亲子研学，25 = 5+5+5+5+5）**
+
+| 维度 | 分值 | 验证函数 | grounding source |
+|------|------|----------|-----------------|
+| 日结构 | 5 | 渐进 POI grounding | 同 multiday |
+| 亲子内容 | 5 | grounded_context | POI 名 (fuzzy) |
+| 教育体验 | 5 | grounded_context | POI 名 (fuzzy) |
+| 餐厅/住宿 | 5 | grounded_context | POI 名 (fuzzy) |
+| 预算明细 | 5 | grounded_context | price_strs（无则用 POI+distance fallback） |
+
+### 3.5 Fabrication Penalty（编造扣分，0 ~ -12.5）
+
+从 code score 中扣除，由 `ClaimVerifier` 和交通编造检测两部分组成。**短输出（< 200 字符）跳过编造检测**，因为输出太短无法有意义地判断编造。
 
 #### 3.5.1 价格编造检测
 
@@ -488,16 +514,20 @@ if transport_grounding enabled and total_transport_claims > 0:
     fab_ratio = unverified / total
     if fab_ratio > 0.1:
         additional_penalty = -5.0 × fab_ratio    # 10% 编造 → -0.5，100% → -5.0
-        penalty = max(penalty + additional_penalty, -17.5)
+        penalty = max(penalty + additional_penalty, -12.5)
 ```
 
 #### 3.5.4 IC 低分放大
 
-如果 `info_consistency / 35 < 0.4`（即 IC < 14 分）且已有 > 3 分编造扣分 → penalty 封顶为 -10.0（放大惩罚）。
+如果 `info_consistency / 25 < 0.4`（即 IC < 10 分）且已有 > 3 分编造扣分 → penalty 封顶为 -10.0（放大惩罚）。
 
-### 3.6 LLM 语义评估（30 分）
+#### 3.5.5 POI 管理名称排除
 
-使用独立 LLM 对输出进行语义评估。
+POI 提取排除行政区划名称（省名/城市名/区名），使用正则负向前瞻 `pname|cityname|adname`，防止将"北京"等城市名误判为 POI。
+
+### 3.6 LLM 语义评估（50 分）
+
+使用独立 LLM 对输出进行语义评估。LLM 不可用时不再导致总分归零，而是仅用 code score（最高 50 分）。
 
 #### 3.6.1 评审模型与重试策略
 
@@ -515,26 +545,26 @@ if transport_grounding enabled and total_transport_claims > 0:
 
 #### 3.6.2 四个评估维度
 
-每维度 LLM 打 0-10 分，缩放为 0-7.5：`score = raw × 7.5 / 10.0`
+每维度 LLM 打 0-10 分，缩放为 0-12.5：`score = raw × 12.5 / 10.0`
 
 | 维度 | 满分 | 评审标准 |
 |------|------|----------|
-| **practicality** | 7.5 | 时间安排合理，交通衔接顺畅，无明显冲突 |
-| **informativeness** | 7.5 | 每天有具名景点(≥2)+餐厅推荐+住宿建议，交通有具体班次号和价格 |
-| **logic** | 7.5 | 行程安排有逻辑，路线规划合理，前后呼应 |
-| **user_experience** | 7.5 | 明确回应所有用户约束和偏好，预算分配合理，矛盾约束有权衡说明 |
+| **practicality** | 12.5 | 时间安排合理，交通衔接顺畅，无明显冲突 |
+| **analysis_depth** | 12.5 | 分析深度（惩罚数据搬运 — 直接复制工具数据无推理扣分；奖励综合分析、比较、权衡） |
+| **logic** | 12.5 | 行程安排有逻辑，路线规划合理，前后呼应 |
+| **user_experience** | 12.5 | 明确回应所有用户约束和偏好，预算分配合理，矛盾约束有权衡说明 |
 
 #### 3.6.3 LLM-Code Coupling（防单维度优化）
 
 ```python
-code_ratio = min(1.0, code_total / (70 × 0.75))   # code_total / 52.5
+code_ratio = min(1.0, code_total / (50 × 0.75))   # code_total / 37.5
 llm_adjusted = llm_raw × code_ratio
 
 # 效果:
-#   code = 0    → llm_adjusted = 0      (LLM 分完全无效)
-#   code = 26.25 → llm_adjusted = 50%   (线性压缩)
-#   code = 52.5  → llm_adjusted = 100%  (满额)
-#   code = 70   → llm_adjusted = 100%   (超过阈值不加成)
+#   code = 0     → llm_adjusted = 0      (LLM 分完全无效)
+#   code = 18.75 → llm_adjusted = 50%   (线性压缩)
+#   code = 37.5  → llm_adjusted = 100%  (满额)
+#   code = 50    → llm_adjusted = 100%  (超过阈值不加成)
 ```
 
 这个设计确保模型不能通过只生成"好听但没有工具依据"的方案拿到高 LLM 分。
@@ -550,28 +580,32 @@ llm_adjusted = llm_raw × code_ratio
 
 | 路径 | 触发条件 | Code | LLM | Total | 说明 |
 |------|----------|------|-----|-------|------|
-| P1 | LLM 验证器全部失败 | 0 (跳过) | 0 (跳过) | 0 | `llm_validation_error` 记录原因 |
-| P2 | `tool_info_used=False` | 0 (跳过) | 0 (跳过) | 0 | HC 乘数 0.0 |
-| P3 | LLM 成功 + `format_valid=False` | 0 (跳过) | 已填充 | ~base×0.15 | 保留 RL 梯度 |
-| P4 | LLM 成功 + 正常流程 | 已计算 | 已填充 | 0-100 | 完整评分 |
-| P5 | 无 API Key | 0 (跳过) | 0 (跳过) | 0 | `error="LLM validator unavailable"` |
-| P6 | 交叉验证反作弊触发 | 已计算 | 已填充 | 0 | `tool_info_used` 被覆盖为 False |
+| P1 | `tool_info_used=False` (代码判定) | 已计算 | 跳过 | 0 | IC/Comp 未达阈值，hard fail |
+| P2 | `format_valid=False` | 已计算 | 可选 | ~base×0.15 | 保留 RL 梯度 |
+| P3 | LLM 可用 + 正常流程 | 已计算 | 已填充 | 0-100 | 完整评分 (code + LLM) |
+| P4 | LLM 不可用 + 正常流程 | 已计算 | 0 | 0-50 | 仅 code score, 记录 error |
+| P5 | 无 API Key | 已计算 | 0 | 0-50 | 同 P4, 不再归零 |
 
 ### 3.8 反作弊体系
 
 | 机制 | 防御目标 | 实现方式 |
 |------|----------|----------|
-| 4 级分层验证 | 关键词填充 | 仅关键词 → 0 分；需 keyword+context+tool_fact 才给满分 |
+| Proximity-based grounding | 关键词回声/数据搬运 | 工具事实必须在关键词 ≤500 字符内才给满分；远距离仅 20%（anti-echo） |
 | 精确 ID 匹配 | 编造航班/车次 | lookbehind+lookahead 正则 `(?<![A-Za-z\d])G1234(?!\d)` |
-| IC 60% 阈值 | 低质量引用 | 每类别需 60%+ overlap 才满分，否则按比例折扣 |
-| 广度惩罚 | 只引用一个类别 | 匹配类别 < 总类别一半（最少 2）且可用类别 ≥ 4 → IC × 0.5 |
-| 编造扣分 | Hallucination | 编造交通/价格/天气 → 最多扣 17.5 分 |
+| IC 最低数量门槛 | 凑最少引用 | 工具返回 ≥4 事实时，需匹配 ≥30%（最多 3 个），否则封顶 50% |
+| IC context-sensitive | 乱堆事实 | 不在相关上下文附近的事实权重降为 50% |
+| 广度惩罚 | 只引用一个类别 | 匹配类别 < 总类别一半且可用类别 ≥ 3 → IC × 0.3 |
+| 编造扣分 | Hallucination | 编造交通/价格/天气 → 最多扣 12.5 分 |
 | 渐进交通惩罚 | 部分编造 | 编造比例 20%→100%，乘数 1.0x→0.3x（线性插值） |
 | Epoch Salt + 缓存对齐 | 记忆历史数据 | 每周轮换 TRANSPORT_SALT；AMap TTL 同步对齐到周纪元 |
-| LLM-Code Coupling | 只优化 LLM 分 | code < 52.5 时 LLM 分线性压缩 |
-| Code-LLM 交叉验证 | LLM 判断误差 | LLM 说 used=True 但 IC+Comp 均极低 → 覆盖为 False |
+| LLM-Code Coupling | 只优化 LLM 分 | code < 37.5 时 LLM 分线性压缩 |
+| 纯代码 tool_info_used | 不用工具 hack 分数 | IC≥6 + Comp≥6 (交通) / IC≥4 + Comp≥4 (非交通)，否则 0 分 |
+| analysis_depth 维度 | 数据搬运（直接复制工具数据） | LLM 评审维度专门惩罚无推理的数据堆叠 |
+| Structural credit 限制 | 无数据时编造内容 | 无工具数据时最高 10% structural credit |
+| Day grounding | 虚构日程 | 日结构需匹配 POI 才有基线分，无 POI = 0 |
+| POI admin 排除 | 城市名误判为 POI | POI 提取排除行政区划名称 |
 | 反注入过滤 | Prompt Injection | 随机边界 token + 注入模式过滤 + 显式警告 |
-| 数量缩放 | 最低引用凑数 | `max(0.25, grounded_count / target_count)` 鼓励引用更多工具事实 |
+| 数量缩放 | 最低引用凑数 | `grounded_count / target_count` 线性缩放（无保底） |
 
 ---
 
