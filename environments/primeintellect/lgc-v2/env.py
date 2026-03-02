@@ -370,6 +370,7 @@ Success: {"Yes" if score > 0 else "No"}
             model=model,
             base_url=base_url,
             api_key=current_api_key,
+            max_chunks=64_000,
             temperature=temperature,
             seed=seed,
             stream=True,

@@ -17,7 +17,7 @@ RUN echo "" > /app/_affinetes/__init__.py
 RUN apt-get update \
     && apt-get install -y --no-install-recommends git ca-certificates \
     && rm -rf /var/lib/apt/lists/* \
-    && pip install git+https://github.com/AffineFoundation/affinetes.git@main
+    && pip install git+https://github.com/AffineIO/affinetes.git@main
 
 RUN chmod -R 777 /app/_affinetes
 

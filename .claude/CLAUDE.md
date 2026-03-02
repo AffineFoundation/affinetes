@@ -23,7 +23,6 @@ affinetes/
 | `/afs-run` | Start environment container |
 | `/afs-call` | Call method on running container |
 | `/afs-validate` | Validate seed consistency |
-| `/afs-test` | Full test workflow (build + run + call) |
 
 ## Quick Start
 
