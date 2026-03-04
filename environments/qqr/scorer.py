@@ -508,7 +508,7 @@ class FactExtractor:
         for match in self.FLIGHT_PATTERN.finditer(text):
             facts.flights.add(match.group(1))
 
-        # Flight prices with association
+        # Flight prices with association (Chinese format: 航班 CA2021...价格 850)
         flight_price_matches = re.findall(
             r'航班\s*([A-Z]{2}\d{3,4})[^。\n]{0,100}?价格\s*(\d+(?:\.\d+)?)',
             text, re.DOTALL
@@ -517,10 +517,20 @@ class FactExtractor:
             facts.prices[flight] = int(float(price))
             facts.transport_prices[flight] = int(float(price))
 
-        # Also catch general prices
-        for match in re.finditer(r'价格\s*(\d+(?:\.\d+)?)', text):
+        # Also catch general prices (both Chinese and English key-value format)
+        for match in re.finditer(r'(?:价格|price|票价)[：:\s]*(\d+(?:\.\d+)?)', text, re.IGNORECASE):
             price = int(float(match.group(1)))
             facts.prices[f"flight_price_{price}"] = price
+
+        # Associate flight_no with price from structured tool data
+        # Handles format: "flight_no: CA2021\nprice: 850"
+        flight_ids = self.FLIGHT_PATTERN.findall(text)
+        price_vals = re.findall(r'(?:price|票价|价格)[：:\s]*(\d+(?:\.\d+)?)', text, re.IGNORECASE)
+        if flight_ids and price_vals:
+            for fid, pval in zip(flight_ids, price_vals):
+                p = int(float(pval))
+                facts.transport_prices[fid] = p
+                facts.prices[fid] = p
 
         # Times - extract from various formats including "08:00-10:30"
         for match in self.TIME_PATTERN.finditer(text):
@@ -555,10 +565,19 @@ class FactExtractor:
             facts.prices[train] = int(float(price))
             facts.transport_prices[train] = int(float(price))
 
-        # Also catch general prices
-        for match in re.finditer(r'价格\s*(\d+(?:\.\d+)?)', text):
+        # Also catch general prices (both Chinese and English key-value format)
+        for match in re.finditer(r'(?:价格|price|票价)[：:\s]*(\d+(?:\.\d+)?)', text, re.IGNORECASE):
             price = int(float(match.group(1)))
             facts.prices[f"train_price_{price}"] = price
+
+        # Associate train_id with price from structured tool data
+        train_ids = self.TRAIN_PATTERN.findall(text)
+        price_vals = re.findall(r'(?:price|票价|价格)[：:\s]*(\d+(?:\.\d+)?)', text, re.IGNORECASE)
+        if train_ids and price_vals:
+            for tid, pval in zip(train_ids, price_vals):
+                p = int(float(pval))
+                facts.transport_prices[tid] = p
+                facts.prices[tid] = p
 
         # Times - extract from various formats including "07:00-11:28"
         for match in self.TIME_PATTERN.finditer(text):
@@ -595,15 +614,25 @@ class FactExtractor:
             for match in re.finditer(pattern, text):
                 facts.pois.add(match.group(1).strip())
 
+        # Extract POI costs/prices (e.g., "cost: 150", "门票: 50元")
+        for match in re.finditer(r'(?:cost|门票|票价|费用)[：:\s]*(\d+(?:\.\d+)?)', text, re.IGNORECASE):
+            price = int(float(match.group(1)))
+            if 1 <= price <= 50000:
+                facts.prices[f"poi_cost_{price}"] = price
+
     def _extract_weather_facts(self, text: str, facts: ExtractedFacts):
         """Extract weather-related facts."""
         for match in self.WEATHER_PATTERN.finditer(text):
             facts.weather.add(match.group(1))
 
-        # Temperature
+        # Temperature (with degree symbol)
         temp_matches = re.findall(r'(\d{1,2})\s*[°度℃]', text)
         for temp in temp_matches:
             facts.weather.add(f"{temp}度")
+
+        # Temperature from structured tool data: "最高温: 15", "最低温: 3"
+        for match in re.finditer(r'(?:最高温|最低温|温度|气温)[：:\s]*(-?\d{1,2})', text):
+            facts.weather.add(f"{match.group(1)}度")
 
         # Wind direction and level
         for match in self.WIND_DIRECTION_PATTERN.finditer(text):

@@ -184,7 +184,17 @@ _DIM_BLOCKS = {
 - 5-6分: 约一半推荐有分析，另一半是简单罗列
 - 3-4分: 主要是数据罗列，分析浮于表面
 - 0-2分: 纯数据搬运，零分析
-注意：如果分析基于编造数据（工具未返回的航班、价格、距离等），应视为无效分析，相应扣分。''',
+
+重要判断标准——区分"数据复述"与"真正分析"：
+- "推荐航班X因为它Y点出发"只是复述工具数据，不是分析。即使加了"因为/考虑到/综合"等连接词，本质仍是数据搬运。
+- 真正的分析应解读数据的含义，例如："08:30出发意味着不需要起太早，到达后有充分游览时间"。
+- 在工具仅返回少量方案时声称"经过仔细对比和权衡"是空洞表述（结构化摘要中会标注可对比方案数量）。
+- 诚实指出工具返回有限（如"仅返回1个景点"）并给出实际建议，比虚假声称多方对比更有分析价值。
+- 如果分析基于编造数据（工具未返回的航班、价格、距离等），应视为无效分析，相应扣分。
+
+加分项（在基础评分上额外加分，最高10分）：
+- 主动指出工具返回数据的局限性并提出补救建议（结构化摘要中"数据局限性认知"标记为✓）→ +2分
+- 用具体数据计算佐证观点（如加总预算、计算时间窗口）→ +1分''',
     "logic": '''【{dim_label}: 逻辑连贯性 logic】(0-10分)
 评分方法：从8分起评，按以下问题扣分（最低0分）：
 - 相邻景点不在同一区域（不必要的跨区移动）→ -{penalty_cross_district}分
@@ -192,9 +202,10 @@ _DIM_BLOCKS = {
 - 景点安排无说明顺序理由 → -{penalty_no_reason}分
 - 地理方位完全不合理 → -{penalty_geography}分
 - 基于编造的距离/时间进行路线规划 → 逻辑推导无效，额外扣2分
+- 基于工具未返回的POI进行地理分组或区域规划 → -{penalty_ungrounded_poi_logic}分（参见结构化摘要中"无工具依据的POI"列表，如果路线安排涉及这些POI，其地理逻辑不应获得正分）
 
 加分项（最高10分）：
-- 明确说明按地理位置/区域分组安排 → +1分
+- 明确说明按地理位置/区域分组安排（仅限工具返回的POI）→ +1分
 - 路线形成合理的单向或环形 → +1分''',
     "user_experience": '''【{dim_label}: 用户体验 user_experience】(0-10分)
 - 9-10分: 所有约束和偏好明确回应，预算分配合理且有说明，矛盾约束有权衡
@@ -205,8 +216,10 @@ _DIM_BLOCKS = {
     "factual_grounding": '''【{dim_label}: 事实准确性 factual_grounding】(0-10分)
 从10分起评，逐项扣分（最低0分）：
 - 输出中出现工具未返回的航班号/车次 → -{penalty_ungrounded_transport}分/个
-- 未调用direction工具却声称具体行程时间或距离 → -{penalty_ungrounded_time_distance}分
-- 价格与工具返回差异>20% → -{penalty_fabricated_price}分/处
+- 未调用direction工具却声称两地之间的具体行车/步行耗时或公里距离 → -{penalty_ungrounded_time_distance}分
+  （注意：航班/火车的出发到达时间来自交通查询工具，不属于此项扣分范围）
+- 出现工具完全未返回的价格 → -{penalty_fabricated_price}分/处
+  （注意：工具返回价格的简单加减合计不算编造，如850+150=1000属于可推导数据）
 - 推荐的POI完全不在工具返回列表中 → -{penalty_ungrounded_poi}分/2个
 - 输出过于简短或几乎未引用任何工具返回的具体数据（如景点名、航班号、价格、天气等） → 基础分不超过3分
 加分项：所有事实均可在工具数据中找到出处 → 维持满分''',
@@ -350,6 +363,7 @@ class UnifiedScorer(LLMScorerGroup):
                 penalty_ungrounded_time_distance=penalties.get("ungrounded_time_distance", 3),
                 penalty_fabricated_price=penalties.get("fabricated_price", 3),
                 penalty_ungrounded_poi=penalties.get("ungrounded_poi", 2),
+                penalty_ungrounded_poi_logic=penalties.get("ungrounded_poi_logic", 3),
             )
             dim_blocks_parts.append(block)
 
@@ -677,7 +691,14 @@ def _format_facts_summary(tool_facts, output_facts, called_tools: Set[str]) -> s
         sections.append(f"工具返回车次: {', '.join(sorted(tool_facts.trains)[:10])}")
     if tool_facts.transport_prices:
         ps = [f"{k}:{v}元" for k, v in sorted(tool_facts.transport_prices.items())[:8]]
-        sections.append(f"工具返回价格: {', '.join(ps)}")
+        sections.append(f"工具返回交通价格: {', '.join(ps)}")
+    # Include ALL unique price values (POI costs, ticket prices, etc.)
+    if tool_facts.prices:
+        unique_prices = sorted(set(int(v) for v in tool_facts.prices.values() if v > 0))
+        if unique_prices:
+            sections.append(f"工具返回所有价格值: {', '.join(f'{p}元' for p in unique_prices)}（注：这些价格的加减合计也属于可推导数据）")
+    if tool_facts.times:
+        sections.append(f"工具返回出发/到达时间: {', '.join(sorted(tool_facts.times)[:8])}")
     if tool_facts.weather:
         sections.append(f"工具返回天气: {', '.join(sorted(tool_facts.weather)[:6])}")
     if tool_facts.travel_durations:
@@ -809,12 +830,34 @@ def _build_structured_summary(
     sections.append(f"\n【价格信息】")
     tool_prices = tool_facts.prices if tool_facts else {}
     tool_price_values = set(str(v) for v in tool_prices.values()) if tool_prices else set()
+    # Build set of all known tool prices (POI + transport) for sum detection
+    all_tool_price_ints = set()
+    if tool_prices:
+        all_tool_price_ints.update(int(v) for v in tool_prices.values() if v > 0)
+    if tool_transport_prices:
+        all_tool_price_ints.update(int(v) for v in tool_transport_prices.values() if v > 0)
+    # Compute plausible sums (pairs) to recognize e.g. 850+150=1000
+    plausible_sums = set()
+    price_list = sorted(all_tool_price_ints)
+    for i in range(len(price_list)):
+        for j in range(i, len(price_list)):
+            plausible_sums.add(price_list[i] + price_list[j])
+            for k in range(j, len(price_list)):
+                plausible_sums.add(price_list[i] + price_list[j] + price_list[k])
     # Extract standalone prices from output
     output_price_mentions = re.findall(r'(\d+)\s*元', text)
     if output_price_mentions:
         price_items = []
         for p in output_price_mentions[:10]:
-            grounded = "✓" if p in tool_price_values else "?"
+            p_int = int(p)
+            if p in tool_price_values or str(p_int) in tool_price_values:
+                grounded = "✓"
+            elif p_int in all_tool_price_ints:
+                grounded = "✓"
+            elif p_int in plausible_sums:
+                grounded = "✓合计"
+            else:
+                grounded = "?"
             price_items.append(f"{p}元({grounded})")
         sections.append(f"- 提及价格: {', '.join(price_items)}")
     else:
@@ -872,18 +915,49 @@ def _build_structured_summary(
         sections.append(f"- 推理片段样本（供评估分析质量）:")
         for i, snippet in enumerate(reasoning_snippets[:8], 1):
             sections.append(f"  {i}. {snippet}")
+
+        # No grounded/ungrounded counts — removed because they created
+        # perverse incentive (echo answers that quote tool keywords looked
+        # "more grounded" than genuine analysis)
     else:
         sections.append(f"- ⚠ 未检测到实质推理分析，可能是纯数据罗列")
 
-    # Comparison/trade-off analysis
+    # Comparison/trade-off analysis with hollow comparison detection
     comparison_patterns = r'(对比|相比|比较|优于|不如|虽然.*但|权衡|取舍|利弊)'
     comparison_count = len(re.findall(comparison_patterns, text))
-    sections.append(f"- 对比/权衡分析: {comparison_count}处")
+
+    # Count actual comparable options from tool data
+    n_flights = len(tool_facts.flights) if tool_facts else 0
+    n_trains = len(tool_facts.trains) if tool_facts else 0
+    n_pois = len(tool_facts.pois) if tool_facts else 0
+    # Meaningful comparisons: within category (need 2+) or cross-modal (flight vs train)
+    comparable_options = 0
+    if n_flights >= 2:
+        comparable_options += n_flights - 1
+    if n_trains >= 2:
+        comparable_options += n_trains - 1
+    if n_flights >= 1 and n_trains >= 1:
+        comparable_options += 1  # flight vs train
+    if n_pois >= 2:
+        comparable_options += n_pois - 1
+
+    sections.append(f"- 对比/权衡声称: {comparison_count}处")
+    sections.append(f"- 工具返回可对比方案: 航班{n_flights}个, 车次{n_trains}个, 景点{n_pois}个 (可比组合约{comparable_options}种)")
+    if comparison_count >= 3 and comparable_options <= 1:
+        sections.append(f"- ⚠ 对比声称({comparison_count}处)远超工具提供的可比方案({comparable_options}种)，大量对比可能是空洞表述")
 
     # Personalization indicators
     personalization = r'(根据您|根据你|您的需求|你的需求|您的偏好|你的偏好|您的预算|你的预算)'
     personalization_count = len(re.findall(personalization, text))
     sections.append(f"- 个性化回应: {personalization_count}处")
+
+    # Data limitation awareness — key differentiator between genuine analysis and echo
+    limitation_patterns = r'(仅返回|只有\s*\d|有限|不足|缺少|缺乏|无法确认|待确认|不够|工具未|需要.*更多|建议.*搜索|建议.*查询|建议.*补充|建议.*扩充|到达后.*查)'
+    limitation_mentions = re.findall(limitation_patterns, text)
+    if limitation_mentions:
+        sections.append(f"- 数据局限性认知: ✓ 主动指出{len(limitation_mentions)}处限制或提出补救建议（体现批判性分析能力）")
+    else:
+        sections.append(f"- 数据局限性认知: ✗ 未提及工具返回数据的任何局限性")
 
     # ── 8. User needs coverage ──
     sections.append(f"\n【用户需求回应】")
@@ -1001,14 +1075,6 @@ def _extract_safe_reasoning_snippets(text: str, tool_facts) -> List[str]:
         r'推荐.*因|选择.*因|之所以|这样.*可以|从而|避免|节省)'
     )
 
-    # Collect tool data keywords for grounding annotation
-    tool_keywords = set()
-    if tool_facts:
-        tool_keywords.update(tool_facts.flights)
-        tool_keywords.update(tool_facts.trains)
-        tool_keywords.update(p for p in tool_facts.pois if p and len(p) >= 2)
-        tool_keywords.update(tool_facts.weather)
-
     # Split into sentences (Chinese and English punctuation)
     sentences = re.split(r'[。！？\n;；]', text)
     snippets = []
@@ -1029,10 +1095,11 @@ def _extract_safe_reasoning_snippets(text: str, tool_facts) -> List[str]:
         # Truncate to 80 chars
         snippet = sent[:80] + ("…" if len(sent) > 80 else "")
 
-        # Annotate grounding: does this reasoning reference tool data?
-        refs_tool = any(kw in sent for kw in tool_keywords if kw)
-        tag = "[引用工具数据]" if refs_tool else "[无工具数据引用]"
-        snippets.append(f"{snippet} {tag}")
+        # No grounding tags — let the LLM judge snippet quality from content.
+        # Previously used [引用工具数据]/[无工具数据引用] but this created
+        # a perverse incentive: echoing tool keywords in reasoning looks
+        # "grounded" while genuine analysis without direct quotes looks "ungrounded".
+        snippets.append(snippet)
 
         if len(snippets) >= 8:
             break
