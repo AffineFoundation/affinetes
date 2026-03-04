@@ -515,14 +515,22 @@ fi
                 check=False, capture_output=True, timeout=DOCKER_PULL_TIMEOUT
             )
 
+            verify_ctr = f"swe-verify-{uuid.uuid4().hex[:12]}"
             print(f"Running verification container (timeout={VERIFY_FIX_TIMEOUT}s)...")
-            result = subprocess.run(
-                ["docker", "run", "--rm", "-i", "--network=host", "--entrypoint", "/bin/bash", image],
-                input=full_script,
-                capture_output=True,
-                timeout=VERIFY_FIX_TIMEOUT,
-                text=True
-            )
+            try:
+                result = subprocess.run(
+                    ["docker", "run", "--rm", "--init", "-i",
+                     "--name", verify_ctr,
+                     "--stop-timeout", "10",
+                     "--network=host", "--entrypoint", "/bin/bash", image],
+                    input=full_script,
+                    capture_output=True,
+                    timeout=VERIFY_FIX_TIMEOUT,
+                    text=True
+                )
+            except subprocess.TimeoutExpired:
+                subprocess.run(["docker", "kill", verify_ctr], capture_output=True, timeout=15)
+                return 0.0, {"error": "timeout"}
             print("Verification container completed.")
 
             stdout = result.stdout
@@ -659,14 +667,22 @@ fi
                 check=False, capture_output=True, timeout=DOCKER_PULL_TIMEOUT
             )
 
+            expand_ctr = f"swe-expand-{uuid.uuid4().hex[:12]}"
             print(f"Running expansion verification container (timeout={VERIFY_FIX_TIMEOUT}s)...")
-            result = subprocess.run(
-                ["docker", "run", "--rm", "-i", "--network=host", "--entrypoint", "/bin/bash", docker_image],
-                input=full_script,
-                capture_output=True,
-                timeout=VERIFY_FIX_TIMEOUT,
-                text=True
-            )
+            try:
+                result = subprocess.run(
+                    ["docker", "run", "--rm", "--init", "-i",
+                     "--name", expand_ctr,
+                     "--stop-timeout", "10",
+                     "--network=host", "--entrypoint", "/bin/bash", docker_image],
+                    input=full_script,
+                    capture_output=True,
+                    timeout=VERIFY_FIX_TIMEOUT,
+                    text=True
+                )
+            except subprocess.TimeoutExpired:
+                subprocess.run(["docker", "kill", expand_ctr], capture_output=True, timeout=15)
+                return 0.0, {"error": "timeout"}
 
             stdout = result.stdout
             begin_marker = "===SWESYNTH_OUTPUT_BEGIN==="
@@ -749,6 +765,8 @@ fi
             "--name", container_name,
             "-w", "/app",
             "--rm",
+            "--init",
+            "--stop-timeout", "10",
             "--network=host",
             "--entrypoint", "",
             docker_image,
