@@ -552,3 +552,87 @@ def get_environment(env_id: str) -> Optional[EnvironmentWrapper]:
     """
     registry = get_registry()
     return registry.get(env_id)
+
+
+def get_environment_status(
+    env_id: str,
+    include_stats: bool = True,
+) -> Optional[Dict[str, Any]]:
+    """
+    Get status information for a single environment.
+
+    The returned dictionary is safe to serialize as JSON and is designed
+    for both programmatic inspection and CLI usage.
+
+    Args:
+        env_id: Environment identifier as returned by list_active_environments().
+        include_stats: When True, include per-instance statistics for multi-instance pools
+                       (see EnvironmentWrapper.get_stats()).
+
+    Returns:
+        Dictionary with status information or None if the environment is not found.
+
+    Example:
+        >>> status = get_environment_status('affine-latest_1234567890')
+        >>> status['ready']
+        True
+    """
+    registry = get_registry()
+    env = registry.get(env_id)
+    if env is None:
+        return None
+
+    # Base metadata that is always available
+    status: Dict[str, Any] = {
+        "id": env_id,
+        "name": getattr(env, "name", env_id),
+        "ready": bool(env.is_ready()),
+    }
+
+    # Pool statistics (only for multi-instance pools)
+    stats: Optional[Dict[str, Any]] = None
+    try:
+        stats = env.get_stats()
+    except Exception as e:
+        # get_stats() is optional and should never break status inspection
+        logger.debug(f"get_stats() failed for environment '{env_id}': {e}")
+
+    status["is_pool"] = stats is not None
+
+    if include_stats and stats is not None:
+        status["stats"] = stats
+
+    return status
+
+
+def get_all_environment_statuses(
+    include_stats: bool = True,
+) -> List[Dict[str, Any]]:
+    """
+    Get status information for all active environments.
+
+    This is a thin convenience wrapper around list_active_environments()
+    and get_environment_status() and is intended for CLI commands and
+    monitoring tools.
+
+    Args:
+        include_stats: When True, include per-instance statistics for multi-instance pools.
+
+    Returns:
+        List of status dictionaries (see get_environment_status()).
+
+    Example:
+        >>> statuses = get_all_environment_statuses()
+        >>> [s['id'] for s in statuses]
+        ['affine-latest_1234567890', 'custom-env-pool-3']
+    """
+    registry = get_registry()
+    env_ids = registry.list_all()
+
+    statuses: List[Dict[str, Any]] = []
+    for env_id in env_ids:
+        status = get_environment_status(env_id, include_stats=include_stats)
+        if status is not None:
+            statuses.append(status)
+
+    return statuses

@@ -8,7 +8,14 @@ from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 from ..utils.logger import logger
-from .commands import run_environment, call_method, build_and_push, init_environment, test_environment
+from .commands import (
+    run_environment,
+    call_method,
+    build_and_push,
+    init_environment,
+    test_environment,
+    show_status,
+)
 
 load_dotenv(override=True)
 
@@ -222,6 +229,27 @@ Examples:
         help='Timeout for each evaluation in seconds (default: 60)'
     )
 
+    # === status command ===
+    status_parser = subparsers.add_parser(
+        'status',
+        help='Show status of active environments'
+    )
+    status_parser.add_argument(
+        'name',
+        nargs='?',
+        help='Optional environment ID to inspect (default: show all)'
+    )
+    status_parser.add_argument(
+        '--json',
+        action='store_true',
+        help='Output status as JSON'
+    )
+    status_parser.add_argument(
+        '--verbose',
+        action='store_true',
+        help='Show per-instance details for pools'
+    )
+
     return parser
 
 
@@ -340,6 +368,14 @@ def main():
                 temperature=args.temperature,
                 timeout=args.timeout
             ))
+
+        elif args.command == 'status':
+            output = "json" if args.json else "table"
+            show_status(
+                name=args.name,
+                output=output,
+                verbose=args.verbose,
+            )
 
         else:
             parser.print_help()
