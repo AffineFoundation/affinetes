@@ -40,6 +40,8 @@ class Actor:
     Supported ranges:
       0–99,999,999:     common_sense_combo
       100M–199,999,999: qqr_travel
+      200M–299,999,999: long_context
+      300M–399,999,999: openspiel_game
     """
 
     def __init__(self, api_key: str = None):
