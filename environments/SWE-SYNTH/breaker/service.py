@@ -234,7 +234,7 @@ class BreakerService:
         r2_access_key_id: str,
         r2_secret_access_key: str,
         r2_prefix: str = "bugs",
-        model: str = "affine/Kimi-K2.5",
+        model: str = "zai-org/GLM-5-TEE",
         api_base: str = "https://llm.chutes.ai/v1",
         api_key: Optional[str] = None,
         agent_type: str = "miniswe",
@@ -1381,7 +1381,7 @@ Examples:
     parser.add_argument("--max-tasks", type=int,
                         help="Max tasks to generate (default: unlimited)")
     parser.add_argument("--model", type=str,
-                        default="affine/Kimi-K2.5")
+                        default="zai-org/GLM-5-TEE")
     parser.add_argument("--api-base", type=str, default="https://llm.chutes.ai/v1")
     parser.add_argument("--agent-type", type=str, default="miniswe",
                         choices=["miniswe", "ridge"])

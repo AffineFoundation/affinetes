@@ -10,7 +10,9 @@ Task ID allocation (100M-per-type scheme):
   ├─────────────────────┼───────────────────────────────────────────────┤
   │ 0  (0–99,999,999)   │ common_sense_combo  (fact Q&A combos)         │
   │ 1  (100M–199,999,999│ qqr_travel  (QQR travel planning prompts)     │
-  │ 2+ (200M+)          │ reserved – raises NotImplementedError         │
+  │ 2  (200M–299,999,999│ long_context  (long reading comprehension)     │
+  │ 3  (300M–399,999,999│ openspiel_game  (OpenSpiel game prompts)       │
+  │ 4+ (400M+)          │ reserved – raises NotImplementedError         │
   └─────────────────────┴───────────────────────────────────────────────┘
 """
 
@@ -26,6 +28,8 @@ TASK_ID_RANGE = 100_000_000
 TASK_NAMES = {
     0: "common_sense_combo",
     1: "qqr_travel",
+    2: "long_context",
+    3: "openspiel_game",
 }
 
 # Lazy-loaded instances
@@ -63,6 +67,14 @@ def _get_task(task_type: str):
         elif task_type == "qqr_travel":
             from tasks.qqr_travel import QQRTravelTask
             _task_instances[task_type] = QQRTravelTask()
+
+        elif task_type == "long_context":
+            from tasks.long_context import LongContextTask
+            _task_instances[task_type] = LongContextTask()
+
+        elif task_type == "openspiel_game":
+            from tasks.openspiel_game import OpenSpielGameTask
+            _task_instances[task_type] = OpenSpielGameTask()
 
         else:
             raise NotImplementedError(f"No implementation for task type: {task_type!r}")
