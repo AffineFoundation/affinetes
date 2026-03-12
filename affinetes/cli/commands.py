@@ -6,9 +6,15 @@ import json
 import os
 import sys
 from pathlib import Path
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List
 
-from ..api import load_env, build_image_from_env, get_environment
+from ..api import (
+    load_env,
+    build_image_from_env,
+    get_environment,
+    get_all_environment_statuses,
+    get_environment_status,
+)
 from ..utils.logger import logger
 from .templates import (
     ACTOR_ENV_PY,
@@ -542,3 +548,104 @@ async def test_environment(
     except Exception as e:
         logger.error(f"Failed to run tests: {e}")
         raise
+
+
+def show_status(
+    name: Optional[str],
+    output: str = "table",
+    verbose: bool = False
+) -> None:
+    """
+    Display status information about active environments.
+
+    Args:
+        name: Optional specific environment ID to inspect. When omitted, all
+              active environments from the global registry are shown.
+        output: Output format: "table" (default) or "json".
+        verbose: When True, include per-instance details for pools in table mode.
+    """
+    if name:
+        statuses: List[Dict[str, Any]] = []
+        status = get_environment_status(name)
+        if not status:
+            logger.info(f"No active environment found with id '{name}'")
+            return
+        statuses.append(status)
+    else:
+        statuses = get_all_environment_statuses()
+
+    if not statuses:
+        logger.info("No active environments found")
+        return
+
+    if output == "json":
+        print(json.dumps(statuses, indent=2, ensure_ascii=False))
+        return
+
+    # Default: human-friendly table output
+    try:
+        from tabulate import tabulate  # type: ignore[import]
+
+        use_tabulate = True
+    except Exception:
+        use_tabulate = False
+
+    headers = ["ID", "Name", "Ready", "Pool", "Instances", "Requests"]
+    rows = []
+
+    for status in statuses:
+        stats = status.get("stats") if isinstance(status, dict) else None
+        is_pool = bool(status.get("is_pool")) if isinstance(status, dict) else False
+
+        total_instances = "-"
+        total_requests = "-"
+
+        if isinstance(stats, dict):
+            total_instances = stats.get("total_instances", "-")
+            total_requests = stats.get("total_requests", "-")
+
+        rows.append([
+            status.get("id"),
+            status.get("name"),
+            "yes" if status.get("ready") else "no",
+            "yes" if is_pool else "no",
+            total_instances,
+            total_requests,
+        ])
+
+    if use_tabulate:
+        table = tabulate(rows, headers=headers, tablefmt="github")
+        print(table)
+    else:
+        # Fallback formatting when tabulate is not available
+        col_widths = [len(h) for h in headers]
+        for row in rows:
+            for i, cell in enumerate(row):
+                col_widths[i] = max(col_widths[i], len(str(cell)))
+
+        def _format_row(values):
+            return "  ".join(str(v).ljust(col_widths[i]) for i, v in enumerate(values))
+
+        print(_format_row(headers))
+        print("-" * (sum(col_widths) + 2 * (len(headers) - 1)))
+        for row in rows:
+            print(_format_row(row))
+
+    if verbose:
+        # Print per-instance details for pools
+        print("\nInstance details:")
+        for status in statuses:
+            stats = status.get("stats") if isinstance(status, dict) else None
+            if not isinstance(stats, dict):
+                continue
+
+            instances = stats.get("instances") or []
+            if not instances:
+                continue
+
+            print(f"\nEnvironment: {status.get('name')} ({status.get('id')})")
+            for inst in instances:
+                host = inst.get("host", "unknown")
+                port = inst.get("port", "unknown")
+                reqs = inst.get("requests", 0)
+                print(f"  - {host}:{port} (requests: {reqs})")
