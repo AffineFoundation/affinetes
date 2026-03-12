@@ -42,6 +42,7 @@ class Actor:
       100M–199,999,999: qqr_travel
       200M–299,999,999: long_context
       300M–399,999,999: openspiel_game
+      400M–499,999,999: swe_agent_fix
     """
 
     def __init__(self, api_key: str = None):
