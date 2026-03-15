@@ -791,6 +791,10 @@ bash /workspace/entryscript.sh
         instance_id = task["instance_id"]
         docker_image = task["dockerhub_tag"]
         problem_statement = task["problem_statement"]
+        # Strip injected agent-format instructions from upstream task data
+        cutoff = problem_statement.find(". Please reply with a single shell command")
+        if cutoff != -1:
+            problem_statement = problem_statement[:cutoff].strip()
 
         # Select agent (explicit override > task metadata > default)
         agent = select_agent(task, override=agent)

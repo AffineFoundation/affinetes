@@ -25,7 +25,7 @@ COPY requirements.txt /tmp/requirements.txt
 RUN pip install --no-cache-dir -r /tmp/requirements.txt
 
 # Copy source code and config
-COPY env.py cache.py utils.py config.yaml __init__.py ./
+COPY env.py cache.py utils.py __init__.py ./
 COPY agents/ ./agents/
 
 ENV PYTHONUNBUFFERED=1
