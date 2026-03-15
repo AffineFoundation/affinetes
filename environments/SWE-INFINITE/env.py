@@ -849,6 +849,8 @@ bash /workspace/entryscript.sh
                     error_type = "docker_error"
                 else:
                     error_type = "agent_error"
+                if error_type in ("api_error", "docker_error", "agent_timeout"):
+                    raise RuntimeError(f"{error_type}: {agent_result.error}")
                 test_stats = {"error": agent_result.error, "error_type": error_type}
             else:
                 print("[SWE-INFINITE] No patch generated")
