@@ -285,17 +285,6 @@ class MiniSWEAgent:
 
         lines.append(problem_statement.strip())
 
-        if test_command or fail_to_pass:
-            lines.append("")
-            lines.append("## Hints")
-            if test_command:
-                lines.append(f"- Verify your changes: `{test_command}`")
-            if fail_to_pass:
-                tests_str = ", ".join(fail_to_pass[:10])
-                if len(fail_to_pass) > 10:
-                    tests_str += f" ... and {len(fail_to_pass) - 10} more"
-                lines.append(f"- Tests that must pass: {tests_str}")
-
         return "\n".join(lines)
 
     def cleanup(self):

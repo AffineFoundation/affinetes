@@ -192,14 +192,6 @@ class CodexAgent:
         lines.append("- Read relevant source files to understand the codebase before making changes.")
         lines.append("- Make minimal, focused changes that directly address the issue.")
 
-        if test_command:
-            lines.append(f"- You can verify your changes by running: `{test_command}`")
-        if fail_to_pass:
-            tests_str = ", ".join(fail_to_pass[:10])
-            if len(fail_to_pass) > 10:
-                tests_str += f" ... and {len(fail_to_pass) - 10} more"
-            lines.append(f"- These tests must pass after your changes: {tests_str}")
-
         return "\n".join(lines)
 
     async def solve(
