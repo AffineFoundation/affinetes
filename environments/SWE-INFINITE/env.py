@@ -51,123 +51,14 @@ SUBMIT_MARKER = "COMPLETE_TASK_AND_SUBMIT_FINAL_OUTPUT"
 ACTION_REGEX = r"```bash\s*\n(.*?)\n```"
 
 # Output markers for verification
+STDOUT_BEGIN = "===SWE_INFINITE_STDOUT_BEGIN==="
+STDOUT_END = "===SWE_INFINITE_STDOUT_END==="
+STDERR_BEGIN = "===SWE_INFINITE_STDERR_BEGIN==="
+STDERR_END = "===SWE_INFINITE_STDERR_END==="
+# Legacy combined marker (kept for backward compat)
 OUTPUT_BEGIN = "===SWE_INFINITE_OUTPUT_BEGIN==="
 OUTPUT_END = "===SWE_INFINITE_OUTPUT_END==="
 
-# Inline test output parser script (handles all languages, written into container)
-PARSER_SCRIPT = r"""import json, re, sys
-from pathlib import Path
-
-stdout = Path(sys.argv[1]).read_text()
-stderr = Path(sys.argv[2]).read_text()
-combined = stdout + "\n" + stderr
-
-# Detect format from test output and parse accordingly
-tests = []
-seen = set()
-
-# Try pytest format first
-pat = re.compile(r"^([\w/.\-]+(?:::\w[\w\[\].\-]*)+)\s+(PASSED|FAILED|ERROR)", re.MULTILINE)
-for m in pat.finditer(combined):
-    name, status = m.group(1), m.group(2)
-    if name not in seen:
-        seen.add(name)
-        tests.append({"name": name, "status": status})
-
-# Try Jest/Vitest JSON format if no pytest results
-if not tests and "{" in stdout:
-    try:
-        start = stdout.index("{")
-        data = json.loads(stdout[start:])
-        for suite in data.get("testResults", []):
-            fp = suite.get("testFilePath", "")
-            if fp.startswith("/app/"):
-                fp = fp[len("/app/"):]
-            for t in suite.get("testResults", []):
-                name = f"{fp}::{t.get('fullName') or t.get('title', '')}"
-                status = "PASSED" if t.get("status") == "passed" else "FAILED"
-                if name not in seen:
-                    seen.add(name)
-                    tests.append({"name": name, "status": status})
-    except Exception:
-        pass
-
-# Try go test -json format
-if not tests:
-    for line in combined.splitlines():
-        line = line.strip()
-        if not line.startswith("{"):
-            continue
-        try:
-            ev = json.loads(line)
-        except Exception:
-            continue
-        action, test_name, pkg = ev.get("Action", ""), ev.get("Test", ""), ev.get("Package", "")
-        if test_name and action in ("pass", "fail"):
-            name = f"{pkg}::{test_name}"
-            if name not in seen:
-                seen.add(name)
-                tests.append({"name": name, "status": "PASSED" if action == "pass" else "FAILED"})
-
-# Try cargo test format
-if not tests:
-    cargo_re = re.compile(r"^test\s+([\w:]+)\s+\.\.\.\s+(ok|FAILED|ignored)")
-    for line in combined.splitlines():
-        m = cargo_re.match(line.strip())
-        if m:
-            name, status = m.group(1), m.group(2)
-            if name not in seen:
-                seen.add(name)
-                tests.append({"name": name, "status": "PASSED" if status == "ok" else "FAILED"})
-
-# Try RSpec JSON format
-if not tests and "{" in stdout:
-    try:
-        start = stdout.index("{")
-        data = json.loads(stdout[start:])
-        for ex in data.get("examples", []):
-            name = ex.get("full_description", ex.get("description", ""))
-            fp = ex.get("file_path", "")
-            if fp:
-                name = f"{fp}::{name}"
-            status = "PASSED" if ex.get("status") == "passed" else "FAILED"
-            if name not in seen:
-                seen.add(name)
-                tests.append({"name": name, "status": status})
-    except Exception:
-        pass
-
-# Try Minitest format
-if not tests:
-    mini_re = re.compile(r"^([\w:]+#\w+)\s*=.*=\s*([.FES])")
-    for line in combined.splitlines():
-        m = mini_re.match(line.strip())
-        if m:
-            name, status = m.group(1), m.group(2)
-            if name not in seen:
-                seen.add(name)
-                tests.append({"name": name, "status": "PASSED" if status == "." else "FAILED"})
-
-# Try Mocha JSON format
-if not tests and "{" in stdout:
-    try:
-        start = stdout.index("{")
-        data = json.loads(stdout[start:])
-        for t in data.get("passes", []):
-            name = t.get("fullTitle", t.get("title", ""))
-            if name not in seen:
-                seen.add(name)
-                tests.append({"name": name, "status": "PASSED"})
-        for t in data.get("failures", []):
-            name = t.get("fullTitle", t.get("title", ""))
-            if name not in seen:
-                seen.add(name)
-                tests.append({"name": name, "status": "FAILED"})
-    except Exception:
-        pass
-
-Path(sys.argv[3]).write_text(json.dumps({"tests": tests}, indent=2))
-"""
 
 
 @dataclass
@@ -373,26 +264,34 @@ class InfiniteActor:
         try:
             # Build verification entry script
             # Apply order: test_patch -> augmented_test_patch -> fix_patch
+            # test_patch contains the augmented/enhanced tests not baked into the image.
             apply_steps = []
             if test_patch and test_patch.strip():
-                apply_steps.append("git apply -v --allow-empty /workspace/test_patch.diff")
+                apply_steps.append(
+                    "git apply --recount --whitespace=fix /workspace/test_patch.diff 2>&1 || true"
+                )
             if augmented_test_patch and augmented_test_patch.strip():
-                apply_steps.append("git apply -v --allow-empty /workspace/augmented_test.diff")
+                apply_steps.append(
+                    "git apply --recount --whitespace=fix /workspace/augmented_test.diff 2>&1 || true"
+                )
             apply_cmds = "\n".join(apply_steps)
 
             entryscript = f"""
 cd /app
 {apply_cmds}
-git apply -v /workspace/fix_patch.diff
+git apply --recount --whitespace=fix /workspace/fix_patch.diff 2>&1 || {{ echo "PATCH_APPLY_FAILED"; }}
 {test_command} > /workspace/stdout.log 2> /workspace/stderr.log || true
-python3 /workspace/parser.py /workspace/stdout.log /workspace/stderr.log /workspace/output.json
+echo "{STDOUT_BEGIN}"
+cat /workspace/stdout.log
+echo "{STDOUT_END}"
+echo "{STDERR_BEGIN}"
+cat /workspace/stderr.log
+echo "{STDERR_END}"
 """
 
             fix_patch_b64 = base64.b64encode(fix_patch.encode('utf-8')).decode('ascii')
-            parser_b64 = base64.b64encode(PARSER_SCRIPT.encode('utf-8')).decode('ascii')
             entryscript_b64 = base64.b64encode(entryscript.encode('utf-8')).decode('ascii')
 
-            # Encode test patches if present
             test_patch_lines = ""
             if test_patch and test_patch.strip():
                 tp_b64 = base64.b64encode(test_patch.encode('utf-8')).decode('ascii')
@@ -407,15 +306,9 @@ mkdir -p /workspace
 {test_patch_lines}
 {augmented_lines}
 echo "{fix_patch_b64}" | base64 -d > /workspace/fix_patch.diff
-echo "{parser_b64}" | base64 -d > /workspace/parser.py
 echo "{entryscript_b64}" | base64 -d > /workspace/entryscript.sh
 chmod +x /workspace/entryscript.sh
 bash /workspace/entryscript.sh
-if [ -f /workspace/output.json ]; then
-    echo "{OUTPUT_BEGIN}"
-    cat /workspace/output.json
-    echo "{OUTPUT_END}"
-fi
 """
 
             # Pull image and run verification container
@@ -446,18 +339,38 @@ fi
                 return 0.0, {"error": "timeout"}
 
             print("[SWE-INFINITE] Verification container completed.")
-            stdout = result.stdout
+            container_stdout = result.stdout
 
-            if OUTPUT_BEGIN not in stdout or OUTPUT_END not in stdout:
+            if "PATCH_APPLY_FAILED" in container_stdout:
+                return 0.0, {"error": "patch apply failed"}
+
+            if STDOUT_BEGIN not in container_stdout or STDERR_BEGIN not in container_stdout:
                 return 0.0, {"error": "No output markers", "stderr": result.stderr[:500]}
 
-            json_str = stdout[
-                stdout.index(OUTPUT_BEGIN) + len(OUTPUT_BEGIN):
-                stdout.index(OUTPUT_END)
+            test_stdout = container_stdout[
+                container_stdout.index(STDOUT_BEGIN) + len(STDOUT_BEGIN):
+                container_stdout.index(STDOUT_END)
+            ].strip()
+            test_stderr = container_stdout[
+                container_stdout.index(STDERR_BEGIN) + len(STDERR_BEGIN):
+                container_stdout.index(STDERR_END)
             ].strip()
 
-            output = json.loads(json_str)
-            passed_tests = {t["name"] for t in output["tests"] if t["status"] == "PASSED"}
+            language = task.get("repo_language", "")
+            passed_tests, failed_tests = parse_test_output(test_stdout, test_stderr, language, test_command)
+
+            # Fallback: if no individual tests were parsed, check summary line.
+            # Handles non-verbose test runners (e.g. Minitest without -v).
+            if not passed_tests and not failed_tests:
+                summary_m = re.search(
+                    r"(\d+) runs?.*?(\d+) failures?.*?(\d+) errors?", test_stdout + test_stderr
+                )
+                if summary_m:
+                    total = int(summary_m.group(1))
+                    failures = int(summary_m.group(2))
+                    errors = int(summary_m.group(3))
+                    if total > 0 and failures == 0 and errors == 0:
+                        passed_tests = all_required.copy()
 
             f2p_passed = len(f2p & passed_tests)
             all_passed_count = len(all_required & passed_tests)
@@ -955,3 +868,24 @@ fi
                 "usage": usage,
             },
         }
+
+    async def verify(self, task_id, fix_patch: str) -> Dict[str, Any]:
+        """Verify a patch against a task's test suite (for testing/debugging).
+
+        Args:
+            task_id: Numeric task ID or instance_id string
+            fix_patch: The patch to verify (unified diff)
+        """
+        task = self._load_task(task_id)
+        score, test_stats = self._verify(task, fix_patch)
+        return {
+            "score": score,
+            "success": score > 0.0,
+            "task_id": task_id,
+            "repo_language": task.get("repo_language", ""),
+            "test_stats": test_stats,
+        }
+
+
+# Framework requires class named 'Actor'
+Actor = InfiniteActor

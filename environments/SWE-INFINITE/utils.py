@@ -69,15 +69,22 @@ _MINITEST_RE = re.compile(r"^([\w:]+#\w+)\s*=.*=\s*([.FES])")
 
 def parse_test_output(
     stdout: str,
+    stderr: str,
     language: str,
     test_command: str,
 ) -> tuple[set[str], set[str]]:
     """Parse test output into (passed, failed) sets.
 
-    Automatically selects the right parser based on language and test_command.
+    Matches upstream affine-swe-infinite logic:
+    - JSON-based parsers (jest, mocha, rspec): stdout only
+    - Others (go, rust, minitest, pytest): stdout + stderr combined
     """
     framework = _detect_framework(language, test_command)
-    passed, failed = _PARSERS[framework](stdout)
+    if framework in ("jest", "mocha", "rspec"):
+        text = stdout
+    else:
+        text = stdout + "\n" + stderr
+    passed, failed = _PARSERS[framework](text)
     return set(passed), set(failed)
 
 
