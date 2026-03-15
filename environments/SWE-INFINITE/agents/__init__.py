@@ -15,7 +15,8 @@ _CODEX_PREFERRED_LANGUAGES = frozenset()  # empty for now; miniswe is default
 def select_agent(task: dict, override: str = "") -> str:
     """Pick the best agent for a task.
 
-    Priority: explicit override > task metadata > language heuristic > default (miniswe).
+    Priority: explicit override > task metadata > task_id parity (alternating).
+    Even task_id → codex, odd task_id → miniswe.
     """
     if override and override in SUPPORTED_AGENTS:
         return override
@@ -25,12 +26,9 @@ def select_agent(task: dict, override: str = "") -> str:
     if task_agent and task_agent in SUPPORTED_AGENTS:
         return task_agent
 
-    # Language heuristic
-    lang = task.get("repo_language", "").lower()
-    if lang in _CODEX_PREFERRED_LANGUAGES:
-        return "codex"
-
-    return "miniswe"
+    # Alternate by numeric task_id parity: even → codex, odd → miniswe
+    task_id_num = task.get("_task_id", 0)
+    return "codex" if task_id_num % 2 == 0 else "miniswe"
 
 
 __all__ = [
