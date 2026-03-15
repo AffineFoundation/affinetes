@@ -282,6 +282,8 @@ class CodexAgent:
 
             # 7. Parse output
             total_tokens, model_calls, conversation = self._parse_json_output(result.stdout)
+            # Prepend initial prompt as first conversation entry
+            conversation.insert(0, {"role": "user", "content": prompt})
             print(f"[CODEX] Exit code: {result.returncode}, turns: {model_calls}, tokens: {total_tokens}")
 
             if result.returncode != 0:
