@@ -64,7 +64,7 @@ _PYTEST_RE = re.compile(r"^([\w/.\-]+(?:::\w[\w\[\].\-]*)+)\s+(PASSED|FAILED|ERR
 _CARGO_RE = re.compile(r"^test\s+([\w:]+)\s+\.\.\.\s+(ok|FAILED|ignored)")
 
 # Minitest verbose output line format
-_MINITEST_RE = re.compile(r"^(.+?#\w+)\s*=.*=\s*([.FES])")
+_MINITEST_RE = re.compile(r"^(.+?)\s+=\s+[\d.]+\s+s\s+=\s+([.FES])\s*$")
 
 
 def parse_test_output(
