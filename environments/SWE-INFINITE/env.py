@@ -273,11 +273,11 @@ class InfiniteActor:
             apply_steps = []
             if test_patch and test_patch.strip():
                 apply_steps.append(
-                    "git apply --recount --whitespace=fix /workspace/test_patch.diff 2>&1 || true"
+                    'git apply --recount --whitespace=fix /workspace/test_patch.diff 2>&1 || echo "TEST_PATCH_APPLY_FAILED"'
                 )
             if augmented_test_patch and augmented_test_patch.strip():
                 apply_steps.append(
-                    "git apply --recount --whitespace=fix /workspace/augmented_test.diff 2>&1 || true"
+                    'git apply --recount --whitespace=fix /workspace/augmented_test.diff 2>&1 || echo "AUGMENTED_PATCH_APPLY_FAILED"'
                 )
             apply_cmds = "\n".join(apply_steps)
 
@@ -347,6 +347,11 @@ bash /workspace/entryscript.sh
             container_stdout = result.stdout
 
             if "PATCH_APPLY_FAILED" in container_stdout:
+                # Check specific patch failures first (test_patch / augmented_test_patch)
+                if "TEST_PATCH_APPLY_FAILED" in container_stdout:
+                    return 0.0, {"error": "test_patch apply failed"}
+                if "AUGMENTED_PATCH_APPLY_FAILED" in container_stdout:
+                    return 0.0, {"error": "augmented_test_patch apply failed"}
                 return 0.0, {"error": "patch apply failed"}
 
             if STDOUT_BEGIN not in container_stdout or STDERR_BEGIN not in container_stdout:
