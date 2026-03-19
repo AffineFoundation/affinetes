@@ -512,10 +512,10 @@ class Actor:
                     result_content = tool_response.get("content", "")
                 except asyncio.TimeoutError:
                     logger.error("Tool call %s timed out after 120s", name)
-                    result_content = f"工具调用超时: {name} 超过120秒未响应"
+                    result_content = f"tool_call_timeout: {name} did not respond within 120s"
                 except Exception as e:
                     logger.error("Tool call %s failed: %s", name, e)
-                    result_content = f"工具调用失败: {str(e)[:200]}"
+                    result_content = f"tool_call_failed: {str(e)[:200]}"
 
                 # Record tool call
                 ep.tool_trace.append({
@@ -569,6 +569,23 @@ class Actor:
         else:
             # No tool calls or max steps reached, perform scoring
             ep.done = True
+
+            # Check for environment-side errors (API rate limits, timeouts)
+            # that are NOT the model's fault — invalidate the evaluation
+            env_error = self._detect_env_error(ep.tool_trace)
+            if env_error:
+                ep.final_score = 0.0
+                ep.score_breakdown = {"error": env_error}
+                return OpenEnvResponse(
+                    observation="完成",
+                    reward=0.0,
+                    done=True,
+                    episode_id=episode_id,
+                    info={
+                        "score": 0.0,
+                        "score_breakdown": ep.score_breakdown,
+                    },
+                )
 
             # scoring_input is the model's final answer.
             # evaluate() ensures this is a complete answer via the
@@ -907,6 +924,39 @@ class Actor:
 
         # Scalar or other type
         return content[:max_chars]
+
+    # Environment-side errors that invalidate the evaluation.
+    # These are NOT the model's fault — API quota exhaustion, infra failures, etc.
+    _ENV_ERROR_PATTERNS = [
+        "USER_DAILY_QUERY_OVER_LIMIT",
+        "DAILY_QUERY_OVER_LIMIT",
+        "QPS_OVER_LIMIT",
+        "USERBAND_BINDbindedkeysoverrun",
+        "CUOTA_PLAN_RUN_OUT",
+        "tool_call_timeout",
+    ]
+
+    def _detect_env_error(self, tool_trace: List[Dict]) -> Optional[str]:
+        """Detect environment-side errors in tool trace.
+
+        Returns error description if any tool call hit an API-side error
+        (rate limit, quota exhaustion, infra timeout), or None if clean.
+        Only flags errors that are the environment's fault, not the model's
+        (e.g., INVALID_PARAMS is the model's fault, OVER_LIMIT is ours).
+        """
+        env_errors = []
+        for t in tool_trace:
+            result = t.get("result", {})
+            text = result.get("text", "") if isinstance(result, dict) else str(result)
+            for pattern in self._ENV_ERROR_PATTERNS:
+                if pattern in text:
+                    env_errors.append(f"{t['name']}: {pattern}")
+                    break
+
+        if not env_errors:
+            return None
+
+        return f"Environment error (not model fault): {len(env_errors)} tool call(s) failed due to API limit — {env_errors[0]}"
 
     def _build_final_answer_prompt(self, problem: TravelProblem) -> str:
         """Build a problem-type-specific prompt requesting the final answer."""
