@@ -70,22 +70,36 @@ except (ValueError, TypeError):
 _CACHE_TTL = 172800  # 48 hours — shared by AMap and Transport
 
 
-def _round_coord_string(coord_str: str) -> str:
-    """Round coordinate string to 4 decimal places (~11m precision)."""
+def _round_coord(coord_str: str, decimals: int = 3) -> str:
+    """Round coordinate string to N decimal places."""
     coord_str = coord_str.replace('\uff0c', ',').replace(' ', '')
     parts = coord_str.split(',')
     if len(parts) == 2:
         try:
-            return f"{round(float(parts[0]), 4)},{round(float(parts[1]), 4)}"
+            return f"{round(float(parts[0]), decimals)},{round(float(parts[1]), decimals)}"
         except (ValueError, OverflowError):
             pass
     return coord_str
 
 
+def _bucket_radius(radius) -> int:
+    """Bucket around_search radius into standard tiers for cache key."""
+    try:
+        r = int(radius)
+    except (ValueError, TypeError):
+        return 3000
+    if r <= 1500:
+        return 1000
+    if r <= 4000:
+        return 3000
+    return 5000
+
+
 def _normalize_amap_args(tool_name: str, arguments: dict) -> dict:
     """Normalize AMap tool arguments for better cache hit rate.
 
-    - direction/around_search: round coordinates to 4 decimal places
+    - direction: round coordinates to 3 decimal places (~111m)
+    - around_search: round coordinates to 3 decimal places + bucket radius
     - All tools: strip whitespace from string arguments
     """
     if not arguments:
@@ -93,15 +107,19 @@ def _normalize_amap_args(tool_name: str, arguments: dict) -> dict:
 
     args = dict(arguments)  # Shallow copy — tool args are flat strings
 
-    # Round coordinates for coordinate-based tools
-    if tool_name in ("direction", "around_search"):
-        for coord_key in ("origin", "destination", "location"):
+    if tool_name == "direction":
+        for coord_key in ("origin", "destination"):
             if coord_key in args and isinstance(args[coord_key], str):
-                args[coord_key] = _round_coord_string(args[coord_key])
-        # Normalize waypoints (semicolon-separated coordinate pairs)
+                args[coord_key] = _round_coord(args[coord_key], 3)
         if "waypoints" in args and isinstance(args["waypoints"], str) and args["waypoints"]:
             parts = args["waypoints"].split(";")
-            args["waypoints"] = ";".join(_round_coord_string(p) for p in parts)
+            args["waypoints"] = ";".join(_round_coord(p, 3) for p in parts)
+
+    elif tool_name == "around_search":
+        if "location" in args and isinstance(args["location"], str):
+            args["location"] = _round_coord(args["location"], 3)
+        if "radius" in args:
+            args["radius"] = _bucket_radius(args["radius"])
 
     # Strip whitespace from all string values
     for k, v in args.items():
@@ -310,6 +328,19 @@ class StepRewardCalculator:
         return 0.5
 
 
+# Per-episode tool call budget based on what a quality travel plan needs:
+# - A good plan covers 3-5 POIs, 3-5 routes, 2-3 nearby searches, 1-2 weather
+# - Total ~15 tool calls, matching MAX_TOOL_STEPS=15
+# - Excess calls are wasteful (repeating same POI, trying all 4 direction modes)
+# - Models exceeding budget get a text hint to use existing data
+_TOOL_CALL_BUDGET = {
+    "direction": 10,      # Need ~5, budget 10
+    "poi_search": 10,     # Need ~5, budget 10
+    "around_search": 6,   # Need ~3, budget 6
+    "weather": 3,         # Need 1-2, budget 3
+}
+
+
 @dataclass
 class EpisodeState:
     """Episode state container."""
@@ -325,6 +356,7 @@ class EpisodeState:
     final_score: float = 0.0
     score_breakdown: Optional[Dict] = None
     _score_breakdown_full: Optional[Dict] = None  # Internal debug only
+    tool_call_counts: Dict[str, int] = field(default_factory=dict)  # per-tool call counter
 
 
 class Actor:
@@ -495,27 +527,37 @@ class Actor:
                     args = {}
 
                 # ==================== Use QQR's MCPState to call tools ====================
-                tool_call_dict = {
-                    "id": call_id,
-                    "function": {
-                        "name": name,
-                        "arguments": json.dumps(args, ensure_ascii=False),
-                    },
-                }
-
-                # Call MCPState.call_tool (with timeout to prevent hung subprocesses)
-                try:
-                    tool_response = await asyncio.wait_for(
-                        self._mcp_state.call_tool(tool_call_dict),
-                        timeout=120,
+                # Per-episode tool call budget check
+                ep.tool_call_counts[name] = ep.tool_call_counts.get(name, 0) + 1
+                budget = _TOOL_CALL_BUDGET.get(name)
+                if budget and ep.tool_call_counts[name] > budget:
+                    result_content = (
+                        f"Tool call budget exceeded: {name} called "
+                        f"{ep.tool_call_counts[name]} times (limit: {budget}). "
+                        f"Use the data from previous calls."
                     )
-                    result_content = tool_response.get("content", "")
-                except asyncio.TimeoutError:
-                    logger.error("Tool call %s timed out after 120s", name)
-                    result_content = f"tool_call_timeout: {name} did not respond within 120s"
-                except Exception as e:
-                    logger.error("Tool call %s failed: %s", name, e)
-                    result_content = f"tool_call_failed: {str(e)[:200]}"
+                else:
+                    tool_call_dict = {
+                        "id": call_id,
+                        "function": {
+                            "name": name,
+                            "arguments": json.dumps(args, ensure_ascii=False),
+                        },
+                    }
+
+                    # Call MCPState.call_tool (with timeout to prevent hung subprocesses)
+                    try:
+                        tool_response = await asyncio.wait_for(
+                            self._mcp_state.call_tool(tool_call_dict),
+                            timeout=120,
+                        )
+                        result_content = tool_response.get("content", "")
+                    except asyncio.TimeoutError:
+                        logger.error("Tool call %s timed out after 120s", name)
+                        result_content = f"tool_call_timeout: {name} did not respond within 120s"
+                    except Exception as e:
+                        logger.error("Tool call %s failed: %s", name, e)
+                        result_content = f"tool_call_failed: {str(e)[:200]}"
 
                 # Record tool call
                 ep.tool_trace.append({
