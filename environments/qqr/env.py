@@ -67,7 +67,8 @@ except (ValueError, TypeError):
     _CACHE_SIZE_MB = 4096
 
 
-_CACHE_TTL = 172800  # 48 hours — shared by AMap and Transport
+_AMAP_CACHE_TTL = 2592000   # 30 days — AMap data (routes, POIs, weather) is stable
+_TRANSPORT_CACHE_TTL = 172800  # 48 hours — transport data rotates with epoch salt
 
 
 def _round_coord(coord_str: str, decimals: int = 3) -> str:
@@ -166,7 +167,7 @@ def mcp_server_config_fn() -> list:
         client_session_timeout_seconds=60,
         max_retry_attempts=3,
         blocklist=[],
-        cache_ttl=_CACHE_TTL,
+        cache_ttl=_AMAP_CACHE_TTL,
         cache_maxsize=32768,
         cache_size_limit_mb=_CACHE_SIZE_MB,
         concurrency_limit=16,
@@ -192,7 +193,7 @@ def mcp_server_config_fn() -> list:
         client_session_timeout_seconds=120,
         max_retry_attempts=3,
         blocklist=[],
-        cache_ttl=_CACHE_TTL,
+        cache_ttl=_TRANSPORT_CACHE_TTL,
         cache_maxsize=32768,
         cache_size_limit_mb=_CACHE_SIZE_MB,
         concurrency_limit=4,
