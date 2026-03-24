@@ -15,6 +15,7 @@ RUN pip install --no-cache-dir git+https://github.com/Alibaba-NLP/qqr.git
 # We only need the MCP tools, not the full qqr training framework
 RUN echo '# Patched to avoid slime dependency\n__version__ = "0.1.1"' > /usr/local/lib/python3.11/site-packages/qqr/__init__.py
 
+
 # Copy environment requirements and install
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt

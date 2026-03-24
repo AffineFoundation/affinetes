@@ -139,7 +139,7 @@ def mcp_server_config_fn() -> list:
     # AMap server configuration
     amap_server_params = MCPServerStdioParams(
         command="python",
-        args=["-m", "qqr.tools.amap"],
+        args=["-m", "amap_server"],
         env={
             "AMAP_MAPS_API_KEY": AMAP_MAPS_API_KEY or "",
             "PYTHONPATH": PYTHONPATH or "",
