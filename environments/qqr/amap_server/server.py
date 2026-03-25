@@ -4,11 +4,13 @@ AMap MCP Server — local fork of qqr.tools.amap with citycode caching.
 Changes from upstream:
 - get_citycode() cached in-memory (same coordinates always return same citycode,
   saves ~3600 reverse geocoding API calls/day from transit_direction)
-- AMAP_MAPS_API_KEY read from env directly (no qqr.utils.envs dependency)
+- AMAP_MAPS_API_KEY supports multiple comma-separated keys for quota pooling
+- Each API call picks a random key; single key works as before
 """
 
 import asyncio
 import os
+import random
 
 import httpx
 from mcp.server.fastmcp import FastMCP
@@ -18,7 +20,57 @@ from qqr.data.text import truncate_text
 
 mcp = FastMCP("AMap", log_level="WARNING")
 
-AMAP_MAPS_API_KEY = os.getenv("AMAP_MAPS_API_KEY", "")
+# Support multiple AMap API keys (comma-separated) for quota pooling.
+# Each API call picks a random key. If a key hits quota limit, it's
+# excluded from the pool for the rest of the process lifetime.
+_AMAP_KEYS = [k.strip() for k in os.getenv("AMAP_MAPS_API_KEY", "").split(",") if k.strip()]
+_EXHAUSTED_KEYS: set = set()
+
+
+def _get_api_key() -> str:
+    """Return a random API key from the pool, skipping exhausted ones."""
+    available = [k for k in _AMAP_KEYS if k not in _EXHAUSTED_KEYS]
+    if not available:
+        # All keys exhausted — fall back to full pool (will trigger OVER_LIMIT → env error)
+        available = _AMAP_KEYS
+    if not available:
+        return ""
+    return random.choice(available)
+
+
+def _mark_key_exhausted(key: str):
+    """Mark a key as exhausted (hit daily quota limit)."""
+    _EXHAUSTED_KEYS.add(key)
+
+
+_QUOTA_ERROR_CODES = {"OVER_LIMIT", "USER_DAILY_QUERY_OVER_LIMIT", "DAILY_QUERY_OVER_LIMIT",
+                       "QPS_OVER_LIMIT", "INVALID_USER_KEY", "INVALID_USER_SCODE"}
+
+
+async def _amap_request(url: str, params: dict) -> dict:
+    """Make an AMap API request with automatic key failover on quota errors."""
+    key = params.get("key", "")
+    async with httpx.AsyncClient() as client:
+        response = await client.get(url, params=params)
+        response.raise_for_status()
+        result = response.json()
+
+    # Check if this key hit quota limit
+    if result.get("status") != "1":
+        info = result.get("info", "")
+        infocode = result.get("infocode", "")
+        if info in _QUOTA_ERROR_CODES or infocode in {"10004", "10005", "30001"}:
+            _mark_key_exhausted(key)
+            # Retry once with a different key
+            new_key = _get_api_key()
+            if new_key != key:
+                params["key"] = new_key
+                async with httpx.AsyncClient() as client:
+                    response = await client.get(url, params=params)
+                    response.raise_for_status()
+                    result = response.json()
+
+    return result
 
 
 # ============================================================================
@@ -30,14 +82,8 @@ _citycode_cache = {}
 
 async def reverse_geocode(location: str):
     url = "https://restapi.amap.com/v3/geocode/regeo"
-    params = {"key": AMAP_MAPS_API_KEY, "location": location}
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        result = response.json()
-
-    return result
+    params = {"key": _get_api_key(), "location": location}
+    return await _amap_request(url, params)
 
 
 async def get_citycode(location: str):
@@ -81,17 +127,14 @@ async def poi_search(address: str, region: str | None = None) -> str:
     """
     url = "https://restapi.amap.com/v5/place/text"
     params = {
-        "key": AMAP_MAPS_API_KEY,
+        "key": _get_api_key(),
         "keywords": address,
         "show_fields": "business",
     }
     if region:
         params["region"] = region
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        result = response.json()
+    result = await _amap_request(url, params)
 
     if result.get("status") != "1":
         msg = result.get("info", "unknown error")
@@ -126,7 +169,7 @@ async def around_search(
     """
     url = "https://restapi.amap.com/v5/place/around"
     params = {
-        "key": AMAP_MAPS_API_KEY,
+        "key": _get_api_key(),
         "location": location,
         "radius": radius,
         "show_fields": "business",
@@ -136,10 +179,7 @@ async def around_search(
     if region:
         params["region"] = region
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        result = response.json()
+    result = await _amap_request(url, params)
 
     if result.get("status") != "1":
         msg = result.get("info", "unknown error")
@@ -158,44 +198,28 @@ async def around_search(
 
 async def driving_direction(origin: str, destination: str, waypoints: str | None = None):
     url = "https://restapi.amap.com/v5/direction/driving?parameters"
-    params = {"key": AMAP_MAPS_API_KEY, "origin": origin, "destination": destination}
+    params = {"key": _get_api_key(), "origin": origin, "destination": destination}
     if waypoints:
         params["waypoints"] = waypoints
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+    return await _amap_request(url, params)
 
 
 async def walking_direction(origin: str, destination: str):
     url = "https://restapi.amap.com/v5/direction/walking?parameters"
-    params = {"key": AMAP_MAPS_API_KEY, "origin": origin, "destination": destination}
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+    params = {"key": _get_api_key(), "origin": origin, "destination": destination}
+    return await _amap_request(url, params)
 
 
 async def bicycling_direction(origin: str, destination: str):
     url = "https://restapi.amap.com/v5/direction/bicycling?parameters"
-    params = {"key": AMAP_MAPS_API_KEY, "origin": origin, "destination": destination}
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+    params = {"key": _get_api_key(), "origin": origin, "destination": destination}
+    return await _amap_request(url, params)
 
 
 async def electrobike_direction(origin: str, destination: str):
     url = "https://restapi.amap.com/v5/direction/electrobike?parameters"
-    params = {"key": AMAP_MAPS_API_KEY, "origin": origin, "destination": destination}
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+    params = {"key": _get_api_key(), "origin": origin, "destination": destination}
+    return await _amap_request(url, params)
 
 
 async def transit_direction(origin: str, destination: str):
@@ -211,17 +235,13 @@ async def transit_direction(origin: str, destination: str):
         raise Exception("City not found for transit destination.")
 
     params = {
-        "key": AMAP_MAPS_API_KEY,
+        "key": _get_api_key(),
         "origin": origin,
         "destination": destination,
         "city1": citycode_origin,
         "city2": citycode_destination,
     }
-
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        return response.json()
+    return await _amap_request(url, params)
 
 
 @mcp.tool()
@@ -275,15 +295,12 @@ async def weather(city: str) -> str:
     """
     url = "https://restapi.amap.com/v3/weather/weatherInfo"
     params = {
-        "key": AMAP_MAPS_API_KEY,
+        "key": _get_api_key(),
         "city": city,
         "extensions": "all",
     }
 
-    async with httpx.AsyncClient() as client:
-        response = await client.get(url, params=params)
-        response.raise_for_status()
-        result = response.json()
+    result = await _amap_request(url, params)
 
     if result.get("status") != "1":
         msg = result.get("info", "unknown error")
