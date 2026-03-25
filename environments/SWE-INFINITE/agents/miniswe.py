@@ -162,6 +162,7 @@ class MiniSWEAgent:
                 model_name = f"openai/{model_name}"
 
             model_kwargs = {"temperature": self.config.temperature}
+            model_kwargs["timeout"] = min(self.config.timeout // 2, 300)
             if self.config.seed is not None:
                 model_kwargs["seed"] = self.config.seed
 
@@ -229,7 +230,10 @@ class MiniSWEAgent:
 
             try:
                 loop = asyncio.get_event_loop()
-                _, result = await loop.run_in_executor(None, self._agent.run, prompt)
+                _, result = await asyncio.wait_for(
+                    loop.run_in_executor(None, self._agent.run, prompt),
+                    timeout=self.config.timeout,
+                )
                 patch = result
             except Exception:
                 import traceback
