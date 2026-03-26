@@ -761,6 +761,7 @@ class Actor:
                     total_usage["completion_tokens"] += usage.get("completion_tokens", 0)
                     total_usage["total_tokens"] += usage.get("total_tokens",
                         usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
+                    total_usage["last_call"] = usage
 
             final_content = None
             llm_failed = False
