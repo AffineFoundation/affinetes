@@ -867,7 +867,11 @@ bash /workspace/entryscript.sh
         problem_statement = task["problem_statement"]
 
         # Select agent (explicit override > task metadata > default)
-        agent = select_agent(task, override=agent)
+        # Force miniswe when collecting logprobs (Codex conversation format is lossy)
+        if collect_logprobs:
+            agent = "miniswe"
+        else:
+            agent = select_agent(task, override=agent)
         print(f"[SWE-INFINITE] Loaded task: {instance_id} (agent={agent})")
 
         # Create and run agent (no test patches — agent should not see test cases)
@@ -966,19 +970,8 @@ bash /workspace/entryscript.sh
         if collect_logprobs and conversation:
             try:
                 from affinetes.core.logprobs_utils import collect_full_logprobs
-                # Normalize Codex conversation to standard chat format
-                normalized = []
-                for item in conversation:
-                    if item.get("role"):
-                        normalized.append(item)
-                    elif item.get("type") == "agent_message":
-                        normalized.append({"role": "assistant", "content": item.get("text", "")})
-                    elif item.get("type") == "command_execution":
-                        output = item.get("aggregated_output", "")
-                        exit_code = item.get("exit_code", "")
-                        normalized.append({"role": "user", "content": f"[exit code: {exit_code}]\n{output}"})
                 full_logprobs = await collect_full_logprobs(
-                    conversation=normalized,
+                    conversation=conversation,
                     model=model,
                     base_url=base_url,
                     api_key=eval_api_key,
