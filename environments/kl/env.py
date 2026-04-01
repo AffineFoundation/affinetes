@@ -134,6 +134,7 @@ class Actor:
         )
 
         if resp.status_code != 200:
+            print(f"[KL] Forward pass failed: {resp.status_code} {resp.text[:300]}")
             return None
 
         data = resp.json()
