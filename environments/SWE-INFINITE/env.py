@@ -839,6 +839,7 @@ bash /workspace/entryscript.sh
         seed: Optional[int] = None,
         agent: str = "",
         max_iterations: int = 100,
+        collect_logprobs: bool = False,
     ) -> Dict[str, Any]:
         """Evaluate an agent on a real PR task.
 
@@ -939,7 +940,7 @@ bash /workspace/entryscript.sh
         # Clean up docker resources after each evaluation
         self._cleanup_docker_resources(current_image=docker_image)
 
-        return {
+        result = {
             "task_name": "swe-infinite",
             "score": score,
             "success": score > 0.0,
@@ -961,6 +962,22 @@ bash /workspace/entryscript.sh
                 "usage": usage,
             },
         }
+
+        if collect_logprobs and conversation:
+            try:
+                from affinetes.core.logprobs_utils import collect_full_logprobs
+                full_logprobs = await collect_full_logprobs(
+                    conversation=conversation,
+                    model=model,
+                    base_url=base_url,
+                    api_key=eval_api_key,
+                )
+                result["extra"]["full_logprobs"] = full_logprobs
+            except Exception as e:
+                result["extra"]["full_logprobs"] = None
+                result["extra"]["logprobs_error"] = str(e)
+
+        return result
 
     async def verify(self, task_id, fix_patch: str) -> Dict[str, Any]:
         """Verify a patch against a task's test suite (for testing/debugging).

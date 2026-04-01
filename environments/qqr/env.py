@@ -723,6 +723,7 @@ class Actor:
         timeout: int = 300,
         temperature: float = 0.7,
         api_key: Optional[str] = None,
+        collect_logprobs: bool = False,
     ) -> Dict[str, Any]:
         """Complete evaluation flow using OpenAI Function Calling.
 
@@ -915,6 +916,21 @@ class Actor:
                         ),
                     },
                 }
+
+                if collect_logprobs and conv:
+                    try:
+                        from affinetes.core.logprobs_utils import collect_full_logprobs
+                        full_logprobs = await collect_full_logprobs(
+                            conversation=conv,
+                            model=model,
+                            base_url=base_url,
+                            api_key=api_key,
+                        )
+                        result["extra"]["full_logprobs"] = full_logprobs
+                    except Exception as e:
+                        result["extra"]["full_logprobs"] = None
+                        result["extra"]["logprobs_error"] = str(e)
+
                 return result
 
             finally:

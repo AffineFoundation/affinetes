@@ -792,6 +792,7 @@ Your choice (action ID only):"""
         temperature: float = None,
         api_key: str = None,
         opponent: str = "mcts",
+        collect_logprobs: bool = False,
     ):
         """
         Run single game evaluation
@@ -805,6 +806,7 @@ Your choice (action ID only):"""
             temperature: LLM temperature (None = use model default)
             api_key: Override API key
             opponent: Opponent type ("random" or "mcts")
+            collect_logprobs: If True, do a forward pass after rollout to collect full_logprobs
         """
         if task_id is None:
             task_id = random.randint(0, 10**11 - 1)
@@ -814,7 +816,7 @@ Your choice (action ID only):"""
         current_api_key = api_key or self.api_key
         start_time = time.time()
 
-        return await asyncio.wait_for(
+        result = await asyncio.wait_for(
             self._run_evaluation(
                 task_id,
                 seed,
@@ -828,6 +830,23 @@ Your choice (action ID only):"""
             ),
             timeout=timeout,
         )
+
+        if collect_logprobs and result.get("extra", {}).get("conversation"):
+            try:
+                from affinetes.core.logprobs_utils import collect_full_logprobs
+                full_logprobs = await collect_full_logprobs(
+                    conversation=result["extra"]["conversation"],
+                    model=model,
+                    base_url=base_url,
+                    api_key=current_api_key,
+                )
+                result["extra"]["full_logprobs"] = full_logprobs
+            except Exception as e:
+                import traceback
+                result["extra"]["full_logprobs"] = None
+                result["extra"]["logprobs_error"] = traceback.format_exc()
+
+        return result
 
     async def _run_evaluation(
         self,

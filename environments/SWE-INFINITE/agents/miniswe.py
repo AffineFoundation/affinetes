@@ -161,7 +161,9 @@ class MiniSWEAgent:
             if not model_name.startswith(("openai/", "anthropic/", "azure/", "bedrock/", "claude")):
                 model_name = f"openai/{model_name}"
 
-            model_kwargs = {"temperature": self.config.temperature}
+            model_kwargs = {
+                "temperature": self.config.temperature,
+            }
             if self.config.seed is not None:
                 model_kwargs["seed"] = self.config.seed
 

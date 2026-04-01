@@ -92,6 +92,7 @@ class CodexAgent:
 
     def _write_codex_config(self) -> None:
         """Write codex config.toml inside the container (wire_api=chat for OpenAI-compatible endpoints)."""
+        base_url = self.config.api_base
         config_toml = (
             f'model = {json.dumps(self.config.model)}\n'
             f'model_provider = "chutes"\n'
@@ -100,8 +101,8 @@ class CodexAgent:
             f'name = "Chutes"\n'
             f'env_key = "CODEX_API_KEY"\n'
         )
-        if self.config.api_base:
-            config_toml += f'base_url = {json.dumps(self.config.api_base)}\n'
+        if base_url:
+            config_toml += f'base_url = {json.dumps(base_url)}\n'
         config_toml += 'wire_api = "chat"\n'
 
         self._exec(
@@ -207,6 +208,7 @@ class CodexAgent:
         prompt = self._build_prompt(
             problem_statement, repo, language, test_command, fail_to_pass,
         )
+
         try:
             # 1. Pull Docker image
             print(f"[CODEX] Pulling image: {docker_image}")
@@ -263,7 +265,7 @@ class CodexAgent:
             codex_cmd = (
                 "cd /app && codex exec "
                 "--dangerously-bypass-approvals-and-sandbox "
-                "--experimental-json "
+                "--json "
                 "-"
             )
             print(f"[CODEX] Running codex exec (timeout={self.config.timeout}s)...")
