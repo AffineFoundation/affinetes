@@ -141,44 +141,40 @@ class InfiniteActor:
         else:
             print(f"[SWE-INFINITE] Warning: Docker Hub login failed: {result.stderr.strip()}")
 
-    def _cleanup_stale_containers(self, min_age_minutes: int = 2):
-        """Clean up stale containers from previous runs."""
-        try:
-            from datetime import datetime, timezone
+    def _cleanup_stale_containers(self):
+        """Remove leftover swe-infinite-* containers from previous runs.
 
-            prefixes = ["swe-infinite-codex-", "swe-infinite-openenv-", "swe-infinite-verify-"]
-            now = datetime.now(timezone.utc)
-            cleaned = 0
-
-            for prefix in prefixes:
+        Only called once at startup, where any matching container is guaranteed
+        to be a leftover (this process has not spawned anything yet). Never call
+        from the periodic loop — it would kill in-flight long-running tasks.
+        """
+        prefixes = [
+            "swe-infinite-codex-",
+            "swe-infinite-miniswe-",
+            "swe-infinite-openenv-",
+            "swe-infinite-verify-",
+        ]
+        cleaned = 0
+        for prefix in prefixes:
+            try:
                 result = subprocess.run(
                     ["docker", "ps", "-a", "--filter", f"name={prefix}",
-                     "--format", "{{.ID}} {{.CreatedAt}}"],
+                     "--format", "{{.ID}}"],
                     capture_output=True, text=True, timeout=30,
                 )
-                if not result.stdout.strip():
+                cids = [c for c in result.stdout.split() if c]
+                if not cids:
                     continue
+                subprocess.run(
+                    ["docker", "rm", "-f", *cids],
+                    capture_output=True, timeout=60,
+                )
+                cleaned += len(cids)
+            except Exception as e:
+                print(f"[SWE-INFINITE] Warning: failed to cleanup '{prefix}*': {e}")
 
-                for line in result.stdout.strip().split('\n'):
-                    if not line.strip():
-                        continue
-                    parts = line.split(' ', 1)
-                    if len(parts) < 2:
-                        continue
-                    cid, created_str = parts[0], parts[1]
-                    try:
-                        created_str = created_str.rsplit(' ', 1)[0] if 'UTC' in created_str else created_str
-                        created = datetime.strptime(created_str.strip(), "%Y-%m-%d %H:%M:%S %z")
-                        if (now - created).total_seconds() / 60 >= min_age_minutes:
-                            subprocess.run(["docker", "rm", "-f", cid], capture_output=True, timeout=30)
-                            cleaned += 1
-                    except (ValueError, TypeError):
-                        continue
-
-            if cleaned > 0:
-                print(f"[SWE-INFINITE] Cleaned up {cleaned} stale containers")
-        except Exception as e:
-            print(f"[SWE-INFINITE] Warning: Failed to cleanup stale containers: {e}")
+        if cleaned > 0:
+            print(f"[SWE-INFINITE] Cleaned up {cleaned} stale containers")
 
     def _cleanup_docker_resources(self, current_image: str = None, max_images: int = 10) -> None:
         """Clean up Docker resources to free disk space.
@@ -255,7 +251,10 @@ class InfiniteActor:
             while True:
                 time.sleep(interval_hours * 3600)
                 try:
-                    self._cleanup_stale_containers()
+                    # Only prune disk resources here. Do NOT touch named
+                    # swe-infinite-* containers — long-running miniswe / openenv
+                    # tasks would be killed mid-flight. Stale-container cleanup
+                    # only runs once at startup (see __init__).
                     self._cleanup_docker_resources()
                 except Exception as e:
                     print(f"[SWE-INFINITE] Periodic cleanup error: {e}")
