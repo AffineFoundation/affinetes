@@ -194,21 +194,49 @@ def load_hle() -> List[Dict[str, Any]]:
 
 
 def load_ifeval() -> List[Dict[str, Any]]:
+    """Load IFEval and additionally collect keyword pools.
+
+    The keyword pools are stitched together from **every** IFEval row
+    (including ones whose instruction set we filter out), so the
+    perturbed-mode samples have a rich, real-distribution pool to draw
+    new keywords from. The pools are written to ``ifeval_pools.json``
+    by ``main()`` after the row list is built.
+    """
     print("[preprocess] loading IFEval...", flush=True)
     ds = load_dataset("google/IFEval", split="train")
     out: List[Dict[str, Any]] = []
+    existence_pool: set = set()
+    forbidden_pool: set = set()
+    frequency_pool: set = set()
     for row in ds:
         instruction_ids = list(row.get("instruction_id_list") or [])
+        kwargs = list(row.get("kwargs") or [])
+
+        # Pool collection runs over the *raw* row regardless of whether
+        # we keep it (more diversity).
+        for iid, kw in zip(instruction_ids, kwargs):
+            if not isinstance(kw, dict):
+                continue
+            if iid == "keywords:existence":
+                for w in (kw.get("keywords") or []):
+                    if isinstance(w, str) and w.strip():
+                        existence_pool.add(w.strip())
+            elif iid == "keywords:forbidden_words":
+                for w in (kw.get("forbidden_words") or []):
+                    if isinstance(w, str) and w.strip():
+                        forbidden_pool.add(w.strip())
+            elif iid == "keywords:frequency":
+                w = kw.get("keyword")
+                if isinstance(w, str) and w.strip():
+                    frequency_pool.add(w.strip())
+
         if not instruction_ids:
             continue
         if not all(iid in SUPPORTED_INSTRUCTIONS for iid in instruction_ids):
             continue
         prompt = _safe_str(row.get("prompt"))
-        kwargs = list(row.get("kwargs") or [])
         if not prompt:
             continue
-        # ``kwargs`` is a list of dicts aligned with ``instruction_id_list``.
-        # HuggingFace stores empty values as None — strip those for cleanliness.
         cleaned_kwargs: List[Dict[str, Any]] = []
         for kw in kwargs:
             if not isinstance(kw, dict):
@@ -222,7 +250,20 @@ def load_ifeval() -> List[Dict[str, Any]]:
                 "kwargs": cleaned_kwargs,
             }
         )
-    print(f"[preprocess] ifeval: {len(out)} items", flush=True)
+    # Stash pools as a side-channel attribute so main() can serialise
+    # them after filtering — keeps the loader signature uniform.
+    load_ifeval._pools = {
+        "existence_keywords": sorted(existence_pool),
+        "forbidden_words": sorted(forbidden_pool),
+        "frequency_keywords": sorted(frequency_pool),
+    }
+    print(
+        f"[preprocess] ifeval: {len(out)} items "
+        f"(pools: existence={len(existence_pool)}, "
+        f"forbidden={len(forbidden_pool)}, "
+        f"frequency={len(frequency_pool)})",
+        flush=True,
+    )
     return out
 
 
@@ -266,6 +307,19 @@ def main() -> None:
 
     with (out_dir / "manifest.json").open("w", encoding="utf-8") as f:
         json.dump({"total": cursor, "ranges": manifest}, f, indent=2)
+
+    # IFEval keyword pools collected during loading.
+    pools = getattr(load_ifeval, "_pools", None)
+    if pools:
+        with (out_dir / "ifeval_pools.json").open("w", encoding="utf-8") as f:
+            json.dump(pools, f, indent=2, ensure_ascii=False)
+        print(
+            f"[preprocess] ifeval_pools.json: "
+            f"existence={len(pools['existence_keywords'])} "
+            f"forbidden={len(pools['forbidden_words'])} "
+            f"frequency={len(pools['frequency_keywords'])}",
+            flush=True,
+        )
 
     print(f"[preprocess] total tasks: {cursor}", flush=True)
     for entry in manifest:

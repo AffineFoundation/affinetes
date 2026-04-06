@@ -6,9 +6,34 @@ sample whose instructions reach outside this set. This keeps the docker
 image lean (no nltk/langdetect) while still exercising real instruction
 following behaviour. Strict scoring is used: a sample scores 1.0 only
 when *every* listed instruction passes.
+
+Variants
+========
+
+When ``perturb_seed > 0`` we synthesise a fresh prompt instead of
+sending the upstream IFEval text:
+
+  * the *base task* is drawn from ``ifeval_base_prompts.BASE_PROMPTS``
+    (a curated pool of open-ended generative tasks)
+  * each instruction's kwargs are deterministically re-rolled from
+    realistic pools (collected at preprocess time from every IFEval
+    row, see ``ifeval_pools.json``)
+  * an instruction → natural language renderer expresses the new
+    constraints in plain English so the model can follow them
+
+The verifier path doesn't change at all — it operates on the model
+response and the (possibly perturbed) kwargs stored in
+``challenge.extra["kwargs"]``.
+
+When ``perturb_seed == 0`` we keep the original behaviour for
+backward compatibility, so existing rollouts and the canonical layer
+``[12743, 12977)`` remain unchanged.
 """
 
+import json
+import random
 import re
+from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
 from models import Challenge
@@ -156,14 +181,170 @@ _VERIFIERS = {
 }
 
 
+# ---- Variant generation: pools, kwargs perturbation, instruction rendering ----
+
+_POOLS_PATH = Path("/app/data/ifeval_pools.json")
+
+
+def _load_pools() -> Dict[str, List[str]]:
+    """Load keyword pools collected by preprocess. Returns empty pools
+    when the file is missing so unit tests can run outside the container.
+    """
+    if not _POOLS_PATH.exists():
+        return {"existence_keywords": [], "forbidden_words": [], "frequency_keywords": []}
+    try:
+        return json.loads(_POOLS_PATH.read_text(encoding="utf-8"))
+    except Exception:
+        return {"existence_keywords": [], "forbidden_words": [], "frequency_keywords": []}
+
+
+_POOLS = _load_pools()
+
+# ``BASE_PROMPTS`` is imported lazily because the unit tests in /tmp may
+# import this module without /app on sys.path.
+try:
+    from ifeval_base_prompts import BASE_PROMPTS as _BASE_PROMPTS
+except Exception:
+    _BASE_PROMPTS = ["Write a short essay on a topic of your choice."]
+
+
+def _perturb_kwargs(rng: random.Random, iid: str, original: Dict[str, Any]) -> Dict[str, Any]:
+    """Re-roll an instruction's kwargs from realistic pools.
+
+    Instructions with no tunable kwargs (``no_comma``, lowercase, etc.)
+    are returned untouched.
+    """
+    if iid == "keywords:existence":
+        n = max(1, len(original.get("keywords") or [3]) or 3)
+        pool = _POOLS["existence_keywords"] or [
+            "harmony", "discovery", "courage", "wisdom", "wonder",
+        ]
+        n = min(n, len(pool))
+        return {"keywords": rng.sample(pool, k=n)}
+
+    if iid == "keywords:forbidden_words":
+        n = max(1, len(original.get("forbidden_words") or [3]) or 3)
+        pool = _POOLS["forbidden_words"] or [
+            "however", "moreover", "actually", "basically", "literally",
+        ]
+        n = min(n, len(pool))
+        return {"forbidden_words": rng.sample(pool, k=n)}
+
+    if iid == "keywords:frequency":
+        pool = _POOLS["frequency_keywords"] or ["wonder", "harmony", "balance", "vision"]
+        return {
+            "keyword": rng.choice(pool),
+            "frequency": rng.randint(2, 10),
+            "relation": "at least",
+        }
+
+    if iid == "length_constraints:number_words":
+        return {
+            "num_words": rng.randint(50, 300),
+            "relation": rng.choice(["at least", "at most"]),
+        }
+
+    if iid == "length_constraints:number_sentences":
+        return {
+            "num_sentences": rng.randint(3, 15),
+            "relation": rng.choice(["at least", "at most"]),
+        }
+
+    if iid == "length_constraints:number_paragraphs":
+        return {"num_paragraphs": rng.randint(2, 6)}
+
+    if iid == "detectable_format:number_bullet_lists":
+        return {"num_bullets": rng.randint(3, 8)}
+
+    if iid == "startend:end_checker":
+        suffix = rng.choice([
+            "Thank you for reading.",
+            "That is all.",
+            "End of response.",
+            "I hope this helps.",
+        ])
+        return {"end_phrase": suffix}
+
+    # No tunable kwargs — preserve as-is.
+    return dict(original or {})
+
+
+def _render_instruction(iid: str, kw: Dict[str, Any]) -> str:
+    """Express a (possibly perturbed) instruction in natural language so
+    the model has something to follow. Phrasings deliberately mirror
+    the upstream IFEval style."""
+    if iid == "keywords:existence":
+        kws = kw.get("keywords") or []
+        return f"Include the following keywords in your response: {', '.join(kws)}."
+    if iid == "keywords:forbidden_words":
+        kws = kw.get("forbidden_words") or []
+        return f"Do not use any of the following words: {', '.join(kws)}."
+    if iid == "keywords:frequency":
+        return (
+            f"The word \"{kw.get('keyword', '')}\" must appear "
+            f"{kw.get('relation', 'at least')} {kw.get('frequency', 1)} times."
+        )
+    if iid == "length_constraints:number_words":
+        return (
+            f"Your response must contain {kw.get('relation', 'at least')} "
+            f"{kw.get('num_words', 100)} words."
+        )
+    if iid == "length_constraints:number_sentences":
+        return (
+            f"Your response must contain {kw.get('relation', 'at least')} "
+            f"{kw.get('num_sentences', 5)} sentences."
+        )
+    if iid == "length_constraints:number_paragraphs":
+        return (
+            f"Your response must contain exactly "
+            f"{kw.get('num_paragraphs', 3)} paragraphs, separated by a blank line."
+        )
+    if iid == "change_case:english_lowercase":
+        return "Write your entire response in lowercase letters only."
+    if iid == "change_case:english_capital":
+        return "Write your entire response in UPPERCASE letters only."
+    if iid == "startend:end_checker":
+        return f"End your response with the exact phrase: {kw.get('end_phrase', '')}"
+    if iid == "startend:quotation":
+        return "Wrap your entire response in double quotation marks."
+    if iid == "punctuation:no_comma":
+        return "Do not use any commas anywhere in your response."
+    if iid == "detectable_format:number_bullet_lists":
+        return (
+            f"Your response must contain exactly {kw.get('num_bullets', 3)} "
+            f"bullet points (lines starting with '- ' or '1.')."
+        )
+    return f"Constraint: {iid}"
+
+
+def _build_perturbed_prompt(
+    base: str,
+    instructions: List[str],
+    kwargs_list: List[Dict[str, Any]],
+) -> str:
+    lines = [
+        f"- {_render_instruction(iid, kw)}"
+        for iid, kw in zip(instructions, kwargs_list)
+    ]
+    return (
+        f"{base}\n\n"
+        f"Follow these constraints in your response:\n"
+        + "\n".join(lines)
+    )
+
+
 # ---- Task interface ------------------------------------------------------------
 
 class IFEvalTask:
-    """Strict-mode IFEval task. The full prompt is sent verbatim.
+    """Strict-mode IFEval task with optional base / kwargs perturbation.
 
-    The ``mode`` / ``perturb_seed`` / ``pool`` kwargs are accepted for
-    interface parity with the multiple-choice tasks but ignored — there
-    is nothing to shuffle in an IFEval prompt.
+    ``perturb_seed=0`` keeps the upstream prompt + kwargs (backward
+    compatible). ``perturb_seed>0`` deterministically swaps in a base
+    prompt from the curated pool and re-rolls kwargs from the keyword
+    pools collected at preprocess time.
+
+    ``mode`` / ``pool`` / ``extra_distractors`` are accepted for
+    interface parity with the multiple-choice tasks and ignored.
     """
 
     def __init__(self) -> None:
@@ -177,17 +358,39 @@ class IFEvalTask:
         mode: str = "shuffle",
         perturb_seed: int = 0,
         pool: Any = None,
-        extra_distractors: int = 0,  # accepted for interface parity, unused
+        extra_distractors: int = 0,
     ) -> Challenge:
+        instructions: List[str] = list(sample.get("instruction_id_list") or [])
+        original_kwargs: List[Dict[str, Any]] = list(sample.get("kwargs") or [])
+
+        if perturb_seed == 0:
+            prompt = sample["prompt"]
+            kwargs_list = original_kwargs
+            base_idx = None
+        else:
+            rng = random.Random(f"ifeval:{task_id}:{perturb_seed}")
+            base_idx = rng.randrange(len(_BASE_PROMPTS))
+            base = _BASE_PROMPTS[base_idx]
+            kwargs_list = [
+                _perturb_kwargs(rng, iid, kw)
+                for iid, kw in zip(
+                    instructions,
+                    original_kwargs + [{}] * max(0, len(instructions) - len(original_kwargs)),
+                )
+            ]
+            prompt = _build_perturbed_prompt(base, instructions, kwargs_list)
+
         return Challenge(
             env="knowledge_eval:ifeval",
-            prompt=sample["prompt"],
+            prompt=prompt,
             extra={
-                "instruction_id_list": sample.get("instruction_id_list", []),
-                "kwargs": sample.get("kwargs", []),
+                "instruction_id_list": instructions,
+                "kwargs": kwargs_list,
                 "task_id": task_id,
-                "mode": "off",  # always reported as "off" since no perturbation applies
+                "mode": "off",
                 "perturb_seed": perturb_seed,
+                "base_prompt_idx": base_idx,
+                "perturbed": perturb_seed != 0,
             },
         )
 

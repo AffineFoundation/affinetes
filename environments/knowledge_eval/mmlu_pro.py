@@ -16,10 +16,10 @@ import random
 from typing import Any, Dict, Optional
 
 from distractor_pool import DistractorPool
+from labels import make_labels
 from mc_extract import extract_choice
 from models import Challenge
 
-ALL_LETTERS = [chr(ord("A") + i) for i in range(26)]  # A..Z
 DEFAULT_EXTRA_DISTRACTORS = 4
 
 PROMPT_TEMPLATE = """Answer the following multiple choice question. The last line of your response must be exactly "Answer: X" where X is one of {letters}.
@@ -102,16 +102,11 @@ class MMLUProTask:
             shuffle_rng = _seeded_rng(task_id, perturb_seed, "shuffle")
             shuffle_rng.shuffle(choices)
 
-        if len(choices) > len(ALL_LETTERS):
-            raise ValueError(
-                f"MMLU-Pro task {task_id}: too many options ({len(choices)}); "
-                f"max is {len(ALL_LETTERS)}"
-            )
-        letters = ALL_LETTERS[: len(choices)]
-        correct_letter = letters[choices.index(correct)]
-        options_block = "\n".join(f"{letters[i]}. {opt}" for i, opt in enumerate(choices))
+        labels = make_labels(len(choices))
+        correct_letter = labels[choices.index(correct)]
+        options_block = "\n".join(f"{labels[i]}. {opt}" for i, opt in enumerate(choices))
         prompt = PROMPT_TEMPLATE.format(
-            letters="/".join(letters),
+            letters="/".join(labels),
             question=sample["question"],
             options_block=options_block,
         )
@@ -121,7 +116,7 @@ class MMLUProTask:
             prompt=prompt,
             extra={
                 "correct_letter": correct_letter,
-                "valid_letters": letters,
+                "valid_letters": labels,
                 "task_id": task_id,
                 "mode": mode,
                 "perturb_seed": perturb_seed,
@@ -132,7 +127,7 @@ class MMLUProTask:
         )
 
     async def evaluate(self, response: str, challenge: Challenge) -> float:
-        valid = set(challenge.extra.get("valid_letters", ALL_LETTERS))
+        valid = challenge.extra.get("valid_letters") or make_labels(10)
         guess = extract_choice(response or "", valid)
         if guess is None:
             return 0.0

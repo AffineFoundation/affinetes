@@ -114,14 +114,51 @@ class Actor:
         return content, usage
 
     # ------------------------------------------------------------------
+    # Logprobs side-channel
+    # ------------------------------------------------------------------
+    async def _attach_full_logprobs(
+        self,
+        result: Dict[str, Any],
+        *,
+        conversation: List[Dict[str, Any]],
+        model: str,
+        base_url: str,
+        api_key: str,
+    ) -> None:
+        """Run a forward pass over ``conversation`` with ``echo=True`` and
+        attach the resulting per-token logprobs to ``result['extra']``.
+
+        Failures are non-fatal: ``full_logprobs`` becomes ``None`` and
+        the error message goes into ``logprobs_error`` so the caller
+        can audit. Imports are lazy so the module still loads in
+        environments where ``affinetes`` isn't on the path (unit tests).
+        """
+        try:
+            from affinetes.core.logprobs_utils import collect_full_logprobs
+            full_logprobs = await collect_full_logprobs(
+                conversation=conversation,
+                model=model,
+                base_url=base_url,
+                api_key=api_key,
+            )
+            result["extra"]["full_logprobs"] = full_logprobs
+            if full_logprobs is None:
+                # Distinguish "framework asked for logprobs but the
+                # upstream returned nothing usable" from a successful
+                # echo. The most common cause is an inference endpoint
+                # (e.g. chutes) that doesn't honour echo+logprobs on
+                # /v1/completions; users should point base_url at a
+                # vLLM/SGLang instance that does.
+                result["extra"]["logprobs_error"] = (
+                    "endpoint returned no logprobs (echo+logprobs not supported)"
+                )
+        except Exception as e:  # noqa: BLE001
+            result["extra"]["full_logprobs"] = None
+            result["extra"]["logprobs_error"] = f"{type(e).__name__}: {e}"
+
+    # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
-    @staticmethod
-    def _resolve_one(task_id: int):
-        """Resolve a global ``task_id`` to (task_type, local_id, sample, global_id)."""
-        resolved_type, local_id, sample = _MANIFEST.resolve(int(task_id))
-        return resolved_type, local_id, sample, int(task_id)
-
     @staticmethod
     def _global_id_for(task_type: str, local_id: int) -> int:
         for entry in _MANIFEST.ranges:
@@ -149,6 +186,7 @@ class Actor:
         anti_contam: str = "shuffle",
         perturb_seed: Optional[int] = None,
         extra_distractors: int = 4,
+        collect_logprobs: bool = False,
     ) -> Dict[str, Any]:
         """Run a single evaluation.
 
@@ -179,51 +217,91 @@ class Actor:
                 the extras come from a pool that mixes other questions'
                 distractors AND correct answers, so memorising the
                 answer text alone doesn't help. Defaults to 4.
+            collect_logprobs: When True, after the LLM response is
+                obtained, do a forward pass with ``echo=True`` to
+                recover full per-token logprobs for the conversation.
+                The result is placed in
+                ``result['extra']['full_logprobs']`` (None on failure,
+                error string in ``result['extra']['logprobs_error']``).
         """
-        if anti_contam not in _VALID_MODES:
-            raise ValueError(
-                f"anti_contam must be one of {sorted(_VALID_MODES)}, "
-                f"got {anti_contam!r}"
-            )
-        if seed is None:
-            seed = random.randint(0, 2**32 - 1)
-        current_api_key = api_key or self.api_key
-
-        # Resolve which sample to use.
-        if task_type is None:
-            if task_id is None:
-                task_id = random.randint(0, _MANIFEST.total - 1)
-            resolved_type, local_id, sample = _MANIFEST.resolve(int(task_id))
-            global_id = int(task_id)
-        else:
-            if task_type not in _TASKS:
+        try:
+            if anti_contam not in _VALID_MODES:
                 raise ValueError(
-                    f"Unknown task_type {task_type!r}. Available: {list(_TASKS)}"
+                    f"anti_contam must be one of {sorted(_VALID_MODES)}, "
+                    f"got {anti_contam!r}"
                 )
-            if task_id is None:
-                task_id = random.randint(0, _MANIFEST.count(task_type) - 1)
-            local_id = int(task_id)
-            sample = _MANIFEST.get_local(task_type, local_id)
-            resolved_type = task_type
-            # Compute global id for reporting consistency.
-            for entry in _MANIFEST.ranges:
-                if entry["task_type"] == task_type:
-                    global_id = entry["start"] + local_id
-                    break
+            if seed is None:
+                seed = random.randint(0, 2**32 - 1)
+            current_api_key = api_key or self.api_key
 
-        task = _TASKS[resolved_type]
-        effective_perturb_seed = perturb_seed if perturb_seed is not None else local_id
-        pool = _POOLS.get(resolved_type)
+            # Resolve which sample to use. task_id is *virtual* — values
+            # past the canonical range wrap and the integer quotient
+            # becomes the auto perturb_seed, so a single int fully
+            # determines a deterministic variant of a question.
+            if task_type is None:
+                if task_id is None:
+                    task_id = random.randint(0, _MANIFEST.total - 1)
+                if int(task_id) < 0:
+                    raise ValueError(
+                        f"task_id must be non-negative, got {task_id}"
+                    )
+                base = _MANIFEST.total
+                canonical = int(task_id) % base
+                auto_seed_from_id = int(task_id) // base
+                resolved_type, local_id, sample = _MANIFEST.resolve(canonical)
+                global_id = int(task_id)
+            else:
+                if task_type not in _TASKS:
+                    raise ValueError(
+                        f"Unknown task_type {task_type!r}. Available: {list(_TASKS)}"
+                    )
+                if task_id is None:
+                    task_id = random.randint(0, _MANIFEST.count(task_type) - 1)
+                base = _MANIFEST.count(task_type)
+                if int(task_id) < 0:
+                    raise ValueError(
+                        f"local task_id must be non-negative, got {task_id}"
+                    )
+                local_id = int(task_id) % base
+                auto_seed_from_id = int(task_id) // base
+                sample = _MANIFEST.get_local(task_type, local_id)
+                resolved_type = task_type
+                global_id = self._global_id_for(task_type, local_id)
 
-        start = time.time()
-        challenge = await task.generate(
-            sample=sample,
-            task_id=local_id,
-            mode=anti_contam,
-            perturb_seed=effective_perturb_seed,
-            pool=pool,
-            extra_distractors=extra_distractors,
-        )
+            task = _TASKS[resolved_type]
+            # If perturb_seed is explicit, it wins. Otherwise the high
+            # bits of the virtual task_id supply it (so task_id alone is
+            # enough to uniquely pick a variant).
+            effective_perturb_seed = (
+                perturb_seed if perturb_seed is not None else auto_seed_from_id
+            )
+            pool = _POOLS.get(resolved_type)
+
+            start = time.time()
+            challenge = await task.generate(
+                sample=sample,
+                task_id=local_id,
+                mode=anti_contam,
+                perturb_seed=effective_perturb_seed,
+                pool=pool,
+                extra_distractors=extra_distractors,
+            )
+        except (ValueError, KeyError, TypeError, IndexError) as ve:
+            # Validation / build-time errors get a clean structured
+            # response instead of a 500 from the framework. We catch the
+            # full family of programming-style exceptions that can occur
+            # during sample resolution and challenge generation, but
+            # *not* runtime LLM errors — those have their own handler
+            # below.
+            return {
+                "task_name": "knowledge_eval",
+                "score": 0.0,
+                "success": False,
+                "time_taken": 0.0,
+                "extra": {"anti_contam": anti_contam, "task_id": task_id},
+                "error": f"{type(ve).__name__}: {ve}",
+                "error_type": "validation",
+            }
 
         usage = None
         error = None
@@ -247,24 +325,37 @@ class Actor:
         if resp:
             score = await task.evaluate(resp, challenge)
 
+        # Result extra inherits everything from challenge.extra (so
+        # task-specific fields like correct_letter, valid_letters,
+        # rendered_options, instruction_id_list, kwargs, base_prompt_idx
+        # are automatically surfaced) and is then overlaid with the
+        # framework's bookkeeping fields.
+        ch_extra = dict(challenge.extra)
+        result_extra: Dict[str, Any] = {
+            **ch_extra,
+            "task_type": resolved_type,
+            "global_task_id": global_id,
+            "local_task_id": local_id,
+            "seed": seed,
+            "anti_contam": anti_contam,
+            "perturb_seed": effective_perturb_seed,
+            "n_options": (
+                len(ch_extra["rendered_options"])
+                if ch_extra.get("rendered_options") is not None
+                else None
+            ),
+            "usage": usage,
+            "conversation": [
+                {"role": "user", "content": challenge.prompt},
+                {"role": "assistant", "content": resp},
+            ],
+        }
         result: Dict[str, Any] = {
             "task_name": f"knowledge_eval:{resolved_type}",
             "score": float(score),
             "success": score > 0,
             "time_taken": time.time() - start,
-            "extra": {
-                "task_type": resolved_type,
-                "global_task_id": global_id,
-                "local_task_id": local_id,
-                "seed": seed,
-                "anti_contam": anti_contam,
-                "perturb_seed": effective_perturb_seed,
-                "usage": usage,
-                "conversation": [
-                    {"role": "user", "content": challenge.prompt},
-                    {"role": "assistant", "content": resp},
-                ],
-            },
+            "extra": result_extra,
         }
 
         # IFEval: include per-instruction breakdown for debugging.
@@ -275,6 +366,19 @@ class Actor:
         if error:
             result["error"] = error
             result["error_type"] = "llm_failure"
+
+        # Optional post-rollout forward pass for token-level logprobs.
+        if collect_logprobs and resp:
+            await self._attach_full_logprobs(
+                result,
+                conversation=[
+                    {"role": "user", "content": challenge.prompt},
+                    {"role": "assistant", "content": resp},
+                ],
+                model=model,
+                base_url=base_url,
+                api_key=current_api_key,
+            )
 
         return result
 
@@ -290,6 +394,7 @@ class Actor:
         anti_contam: str = "shuffle",
         perturb_seed: Optional[int] = None,
         extra_distractors: int = 4,
+        collect_logprobs: bool = False,
     ) -> Dict[str, Any]:
         """Evaluate multiple tasks (possibly across benchmarks) in **one** LLM call.
 
@@ -318,45 +423,69 @@ class Actor:
         Returns a dict with a top-level mean ``score``, an ``items``
         breakdown, and the joint conversation for inspection.
         """
-        if not task_ids:
-            raise ValueError("evaluate_batch requires a non-empty task_ids list")
-        if anti_contam not in _VALID_MODES:
-            raise ValueError(
-                f"anti_contam must be one of {sorted(_VALID_MODES)}, "
-                f"got {anti_contam!r}"
-            )
-        if seed is None:
-            seed = random.randint(0, 2**32 - 1)
-        current_api_key = api_key or self.api_key
+        try:
+            if not isinstance(task_ids, (list, tuple)):
+                raise ValueError(
+                    f"task_ids must be a list or tuple of ints, got {type(task_ids).__name__}"
+                )
+            if not task_ids:
+                raise ValueError("evaluate_batch requires a non-empty task_ids list")
+            if anti_contam not in _VALID_MODES:
+                raise ValueError(
+                    f"anti_contam must be one of {sorted(_VALID_MODES)}, "
+                    f"got {anti_contam!r}"
+                )
+            if seed is None:
+                seed = random.randint(0, 2**32 - 1)
+            current_api_key = api_key or self.api_key
 
-        start = time.time()
+            start = time.time()
 
-        # 1. Resolve every id and generate its individual challenge.
-        items_meta: List[Dict[str, Any]] = []
-        per_prompts: List[str] = []
-        challenges = []
-        for global_id in task_ids:
-            resolved_type, local_id, sample, gid = self._resolve_one(global_id)
-            task = _TASKS[resolved_type]
-            item_perturb = perturb_seed if perturb_seed is not None else local_id
-            challenge = await task.generate(
-                sample=sample,
-                task_id=local_id,
-                mode=anti_contam,
-                perturb_seed=item_perturb,
-                pool=_POOLS.get(resolved_type),
-                extra_distractors=extra_distractors,
-            )
-            challenges.append(challenge)
-            per_prompts.append(challenge.prompt)
-            items_meta.append(
-                {
-                    "task_type": resolved_type,
-                    "global_task_id": gid,
-                    "local_task_id": local_id,
-                    "perturb_seed": item_perturb,
-                }
-            )
+            # 1. Resolve every id and generate its individual challenge.
+            items_meta: List[Dict[str, Any]] = []
+            per_prompts: List[str] = []
+            challenges = []
+            for raw_id in task_ids:
+                vid = int(raw_id)
+                if vid < 0:
+                    raise ValueError(f"task_id must be non-negative, got {raw_id}")
+                base = _MANIFEST.total
+                canonical = vid % base
+                auto_seed_from_id = vid // base
+                resolved_type, local_id, sample = _MANIFEST.resolve(canonical)
+                task = _TASKS[resolved_type]
+                item_perturb = (
+                    perturb_seed if perturb_seed is not None else auto_seed_from_id
+                )
+                challenge = await task.generate(
+                    sample=sample,
+                    task_id=local_id,
+                    mode=anti_contam,
+                    perturb_seed=item_perturb,
+                    pool=_POOLS.get(resolved_type),
+                    extra_distractors=extra_distractors,
+                )
+                challenges.append(challenge)
+                per_prompts.append(challenge.prompt)
+                items_meta.append(
+                    {
+                        "task_type": resolved_type,
+                        "global_task_id": vid,
+                        "local_task_id": local_id,
+                        "perturb_seed": item_perturb,
+                    }
+                )
+        except (ValueError, KeyError, TypeError, IndexError) as ve:
+            safe_ids = list(task_ids) if isinstance(task_ids, (list, tuple)) else None
+            return {
+                "task_name": "knowledge_eval:batch",
+                "score": 0.0,
+                "success": False,
+                "time_taken": 0.0,
+                "extra": {"anti_contam": anti_contam, "task_ids": safe_ids},
+                "error": f"{type(ve).__name__}: {ve}",
+                "error_type": "validation",
+            }
 
         # 2. Build joint prompt and call the model exactly once.
         joint_prompt = build_batch_prompt(per_prompts)
@@ -389,12 +518,15 @@ class Actor:
             if chunk:
                 item_score = float(await task.evaluate(chunk, challenge))
             scores.append(item_score)
+            # Inherit challenge.extra so per-item entries carry
+            # correct_letter / valid_letters / rendered_options / kwargs
+            # / instruction_id_list etc. without needing per-task patching.
             entry = {
+                **dict(challenge.extra),
                 **meta,
                 "score": item_score,
                 "success": item_score > 0,
                 "response": chunk,
-                "correct_letter": challenge.extra.get("correct_letter"),
             }
             if meta["task_type"] == "ifeval" and chunk:
                 _, breakdown = _TASKS["ifeval"].detail(chunk, challenge)
@@ -423,4 +555,19 @@ class Actor:
         if error:
             result["error"] = error
             result["error_type"] = "llm_failure"
+
+        # Optional forward pass for the joint conversation. The joint
+        # batch prompt is treated as a single user/assistant turn —
+        # logprobs are computed over the entire combined response.
+        if collect_logprobs and resp:
+            await self._attach_full_logprobs(
+                result,
+                conversation=[
+                    {"role": "user", "content": joint_prompt},
+                    {"role": "assistant", "content": resp},
+                ],
+                model=model,
+                base_url=base_url,
+                api_key=current_api_key,
+            )
         return result
