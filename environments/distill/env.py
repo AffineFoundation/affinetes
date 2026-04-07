@@ -302,6 +302,7 @@ class Actor:
         error_type = None
         error_status = None
         kl_result = None
+        student_lp = None
         try:
             student_lp, err_info = await self._student_forward_pass(
                 prompt=full_text,
@@ -327,6 +328,11 @@ class Actor:
         if kl_result and kl_result["matched_tokens"] > 0:
             score = math.exp(-abs(kl_result["kl"]))
 
+        # Student per-token logprobs (None if forward pass failed)
+        student_token_logprobs = (
+            student_lp.get("token_logprobs") if student_lp else None
+        )
+
         result = {
             "task_name": "distill",
             "score": score,
@@ -339,6 +345,9 @@ class Actor:
                 "model": model,
                 "error_type": error_type,
                 "error_status": error_status,
+                "full": full_text,
+                "teacher_logprobs": teacher_logprobs,
+                "student_logprobs": student_token_logprobs,
             },
         }
 
