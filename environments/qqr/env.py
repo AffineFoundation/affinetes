@@ -916,6 +916,11 @@ class Actor:
                         ),
                     },
                 }
+                # Propagate LLM validator error to extra.error so callers
+                # can detect invalid evaluations without digging into breakdown.
+                llm_error = final_ep.score_breakdown.get("error")
+                if llm_error:
+                    result["extra"]["error"] = llm_error
 
                 if collect_logprobs and conv:
                     try:

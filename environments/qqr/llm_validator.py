@@ -237,13 +237,15 @@ class LLMScorerGroup(ABC):
         self,
         models: List[str],
         client: AsyncOpenAI,
-        retries_per_model: int = 1,
         timeout: int = 60,
+        max_rounds: int = 10,
+        # Deprecated: kept for backward compat, no longer used
+        retries_per_model: int = 1,
     ):
         self.models = models
         self.client = client
-        self.retries_per_model = retries_per_model
         self.timeout = timeout
+        self.max_rounds = max_rounds
 
     @property
     @abstractmethod
@@ -264,11 +266,19 @@ class LLMScorerGroup(ABC):
         """Parse LLM response. Returns {dim: {"score": float, "reason": str}} or None."""
 
     async def evaluate(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute evaluation: iterate model list, retry each retries_per_model times."""
-        prompt = self.build_prompt(context)
+        """Execute evaluation: round-robin across models for max_rounds.
 
-        for model in self.models:
-            for attempt in range(self.retries_per_model + 1):
+        Strategy: cycle through all models repeatedly. Chutes models have
+        intermittent availability, so spreading attempts across rounds
+        maximises the chance that at least one model is healthy.
+        Total attempts = len(models) * max_rounds.
+        """
+        prompt = self.build_prompt(context)
+        total_attempts = 0
+
+        for round_idx in range(self.max_rounds):
+            for model in self.models:
+                total_attempts += 1
                 try:
                     response = await asyncio.wait_for(
                         self.client.chat.completions.create(
@@ -285,18 +295,20 @@ class LLMScorerGroup(ABC):
                         parsed["_model"] = model
                         parsed["_success"] = True
                         return parsed
+                    # Parse failed — treat as transient, try next model
+                    print(f"[{self.group_name}] {model} parse failed (round {round_idx+1})")
                 except asyncio.TimeoutError:
-                    print(f"[{self.group_name}] {model} timeout (attempt {attempt+1})")
-                    if attempt < self.retries_per_model:
-                        await asyncio.sleep(1)
+                    print(f"[{self.group_name}] {model} timeout (round {round_idx+1})")
                 except Exception as e:
-                    print(f"[{self.group_name}] {model} error: {e} (attempt {attempt+1})")
-                    if attempt < self.retries_per_model:
-                        await asyncio.sleep(2 ** attempt)
+                    print(f"[{self.group_name}] {model} error: {e} (round {round_idx+1})")
 
-            print(f"[{self.group_name}] {model} exhausted, trying next model")
+                # Brief backoff between attempts; longer between rounds
+                await asyncio.sleep(1 if round_idx == 0 else 2)
 
-        # All models failed
+            print(f"[{self.group_name}] round {round_idx+1}/{self.max_rounds} exhausted")
+
+        # All rounds exhausted
+        print(f"[{self.group_name}] all {total_attempts} attempts failed across {self.max_rounds} rounds")
         return {dim: {"score": 0.0, "reason": "all models failed"}
                 for dim in self.dimension_names} | {"_success": False, "_model": None}
 
@@ -516,9 +528,9 @@ class LLMEvaluator:
             return primary
 
         cross_scorer = UnifiedScorer(
-            models=[cross_models[0]],
+            models=cross_models,
             client=self.unified.client,
-            retries_per_model=1,
+            max_rounds=1,
             timeout=self.unified.timeout,
         )
         cross_result = await cross_scorer.evaluate(context)
