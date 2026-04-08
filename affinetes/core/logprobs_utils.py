@@ -2,20 +2,28 @@
 
 After a teacher model completes a rollout, call collect_full_logprobs() to:
 1. Format the conversation with a chat template
-2. Forward pass with echo=True to get all tokens + logprobs
-3. Mark assistant positions with real logprobs, rest with None
+2. Forward pass with echo=True to get top-20 logprobs for all tokens
+3. Mark assistant positions with the real top-20 distribution, rest with None
 
 Output format:
     {
         "full": "complete conversation text",
         "token_ids": [151644, 872, 198, ...],
-        "logprobs":  [None, None, ..., -0.5, -0.1, ..., None, ...],
+        "logprobs":  [
+            None, None, ...,
+            {"token_a": -0.5, "token_b": -1.2, ...},  # top-20 dict
+            ...,
+            None, ...,
+        ],
     }
-    - None = user/system token (skip in KL)
-    - float = assistant token (participate in KL)
+    - None = user/system token (skip in KL), or position where the API
+      did not return top_logprobs (e.g. the very first token).
+    - dict = assistant token, mapping token_string -> logprob for the
+      top-20 candidates at that position. The chosen token is included.
 
 Student-side KL:
-    Use the same echo=True approach, or /v1/chat/completions with logprobs=True.
+    Use the same echo=True approach with logprobs=20, or /v1/chat/completions
+    with logprobs=True + top_logprobs=20.
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -88,7 +96,7 @@ async def collect_full_logprobs(
 ) -> Optional[Dict[str, Any]]:
     """Build full_logprobs by doing a forward pass with echo=True.
 
-    Uses /v1/completions with echo=True + logprobs=1 to get logprobs
+    Uses /v1/completions with echo=True + logprobs=20 to get top-20 logprobs
     for ALL tokens (prompt + completion) in a single call.
 
     Args:
@@ -103,7 +111,8 @@ async def collect_full_logprobs(
         {
             "full": str,
             "token_ids": [int, ...],
-            "logprobs": [float|None, ...],  # None = non-assistant token
+            "logprobs": [dict|None, ...],  # None = non-assistant or no top_logprobs;
+                                           # dict = {token_str: logprob} top-20
         }
         or None on failure.
     """
@@ -124,7 +133,7 @@ async def collect_full_logprobs(
                 "model": model,
                 "prompt": full_text,
                 "max_tokens": 1,
-                "logprobs": 1,
+                "logprobs": 20,
                 "echo": True,
                 "stream": False,
             },
@@ -144,7 +153,7 @@ async def collect_full_logprobs(
         return None
 
     raw_tokens = lp["tokens"]
-    raw_logprobs = lp.get("token_logprobs", [])
+    raw_top_logprobs = lp.get("top_logprobs", [])
     raw_token_ids = lp.get("text_offset", [])  # char offsets, not token ids
 
     # Map each token to char position, check if within assistant range
@@ -153,7 +162,7 @@ async def collect_full_logprobs(
     char_pos = 0
 
     for i, tok in enumerate(raw_tokens):
-        tok_logprob = raw_logprobs[i] if i < len(raw_logprobs) else None
+        top_lp = raw_top_logprobs[i] if i < len(raw_top_logprobs) else None
 
         # Determine if this token falls within any assistant range
         is_assistant = False
@@ -166,8 +175,10 @@ async def collect_full_logprobs(
         # Store the position as a proxy for token_id
         token_ids.append(raw_token_ids[i] if i < len(raw_token_ids) else char_pos)
 
-        if is_assistant and tok_logprob is not None:
-            logprobs_masked.append(tok_logprob)
+        # Only keep top-20 dict for assistant positions; ensure it is a dict
+        # (API may return None for the very first token).
+        if is_assistant and isinstance(top_lp, dict) and top_lp:
+            logprobs_masked.append(top_lp)
         else:
             logprobs_masked.append(None)
 
