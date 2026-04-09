@@ -222,76 +222,106 @@ class Actor:
         teacher_logprobs: List,
         student_lp_dict: Dict,
     ) -> Dict[str, Any]:
-        """Compute KL divergence. Supports both rollout formats.
+        """Compute a [0, 1] closeness score per position, then average.
 
-        New format (teacher dict per position): use the teacher's top-20
-        support set to compute an explicit KL against the student's
-        top-20 distribution:
+        Top-k path (teacher dict per position): renormalize both
+        teacher and student onto the teacher's top-k support set, then
+        compute a proper (non-negative) KL on that restricted simplex:
 
-            KL_i = sum_{t in P} exp(P[t]) * (P[t] - logQ(t))
+            KL_i = sum_t p_i(t) * (log p_i(t) - log q_i(t))
 
-        where logQ(t) is Q[t] if present, else min(Q.values()) as a
-        conservative under-estimate for tokens outside student top-k.
+        and map to [0, 1] via score_i = exp(-KL_i).
 
-        Legacy format (teacher float per position): the rollout only
-        stored the chosen token's logprob. Fall back to the single-
-        sample Monte-Carlo estimator
+        Top-1 / legacy path (teacher float per position): the rollout
+        only stored the chosen token's logprob, sampled from teacher.
+        Use Schulman's k3 estimator as an unbiased, non-negative,
+        low-variance single-sample estimate of KL(P || Q):
 
-            KL_i ~= logP(t_chosen) - logQ(t_chosen)
-
-        which is unbiased but noisy; negatives from MC noise or top-k
-        truncation are clipped by the caller.
-
-        Both branches can coexist in the same rollout (e.g. during a
-        format migration) and per-position contributions are averaged
-        uniformly.
+            r      = Q(t) / P(t) = exp(s_lp - t_lp)
+            kl_i  ~= (r - 1) - log r        (>= 0)
+            score_i = exp(-kl_i)            in (0, 1]
         """
         student_top_logprobs = student_lp_dict.get("top_logprobs") or []
         student_token_logprobs = student_lp_dict.get("token_logprobs") or []
 
+        total_score = 0.0
+        # Geometric-mean score: accumulate clipped kl, map exp(-mean) at end.
+        # Clip guards legacy k3 outliers (r>>1 tokens blow up single-sample kl).
+        KL_CLIP = 10.0
+        total_kl_clipped = 0.0
         total_kl = 0.0
+        kl_positions = 0
         matched = 0
         total_teacher = sum(1 for lp in teacher_logprobs if lp is not None)
+
+        def _log_softmax(lps: List[float]) -> List[float]:
+            m = max(lps)
+            exps = [math.exp(x - m) for x in lps]
+            lse = m + math.log(sum(exps))
+            return [x - lse for x in lps]
 
         for i, t_entry in enumerate(teacher_logprobs):
             if t_entry is None:
                 continue
 
             if isinstance(t_entry, dict):
-                # New path: top-k dict on both sides.
+                # Top-k path.
                 if i >= len(student_top_logprobs):
                     break
                 s_top = student_top_logprobs[i]
                 if not s_top or not isinstance(s_top, dict):
                     continue
+                if not t_entry:
+                    continue
 
-                # Under-estimate for tokens outside student top-k.
+                # For tokens in teacher top-k but outside student top-k,
+                # under-estimate student logprob with min of student top-k.
                 s_fallback = min(s_top.values())
 
+                toks = list(t_entry.keys())
+                t_lps = [t_entry[t] for t in toks]
+                s_lps = [s_top.get(t, s_fallback) for t in toks]
+
+                # Renormalize both sides on the teacher's top-k support.
+                t_log = _log_softmax(t_lps)
+                s_log = _log_softmax(s_lps)
+
                 kl_i = 0.0
-                for tok, t_lp in t_entry.items():
-                    s_lp = s_top.get(tok, s_fallback)
-                    kl_i += math.exp(t_lp) * (t_lp - s_lp)
+                for tl, sl in zip(t_log, s_log):
+                    kl_i += math.exp(tl) * (tl - sl)
+                # Guard against tiny float noise only.
+                if kl_i < 0.0:
+                    kl_i = 0.0
 
                 total_kl += kl_i
+                total_kl_clipped += min(kl_i, KL_CLIP)
+                kl_positions += 1
                 matched += 1
             else:
-                # Legacy path: teacher stored only chosen-token logprob.
-                # Use student's token_logprobs[i] (same chosen token,
-                # same tokenizer) for a single-sample MC estimate.
+                # Top-1 / legacy path: Schulman k3 estimator of KL(P || Q).
                 if i >= len(student_token_logprobs):
                     break
                 s_lp = student_token_logprobs[i]
                 if s_lp is None:
                     continue
-                total_kl += float(t_entry) - s_lp
+                log_r = s_lp - float(t_entry)
+                r = math.exp(log_r)
+                kl_i = (r - 1.0) - log_r   # >= 0 by convexity
+                if kl_i < 0.0:
+                    kl_i = 0.0             # guard float noise only
+                total_kl += kl_i
+                total_kl_clipped += min(kl_i, KL_CLIP)
+                kl_positions += 1
                 matched += 1
 
-        avg_kl = total_kl / matched if matched > 0 else 0.0
+        avg_kl_clipped = total_kl_clipped / matched if matched > 0 else 0.0
+        avg_score = math.exp(-avg_kl_clipped) if matched > 0 else 0.0
+        avg_kl = total_kl / kl_positions if kl_positions > 0 else 0.0
 
         return {
+            "score": avg_score,
             "kl": avg_kl,
-            "total_kl": total_kl,
+            "kl_positions": kl_positions,
             "matched_tokens": matched,
             "total_teacher_tokens": total_teacher,
             "match_rate": matched / total_teacher if total_teacher > 0 else 0.0,
@@ -375,11 +405,10 @@ class Actor:
             error_type = "unexpected"
             error = f"{type(e).__name__}: {str(e)}\n{traceback.format_exc()}"
 
-        # Score: exp(-kl), clipped at kl>=0 (top-k truncation may yield
-        # tiny negatives). Perfect match = 1.0.
+        # Per-position closeness in [0, 1], averaged. Perfect match = 1.0.
         score = 0.0
         if kl_result and kl_result["matched_tokens"] > 0:
-            score = math.exp(-max(0.0, kl_result["kl"]))
+            score = kl_result["score"]
 
         result = {
             "task_name": "distill",
