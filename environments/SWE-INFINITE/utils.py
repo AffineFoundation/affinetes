@@ -24,7 +24,7 @@ git branch -m main
 rm -rf .git/logs .git/refs/original .git/refs/remotes
 grep -E '^#|refs/heads/main' .git/packed-refs > /tmp/_pr_clean 2>/dev/null && mv /tmp/_pr_clean .git/packed-refs || rm -f .git/packed-refs
 git reflog expire --expire=now --all 2>/dev/null || true
-git gc --aggressive --prune=now 2>/dev/null || true
+git gc --prune=now 2>/dev/null || true
 echo "Git history sanitized"
 """
 
