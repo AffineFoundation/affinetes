@@ -383,7 +383,7 @@ class Actor:
     def __init__(
         self,
         enable_llm_validator: bool = True,
-        llm_validator_model: str = "openai/gpt-oss-120b-TEE",
+        llm_validator_model: str = "Qwen/Qwen3-235B-A22B-Instruct-2507-TEE",
     ):
         self._episodes: Dict[str, EpisodeState] = {}
         self._generator = get_generator()

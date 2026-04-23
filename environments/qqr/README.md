@@ -557,10 +557,9 @@ Uses an independent LLM to semantically evaluate the output. **UnifiedScorer** e
 
 ```
 Model list (LLM_MODELS):
-  1. openai/gpt-oss-120b-TEE          (retry 2×, interval 1s/2s)
-  2. Qwen/Qwen3-235B-A22B-Instruct-2507-TEE  (retry 1×)
-  3. Qwen/Qwen2.5-72B-Instruct        (retry 1×)
-  4. Qwen/Qwen3-32B                    (retry 1×)
+  1. Qwen/Qwen3-235B-A22B-Instruct-2507-TEE  (retry 2×, interval 1s/2s)
+  2. Qwen/Qwen2.5-72B-Instruct        (retry 1×)
+  3. Qwen/Qwen3-32B                    (retry 1×)
          ↓ all failed
   Return: LLMEvaluationResult(success=False, error="All N models failed")
 ```
@@ -948,7 +947,7 @@ print(f"Final score: {final_resp.info['score']}")  # 0~100
 ```python
 Actor(
     enable_llm_validator=True,          # Whether to enable LLM semantic evaluation
-    llm_validator_model="openai/gpt-oss-120b-TEE",  # Preferred LLM evaluator model (falls back to LLM_MODELS list)
+    llm_validator_model="Qwen/Qwen3-235B-A22B-Instruct-2507-TEE",  # Preferred LLM evaluator model (falls back to LLM_MODELS list)
 )
 ```
 

@@ -293,7 +293,6 @@ LLM_SCORE_WEIGHTS = {
 
 # Unified LLM evaluation model list (single call for all 5 dimensions)
 LLM_MODELS = [
-    "openai/gpt-oss-120b-TEE",
     "Qwen/Qwen3-235B-A22B-Instruct-2507-TEE",
     "Qwen/Qwen2.5-72B-Instruct",
     "Qwen/Qwen3-32B",
