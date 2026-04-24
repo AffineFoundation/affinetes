@@ -203,6 +203,10 @@ def mcp_server_config_fn() -> list:
     return [amap_server, transport_server]
 
 
+class EmptyLLMResponseError(RuntimeError):
+    """LLM returned a response with no content and no tool_calls."""
+
+
 # ==================== Step Reward Calculator ====================
 class StepRewardCalculator:
     """Calculate intermediate rewards after each tool call step."""
@@ -938,6 +942,21 @@ class Actor:
 
                 return result
 
+            except EmptyLLMResponseError as e:
+                logger.warning("Evaluation aborted: %s", e)
+                return {
+                    "task_name": "qqr",
+                    "score": 0.0,
+                    "success": False,
+                    "time_taken": (datetime.now() - start_time).total_seconds(),
+                    "extra": {
+                        "error": f"Empty LLM response: {e}",
+                        "seed": seed,
+                        "task_id": task_id,
+                        "usage": total_usage,
+                    },
+                }
+
             finally:
                 if episode_id is not None:
                     self._episodes.pop(episode_id, None)
@@ -1186,15 +1205,28 @@ class Actor:
             choice = data.get("choices", [{}])[0]
             message = choice.get("message", {})
 
-            return {
-                "content": message.get("content") or "",
-                "tool_calls": message.get("tool_calls"),
+            content = message.get("content") or ""
+            tool_calls = message.get("tool_calls")
+            result = {
+                "content": content,
+                "tool_calls": tool_calls,
                 "usage": data.get("usage", {}),
             }
 
+        except EmptyLLMResponseError:
+            raise
         except Exception as e:
             logger.error("LLM API Exception: %s", e, exc_info=True)
             return None
+
+        # Empty response (no text, no tool_calls) is a model failure —
+        # raise so evaluate() returns a clean error instead of silently
+        # scoring an empty answer as 0.0. Raised outside the try/except
+        # above so it isn't swallowed by the generic exception handler.
+        if not content.strip() and not tool_calls:
+            raise EmptyLLMResponseError("LLM returned empty response (no content, no tool_calls)")
+
+        return result
 
     def _format_tool_results(self, results: List[Dict]) -> str:
         """Format tool return results."""
