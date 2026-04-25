@@ -13,6 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils import SANITIZE_GIT_SCRIPT, NORMALIZE_TIMESTAMPS_SCRIPT, NETWORK_BLOCKLIST_SCRIPT, DIFF_EXTENSIONS
 
 DOCKER_PULL_TIMEOUT = 300
+SHELL_EDIT_INSTRUCTIONS = Path(__file__).with_name("codex_system_prompt_shell_edits.txt")
 
 # Pre-built static codex binary — search common locations.
 def _find_codex_binary() -> str:
@@ -93,9 +94,16 @@ class CodexAgent:
     def _write_codex_config(self) -> None:
         """Write codex config.toml inside the container (wire_api=chat for OpenAI-compatible endpoints)."""
         base_url = self.config.api_base
+        instructions = SHELL_EDIT_INSTRUCTIONS.read_text()
+        self._exec(
+            "mkdir -p /root/.codex && cat > /root/.codex/model_instructions.md",
+            timeout=10,
+            stdin_data=instructions,
+        )
         config_toml = (
             f'model = {json.dumps(self.config.model)}\n'
             f'model_provider = "chutes"\n'
+            f'model_instructions_file = "/root/.codex/model_instructions.md"\n'
             f'\n'
             f'[model_providers.chutes]\n'
             f'name = "Chutes"\n'
@@ -195,6 +203,13 @@ class CodexAgent:
         lines.append("- Modify ONLY source code files under /app. Do NOT modify tests or config files.")
         lines.append("- Read relevant source files to understand the codebase before making changes.")
         lines.append("- Make minimal, focused changes that directly address the issue.")
+        lines.append("")
+        lines.append("## Tool Contract")
+        lines.append("")
+        lines.append("- Do not emit XML, JSON, or pseudo tool calls in assistant text.")
+        lines.append("- To edit files, call the available `shell` tool and run commands that actually modify files under /app.")
+        lines.append("- Recommended edit methods include `sed -i`, `perl -0pi`, small Python rewrite scripts, `cat > file`, or `git apply` from a unified diff file.")
+        lines.append("- The evaluator scores the real working tree diff; assistant text describing an edit is not applied.")
 
         return "\n".join(lines)
 
