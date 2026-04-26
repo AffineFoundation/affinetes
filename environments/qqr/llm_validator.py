@@ -225,6 +225,7 @@ _DIM_BLOCKS = {
 加分项：所有事实均可在工具数据中找到出处 → 维持满分''',
 }
 
+NUM_FIXED_JUDGES = 3
 
 # ============================================================================
 # Abstract Base Class
@@ -276,40 +277,64 @@ class LLMScorerGroup(ABC):
         prompt = self.build_prompt(context)
         total_attempts = 0
 
-        for round_idx in range(self.max_rounds):
-            for model in self.models:
-                total_attempts += 1
-                try:
-                    response = await asyncio.wait_for(
-                        self.client.chat.completions.create(
-                            model=model,
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0,
-                            max_tokens=2000,
-                        ),
-                        timeout=self.timeout,
-                    )
-                    content = response.choices[0].message.content
-                    parsed = self.parse_response(content)
-                    if parsed is not None:
-                        parsed["_model"] = model
-                        parsed["_success"] = True
-                        return parsed
-                    # Parse failed — treat as transient, try next model
-                    print(f"[{self.group_name}] {model} parse failed (round {round_idx+1})")
-                except asyncio.TimeoutError:
-                    print(f"[{self.group_name}] {model} timeout (round {round_idx+1})")
-                except Exception as e:
-                    print(f"[{self.group_name}] {model} error: {e} (round {round_idx+1})")
+        parsed_results = []
 
-                # Brief backoff between attempts; longer between rounds
-                await asyncio.sleep(1 if round_idx == 0 else 2)
+        for _ in range(NUM_FIXED_JUDGES):
+            for round_idx in range(self.max_rounds):
+                judged = False
 
-            print(f"[{self.group_name}] round {round_idx+1}/{self.max_rounds} exhausted")
+                for model in self.models:
+                    total_attempts += 1
+                    try:
+                        response = await asyncio.wait_for(
+                            self.client.chat.completions.create(
+                                model=model,
+                                messages=[{"role": "user", "content": prompt}],
+                                temperature=0,
+                                max_tokens=2000,
+                            ),
+                            timeout=self.timeout,
+                        )
+                        content = response.choices[0].message.content
+                        parsed = self.parse_response(content)
+                        if parsed is not None:
+                            parsed["_model"] = model
+                            parsed["_success"] = True
+                            parsed_results.append(parsed)
+                            judged = True
+                            break
+                        # Parse failed — treat as transient, try next model
+                        print(f"[{self.group_name}] {model} parse failed (round {round_idx+1})")
+                    except asyncio.TimeoutError:
+                        print(f"[{self.group_name}] {model} timeout (round {round_idx+1})")
+                    except Exception as e:
+                        print(f"[{self.group_name}] {model} error: {e} (round {round_idx+1})")
 
-        # All rounds exhausted
-        print(f"[{self.group_name}] all {total_attempts} attempts failed across {self.max_rounds} rounds")
-        return {dim: {"score": 0.0, "reason": "all models failed"}
+                    # Brief backoff between attempts; longer between rounds
+                    await asyncio.sleep(1 if round_idx == 0 else 2)
+                
+                if judged:
+                    break  # Move to next fixed judge after a successful evaluation
+            
+                print(f"[{self.group_name}] round {round_idx+1}/{self.max_rounds} exhausted")
+
+            print(f"[{self.group_name}] - {len(parsed_results)}/{NUM_FIXED_JUDGES} judges succeeded")
+        
+        final_result = {}
+        final_result["_success"] = len(parsed_results) > 0
+        final_result["_model"] = parsed_results[0].get("_model") if parsed_results else None
+
+        for dim in self.dimension_names:
+            avg_score = 0.0
+            reason = parsed_results[0].get(dim, {}).get("reason", "") if parsed_results else ""
+
+            for parsed_result in parsed_results:
+                if dim in parsed_result:
+                    avg_score += parsed_result[dim]["score"]
+            
+            final_result[dim] = {"score": avg_score / len(parsed_results), "reason": reason}
+
+        return final_result if len(parsed_results) > 0 else {dim: {"score": 0.0, "reason": "all models failed"}
                 for dim in self.dimension_names} | {"_success": False, "_model": None}
 
 
@@ -1183,7 +1208,7 @@ def get_llm_evaluator(
 
 # Backward compat: keep get_llm_validator working for any external callers
 def get_llm_validator(
-    model: str = "Qwen/Qwen3-32B",
+    model: str = "Qwen/Qwen3-32B-TEE",
     base_url: str = "https://llm.chutes.ai/v1",
     api_key: Optional[str] = None,
 ) -> Optional['LLMEvaluator']:

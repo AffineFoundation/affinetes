@@ -295,7 +295,7 @@ LLM_SCORE_WEIGHTS = {
 LLM_MODELS = [
     "Qwen/Qwen3-235B-A22B-Instruct-2507-TEE",
     "Qwen/Qwen2.5-72B-Instruct",
-    "Qwen/Qwen3-32B",
+    "Qwen/Qwen3-32B-TEE",
 ]
 # Backward compat aliases
 LLM_QUALITY_MODELS = LLM_MODELS
