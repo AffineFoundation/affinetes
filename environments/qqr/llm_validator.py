@@ -265,52 +265,68 @@ class LLMScorerGroup(ABC):
     def parse_response(self, content: str) -> Optional[Dict[str, Any]]:
         """Parse LLM response. Returns {dim: {"score": float, "reason": str}} or None."""
 
-    async def evaluate(self, context: Dict[str, Any]) -> Dict[str, Any]:
-        """Execute evaluation: round-robin across models for max_rounds.
+    async def _call_one(self, model: str, prompt: str) -> Optional[Dict[str, Any]]:
+        """Call a single model. Returns parsed dict or None on any failure."""
+        try:
+            response = await asyncio.wait_for(
+                self.client.chat.completions.create(
+                    model=model,
+                    messages=[{"role": "user", "content": prompt}],
+                    temperature=0,
+                    max_tokens=2000,
+                ),
+                timeout=self.timeout,
+            )
+            content = response.choices[0].message.content
+            return self.parse_response(content)
+        except asyncio.TimeoutError:
+            print(f"[{self.group_name}] {model} timeout")
+        except Exception as e:
+            print(f"[{self.group_name}] {model} error: {e}")
+        return None
 
-        Strategy: cycle through all models repeatedly. Chutes models have
-        intermittent availability, so spreading attempts across rounds
-        maximises the chance that at least one model is healthy.
-        Total attempts = len(models) * max_rounds.
+    async def evaluate(self, context: Dict[str, Any]) -> Dict[str, Any]:
+        """Run all models in parallel, take per-dimension median.
+
+        Median is robust to outlier judges (one wild model can't tilt the
+        result) and reproducible (no race condition on which model responds
+        first). Requires at least 2 successful judges.
         """
         prompt = self.build_prompt(context)
-        total_attempts = 0
 
-        for round_idx in range(self.max_rounds):
-            for model in self.models:
-                total_attempts += 1
-                try:
-                    response = await asyncio.wait_for(
-                        self.client.chat.completions.create(
-                            model=model,
-                            messages=[{"role": "user", "content": prompt}],
-                            temperature=0,
-                            max_tokens=2000,
-                        ),
-                        timeout=self.timeout,
-                    )
-                    content = response.choices[0].message.content
-                    parsed = self.parse_response(content)
-                    if parsed is not None:
-                        parsed["_model"] = model
-                        parsed["_success"] = True
-                        return parsed
-                    # Parse failed — treat as transient, try next model
-                    print(f"[{self.group_name}] {model} parse failed (round {round_idx+1})")
-                except asyncio.TimeoutError:
-                    print(f"[{self.group_name}] {model} timeout (round {round_idx+1})")
-                except Exception as e:
-                    print(f"[{self.group_name}] {model} error: {e} (round {round_idx+1})")
+        results = await asyncio.gather(
+            *[self._call_one(m, prompt) for m in self.models],
+            return_exceptions=False,
+        )
+        successes = [(m, p) for m, p in zip(self.models, results) if p is not None]
 
-                # Brief backoff between attempts; longer between rounds
-                await asyncio.sleep(1 if round_idx == 0 else 2)
+        if len(successes) < 2:
+            print(f"[{self.group_name}] only {len(successes)}/{len(self.models)} models succeeded — need >=2 for median")
+            return {dim: {"score": 0.0, "reason": f"only {len(successes)}/{len(self.models)} models succeeded"}
+                    for dim in self.dimension_names} | {"_success": False, "_model": None}
 
-            print(f"[{self.group_name}] round {round_idx+1}/{self.max_rounds} exhausted")
+        aggregated: Dict[str, Any] = {}
+        for dim in self.dimension_names:
+            entries = [
+                (parsed[dim]["score"], parsed[dim].get("reason", ""), model)
+                for model, parsed in successes
+            ]
+            entries.sort(key=lambda e: e[0])
+            # For even N, take lower of two middles (slightly conservative)
+            mid_idx = (len(entries) - 1) // 2
+            med_score, med_reason, med_model = entries[mid_idx]
+            aggregated[dim] = {
+                "score": med_score,
+                "reason": med_reason,
+                "all_scores": [s for s, _, _ in entries],
+                "median_model": med_model,
+            }
 
-        # All rounds exhausted
-        print(f"[{self.group_name}] all {total_attempts} attempts failed across {self.max_rounds} rounds")
-        return {dim: {"score": 0.0, "reason": "all models failed"}
-                for dim in self.dimension_names} | {"_success": False, "_model": None}
+        used = [m for m, _ in successes]
+        aggregated["_success"] = True
+        aggregated["_model"] = f"median({','.join(used)})"
+        aggregated["_models_used"] = used
+        return aggregated
 
 
 # ============================================================================
@@ -478,9 +494,6 @@ class LLMEvaluator:
             # This prevents attackers from writing "convincing" reasoning
             # based on made-up facts to score high on quality dimensions.
             result = self._apply_grounding_coupling(result)
-
-            # Cross-validation for high scores (all 5 dimensions)
-            result = await self._cross_validate(context, result)
         else:
             result.error = "Unified scorer: all models failed"
 
@@ -510,41 +523,6 @@ class LLMEvaluator:
                 )
                 result.analysis_depth = cap
         return result
-
-    async def _cross_validate(
-        self, context: Dict[str, Any], primary: LLMEvaluationResult
-    ) -> LLMEvaluationResult:
-        """Cross-validate high scores with a different model (all 5 dimensions)."""
-        total = (
-            primary.practicality + primary.analysis_depth +
-            primary.logic + primary.user_experience + primary.factual_grounding
-        )
-        if total <= 36:  # <=72% of 50 max → skip
-            return primary
-
-        # Use a different model for cross-validation
-        cross_models = [m for m in self.unified.models if m != primary.quality_model]
-        if not cross_models:
-            return primary
-
-        cross_scorer = UnifiedScorer(
-            models=cross_models,
-            client=self.unified.client,
-            max_rounds=1,
-            timeout=self.unified.timeout,
-        )
-        cross_result = await cross_scorer.evaluate(context)
-        if not cross_result.get("_success", False):
-            return primary
-
-        # Take minimum of each dimension (conservative) — all 5 dimensions
-        for dim in self.unified.dimension_names:
-            primary_val = getattr(primary, dim)
-            cross_val = cross_result.get(dim, {}).get("score", primary_val)
-            setattr(primary, dim, min(primary_val, cross_val))
-
-        return primary
-
 
 # ============================================================================
 # Backward compat aliases
