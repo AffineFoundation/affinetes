@@ -274,7 +274,7 @@ LLM_RUBRIC_PENALTY_RANGES = {
     "backtracking": (1, 3),
     "no_order_reason": (1, 3),
     "bad_geography": (3, 5),
-    # Grounding rubric penalties (used by GroundingScorer prompt)
+    # Grounding rubric penalties (used by UnifiedScorer prompt)
     "ungrounded_transport": (3, 5),
     "ungrounded_time_distance": (2, 4),
     "fabricated_price": (2, 4),
@@ -296,9 +296,6 @@ LLM_MODELS = [
     "Qwen/Qwen3-235B-A22B-Instruct-2507-TEE",
     "Qwen/Qwen2.5-72B-Instruct",
 ]
-# Backward compat aliases
-LLM_QUALITY_MODELS = LLM_MODELS
-LLM_GROUNDING_MODELS = LLM_MODELS
 
 # Total scores
 TOTAL_CODE_SCORE = sum(CODE_SCORE_WEIGHTS.values())

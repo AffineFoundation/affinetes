@@ -1327,24 +1327,22 @@ class TravelScorer:
             result.llm_validation_success = llm_result.success
             result.llm_validation_error = llm_result.error
 
-            if llm_result.quality_success:
+            if llm_result.success:
                 result.llm_practicality = llm_result.practicality * LLM_SCORE_WEIGHTS["practicality"] / 10.0
                 result.llm_analysis_depth = llm_result.analysis_depth * LLM_SCORE_WEIGHTS["analysis_depth"] / 10.0
                 result.llm_logic = llm_result.logic * LLM_SCORE_WEIGHTS["logic"] / 10.0
                 result.llm_user_experience = llm_result.user_experience * LLM_SCORE_WEIGHTS["user_experience"] / 10.0
-                result.llm_reasons = llm_result.quality_reasons
-
-            if llm_result.grounding_success:
                 result.llm_factual_grounding = llm_result.factual_grounding * LLM_SCORE_WEIGHTS["factual_grounding"] / 10.0
+                result.llm_reasons = llm_result.reasons
 
-            # Defense-in-depth: when LLM grounding detects severe fabrication (<4/10)
-            # and regex missed it, supplement code score penalty
-            if llm_result.grounding_success and llm_result.factual_grounding < 4.0:
-                llm_grounding_mult = 0.3 + 0.7 * (llm_result.factual_grounding / 4.0)
-                combined = min(local_fab, llm_grounding_mult)
-                if combined < local_fab:
-                    result.completeness *= (combined / max(local_fab, 0.01))
-                    result.info_consistency *= (combined / max(local_fab, 0.01))
+                # Defense-in-depth: when LLM grounding detects severe fabrication (<4/10)
+                # and regex missed it, supplement code score penalty
+                if llm_result.factual_grounding < 4.0:
+                    llm_grounding_mult = 0.3 + 0.7 * (llm_result.factual_grounding / 4.0)
+                    combined = min(local_fab, llm_grounding_mult)
+                    if combined < local_fab:
+                        result.completeness *= (combined / max(local_fab, 0.01))
+                        result.info_consistency *= (combined / max(local_fab, 0.01))
 
             # LLM failure: llm_total=0, code still valid
         else:

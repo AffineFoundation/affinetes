@@ -5,7 +5,7 @@ Architecture:
   LLMScorerGroup (ABC) — base class for scorer groups with model fallback + retry
     └─ UnifiedScorer — 5 dimensions in single call
 
-  LLMEvaluator — orchestrates execution + cross-validation
+  LLMEvaluator — orchestrates execution and grounding-quality coupling
 """
 
 import asyncio
@@ -28,31 +28,22 @@ from problem_generator import TravelProblem
 
 @dataclass
 class LLMEvaluationResult:
-    """Combined result from all scorer groups."""
+    """Result from the unified scorer (all 5 dimensions, single call)."""
 
-    # Quality dimensions (0-10 scale)
+    # All 5 dimensions (0-10 scale)
     practicality: float = 0.0
     analysis_depth: float = 0.0
     logic: float = 0.0
     user_experience: float = 0.0
-
-    # Grounding dimension (0-10 scale)
     factual_grounding: float = 0.0
 
-    # Per-group success flags
-    quality_success: bool = False
-    grounding_success: bool = False
-
-    # Metadata
-    quality_model: Optional[str] = None
-    grounding_model: Optional[str] = None
-    quality_reasons: Dict[str, str] = field(default_factory=dict)
-    grounding_reason: str = ""
+    # Status
+    success: bool = False
     error: str = ""
 
-    @property
-    def success(self) -> bool:
-        return self.quality_success or self.grounding_success
+    # Metadata
+    model: Optional[str] = None
+    reasons: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict:
         return {
@@ -61,12 +52,9 @@ class LLMEvaluationResult:
             "logic": self.logic,
             "user_experience": self.user_experience,
             "factual_grounding": self.factual_grounding,
-            "quality_success": self.quality_success,
-            "grounding_success": self.grounding_success,
-            "quality_model": self.quality_model,
-            "grounding_model": self.grounding_model,
-            "quality_reasons": self.quality_reasons,
-            "grounding_reason": self.grounding_reason,
+            "success": self.success,
+            "model": self.model,
+            "reasons": self.reasons,
             "error": self.error,
         }
 
@@ -238,14 +226,10 @@ class LLMScorerGroup(ABC):
         models: List[str],
         client: AsyncOpenAI,
         timeout: int = 60,
-        max_rounds: int = 10,
-        # Deprecated: kept for backward compat, no longer used
-        retries_per_model: int = 1,
     ):
         self.models = models
         self.client = client
         self.timeout = timeout
-        self.max_rounds = max_rounds
 
     @property
     @abstractmethod
@@ -437,33 +421,23 @@ class UnifiedScorer(LLMScorerGroup):
 
 
 # ============================================================================
-# LLMEvaluator — orchestrates execution + cross-validation
+# LLMEvaluator — orchestrates execution and grounding-quality coupling
 # ============================================================================
 
 class LLMEvaluator:
-    """Orchestrates unified scorer execution with cross-validation."""
+    """Orchestrates unified scorer and grounding-quality coupling."""
 
-    def __init__(
-        self,
-        client: AsyncOpenAI,
-        models: List[str],
-        # Backward compat kwargs (ignored, models param used for all)
-        quality_models: Optional[List[str]] = None,
-        grounding_models: Optional[List[str]] = None,
-    ):
-        # If called with old-style kwargs, use quality_models as fallback
-        effective_models = models or quality_models or []
-        self.unified = UnifiedScorer(models=effective_models, client=client)
+    def __init__(self, client: AsyncOpenAI, models: List[str]):
+        self.unified = UnifiedScorer(models=models, client=client)
 
     async def evaluate(self, context: Dict[str, Any]) -> LLMEvaluationResult:
-        """Execute unified scorer, merge results."""
+        """Execute unified scorer (all 5 dimensions in one parallel call)."""
         result = LLMEvaluationResult()
 
         if not context.get("tool_trace"):
             result.error = "No tools called, cannot evaluate"
             return result
 
-        # Single unified call for all 5 dimensions
         unified_result = await self.unified.evaluate(context)
 
         if isinstance(unified_result, Exception):
@@ -471,23 +445,12 @@ class LLMEvaluator:
             return result
 
         if unified_result.get("_success", False):
-            model_used = unified_result.get("_model")
-            # Set both success flags atomically
-            result.quality_success = True
-            result.grounding_success = True
-            result.quality_model = model_used
-            result.grounding_model = model_used
-
-            # Quality dimensions
-            for dim in ["practicality", "analysis_depth", "logic", "user_experience"]:
+            result.success = True
+            result.model = unified_result.get("_model")
+            for dim in ["practicality", "analysis_depth", "logic", "user_experience", "factual_grounding"]:
                 dim_data = unified_result.get(dim, {})
                 setattr(result, dim, dim_data.get("score", 0.0))
-                result.quality_reasons[dim] = dim_data.get("reason", "")
-
-            # Grounding dimension
-            fg_data = unified_result.get("factual_grounding", {})
-            result.factual_grounding = fg_data.get("score", 0.0)
-            result.grounding_reason = fg_data.get("reason", "")
+                result.reasons[dim] = dim_data.get("reason", "")
 
             # Grounding-quality coupling: if fg is very low, the reasoning
             # is built on fabricated data → cap logic and analysis_depth.
@@ -511,32 +474,18 @@ class LLMEvaluator:
             # Hard cap: logic and analysis_depth cannot exceed fg + 2
             cap = fg + 2.0
             if result.logic > cap:
-                result.quality_reasons["logic"] = (
-                    result.quality_reasons.get("logic", "") +
+                result.reasons["logic"] = (
+                    result.reasons.get("logic", "") +
                     f" [grounding-coupled: capped from {result.logic:.1f} to {cap:.1f}]"
                 )
                 result.logic = cap
             if result.analysis_depth > cap:
-                result.quality_reasons["analysis_depth"] = (
-                    result.quality_reasons.get("analysis_depth", "") +
+                result.reasons["analysis_depth"] = (
+                    result.reasons.get("analysis_depth", "") +
                     f" [grounding-coupled: capped from {result.analysis_depth:.1f} to {cap:.1f}]"
                 )
                 result.analysis_depth = cap
         return result
-
-# ============================================================================
-# Backward compat aliases
-# ============================================================================
-
-class QualityScorer(UnifiedScorer):
-    """Backward compat alias for UnifiedScorer."""
-    pass
-
-
-class GroundingScorer(UnifiedScorer):
-    """Backward compat alias for UnifiedScorer."""
-    pass
-
 
 # ============================================================================
 # Shared Utility Functions
@@ -1161,9 +1110,9 @@ def get_llm_evaluator(
 
 # Backward compat: keep get_llm_validator working for any external callers
 def get_llm_validator(
-    model: str = "Qwen/Qwen3-32B",
+    model: Optional[str] = None,  # ignored; LLMEvaluator uses LLM_MODELS
     base_url: str = "https://llm.chutes.ai/v1",
     api_key: Optional[str] = None,
 ) -> Optional['LLMEvaluator']:
-    """Backward-compatible alias for get_llm_evaluator."""
+    """Backward-compatible alias for get_llm_evaluator (model arg unused)."""
     return get_llm_evaluator(base_url=base_url, api_key=api_key)
