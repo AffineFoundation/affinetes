@@ -226,10 +226,15 @@ class LLMScorerGroup(ABC):
         models: List[str],
         client: AsyncOpenAI,
         timeout: int = 60,
+        fallback_client: Optional[AsyncOpenAI] = None,
+        fallback_model_map: Optional[Dict[str, str]] = None,
     ):
         self.models = models
         self.client = client
         self.timeout = timeout
+        # Optional fallback (e.g. official Qwen API when Chutes is down)
+        self.fallback_client = fallback_client
+        self.fallback_model_map = fallback_model_map or {}
 
     @property
     @abstractmethod
@@ -249,11 +254,13 @@ class LLMScorerGroup(ABC):
     def parse_response(self, content: str) -> Optional[Dict[str, Any]]:
         """Parse LLM response. Returns {dim: {"score": float, "reason": str}} or None."""
 
-    async def _call_one(self, model: str, prompt: str) -> Optional[Dict[str, Any]]:
-        """Call a single model. Returns parsed dict or None on any failure."""
+    async def _do_call(
+        self, client: AsyncOpenAI, model: str, prompt: str, label: str
+    ) -> Optional[Dict[str, Any]]:
+        """Single API attempt — returns parsed dict or None."""
         try:
             response = await asyncio.wait_for(
-                self.client.chat.completions.create(
+                client.chat.completions.create(
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0,
@@ -264,10 +271,22 @@ class LLMScorerGroup(ABC):
             content = response.choices[0].message.content
             return self.parse_response(content)
         except asyncio.TimeoutError:
-            print(f"[{self.group_name}] {model} timeout")
+            print(f"[{self.group_name}] {label} timeout")
         except Exception as e:
-            print(f"[{self.group_name}] {model} error: {e}")
+            print(f"[{self.group_name}] {label} error: {e}")
         return None
+
+    async def _call_one(self, model: str, prompt: str) -> Optional[Dict[str, Any]]:
+        """Try primary judge, fall back to alt endpoint on failure."""
+        result = await self._do_call(self.client, model, prompt, model)
+        if result is not None:
+            return result
+        # Fallback (e.g. official Qwen API) — only if configured for this model
+        fb_model = self.fallback_model_map.get(model)
+        if self.fallback_client and fb_model:
+            print(f"[{self.group_name}] {model} primary failed → fallback to {fb_model}")
+            result = await self._do_call(self.fallback_client, fb_model, prompt, f"{fb_model}(fallback)")
+        return result
 
     async def evaluate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Run all models in parallel, take per-dimension median.
@@ -427,8 +446,19 @@ class UnifiedScorer(LLMScorerGroup):
 class LLMEvaluator:
     """Orchestrates unified scorer and grounding-quality coupling."""
 
-    def __init__(self, client: AsyncOpenAI, models: List[str]):
-        self.unified = UnifiedScorer(models=models, client=client)
+    def __init__(
+        self,
+        client: AsyncOpenAI,
+        models: List[str],
+        fallback_client: Optional[AsyncOpenAI] = None,
+        fallback_model_map: Optional[Dict[str, str]] = None,
+    ):
+        self.unified = UnifiedScorer(
+            models=models,
+            client=client,
+            fallback_client=fallback_client,
+            fallback_model_map=fallback_model_map,
+        )
 
     async def evaluate(self, context: Dict[str, Any]) -> LLMEvaluationResult:
         """Execute unified scorer (all 5 dimensions in one parallel call)."""
@@ -1095,17 +1125,32 @@ def get_llm_evaluator(
     base_url: str = "https://llm.chutes.ai/v1",
     api_key: Optional[str] = None,
 ) -> Optional[LLMEvaluator]:
-    """Get or create the default LLMEvaluator singleton."""
+    """Get or create the default LLMEvaluator singleton.
+
+    Primary: Chutes (api_key or CHUTES_API_KEY env var).
+    Fallback: official Qwen DashScope (DASHSCOPE_API_KEY env var, optional).
+    """
     global _default_evaluator
     if _default_evaluator is None:
-        from config import LLM_MODELS
+        from config import (
+            LLM_MODELS, QWEN_FALLBACK_API_KEY,
+            QWEN_FALLBACK_BASE_URL, QWEN_FALLBACK_MODEL_MAP,
+        )
         key = api_key or os.getenv("CHUTES_API_KEY")
         if not key:
             return None
         client = AsyncOpenAI(base_url=base_url, api_key=key)
+        fallback_client = None
+        if QWEN_FALLBACK_API_KEY:
+            fallback_client = AsyncOpenAI(
+                base_url=QWEN_FALLBACK_BASE_URL,
+                api_key=QWEN_FALLBACK_API_KEY,
+            )
         _default_evaluator = LLMEvaluator(
             client=client,
             models=LLM_MODELS,
+            fallback_client=fallback_client,
+            fallback_model_map=QWEN_FALLBACK_MODEL_MAP if fallback_client else None,
         )
     return _default_evaluator
 

@@ -297,6 +297,15 @@ LLM_MODELS = [
     "Qwen/Qwen2.5-72B-Instruct",
 ]
 
+# Official Qwen DashScope API as fallback when Chutes judges fail.
+# Maps Chutes model name → DashScope model name. Empty key disables fallback.
+QWEN_FALLBACK_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
+QWEN_FALLBACK_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+QWEN_FALLBACK_MODEL_MAP = {
+    "Qwen/Qwen3-235B-A22B-Instruct-2507-TEE": "qwen3-235b-a22b-instruct-2507",
+    "Qwen/Qwen2.5-72B-Instruct": "qwen2.5-72b-instruct",
+}
+
 # Total scores
 TOTAL_CODE_SCORE = sum(CODE_SCORE_WEIGHTS.values())
 TOTAL_LLM_SCORE = sum(LLM_SCORE_WEIGHTS.values())
