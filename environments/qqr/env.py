@@ -870,12 +870,16 @@ class Actor:
                             timeout=timeout,
                             tools=None,  # No tools — force text answer
                         )
-                        if response and response.get("content"):
+                        if response and (response.get("content") or "").strip():
                             final_content = response.get("content")
                             _accum_usage(response.get("usage", {}))
                             logger.debug("Got final answer via explicit request: len=%d", len(final_content))
                         else:
-                            logger.debug("Final answer request also failed")
+                            # Final-answer call returned None / empty / whitespace —
+                            # don't fall through to score an empty answer.
+                            raise EmptyLLMResponseError(
+                                "Phase 2 final-answer call returned empty reply"
+                            )
 
                     # Phase 3: Score with the final answer
                     step_resp = await self.step(
@@ -943,14 +947,14 @@ class Actor:
                 return result
 
             except EmptyLLMResponseError as e:
-                logger.warning("Evaluation aborted: %s", e)
+                logger.warning("Evaluation aborted: model returned empty reply: %s", e)
                 return {
                     "task_name": "qqr",
                     "score": 0.0,
                     "success": False,
                     "time_taken": (datetime.now() - start_time).total_seconds(),
                     "extra": {
-                        "error": f"Empty LLM response: {e}",
+                        "error": f"Model returned empty reply: {e}",
                         "seed": seed,
                         "task_id": task_id,
                         "usage": total_usage,
@@ -1224,7 +1228,7 @@ class Actor:
         # scoring an empty answer as 0.0. Raised outside the try/except
         # above so it isn't swallowed by the generic exception handler.
         if not content.strip() and not tool_calls:
-            raise EmptyLLMResponseError("LLM returned empty response (no content, no tool_calls)")
+            raise EmptyLLMResponseError("Phase 1 LLM call returned empty reply (no content, no tool_calls)")
 
         return result
 
