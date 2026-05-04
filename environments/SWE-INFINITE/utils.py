@@ -111,6 +111,32 @@ def is_blacklisted_command(cmd: str) -> bool:
     return False
 
 
+# Docker daemon error signatures that mean the task container is gone or
+# unreachable. These indicate infrastructure failure, not a recoverable
+# command error — the agent cannot make progress, so the whole evaluation
+# should fail fast and be retried by the caller.
+_CONTAINER_LOST_SIGNATURES = (
+    "No such container",
+    "is not running",
+    "is restarting",
+    "is paused",
+    "removal of container",
+    "Cannot connect to the Docker daemon",
+    "OCI runtime exec failed",
+)
+
+
+class ContainerLostError(RuntimeError):
+    """Raised when the task container has been destroyed or is unreachable."""
+
+
+def is_container_lost(output: str) -> bool:
+    """Return True if docker exec output indicates the container is gone."""
+    if not output:
+        return False
+    return any(sig in output for sig in _CONTAINER_LOST_SIGNATURES)
+
+
 # ===== Multi-language test output parsers =====
 # Adapted from affine-swe-infinite/src/validators/test_validator.py
 

@@ -14,7 +14,14 @@ import yaml
 
 # Allow importing from parent directory (SWE-INFINITE/)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-from utils import SANITIZE_GIT_SCRIPT, NORMALIZE_TIMESTAMPS_SCRIPT, NETWORK_BLOCKLIST_SCRIPT, is_blacklisted_command
+from utils import (
+    SANITIZE_GIT_SCRIPT,
+    NORMALIZE_TIMESTAMPS_SCRIPT,
+    NETWORK_BLOCKLIST_SCRIPT,
+    ContainerLostError,
+    is_blacklisted_command,
+    is_container_lost,
+)
 
 
 def _strip_thinking_tags(content: str) -> str:
@@ -42,7 +49,14 @@ class _BlacklistDockerEnv:
                 "output": "Command not permitted in this environment.",
                 "returncode": 1,
             }
-        return self._env.execute(command, **kwargs)
+        result = self._env.execute(command, **kwargs)
+        # Detect container loss: docker daemon errors mean the agent cannot
+        # make any further progress, so abort the run and let the caller retry.
+        if result.get("returncode", 0) != 0 and is_container_lost(result.get("output", "")):
+            raise ContainerLostError(
+                f"docker container lost: {result.get('output', '').strip()[:300]}"
+            )
+        return result
 
     def __getattr__(self, name):
         return getattr(self._env, name)

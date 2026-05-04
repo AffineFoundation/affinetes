@@ -38,6 +38,7 @@ from utils import (
     NORMALIZE_TIMESTAMPS_SCRIPT,
     NETWORK_BLOCKLIST_SCRIPT,
     DIFF_EXTENSIONS,
+    is_container_lost,
     parse_test_output,
 )
 from canary import generate_canary, verify_canary
@@ -770,6 +771,22 @@ bash /workspace/entryscript.sh
                 observation=error_msg,
                 episode_id=episode_id,
                 info=self._info(ep, error={"type": "execution_error", "retryable": True}),
+            )
+
+        # Container lost: docker daemon says the container is gone. Continuing
+        # would burn the remaining step budget on a dead sandbox, so end the
+        # episode and signal a retryable failure to the caller.
+        if output.get("returncode", 0) != 0 and is_container_lost(output.get("output", "")):
+            ep.done = True
+            ep.truncated = True
+            error_msg = f"Container lost: {output.get('output', '').strip()[:300]}"
+            ep.messages.append({"role": "user", "content": error_msg, "timestamp": time.time()})
+            return OpenEnvResponse(
+                observation=error_msg,
+                episode_id=episode_id,
+                done=True,
+                truncated=True,
+                info=self._info(ep, error={"type": "container_lost", "retryable": True}),
             )
 
         # Handle timeout
