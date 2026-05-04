@@ -145,11 +145,13 @@ class InfiniteActor:
             print(f"[SWE-INFINITE] Warning: Docker Hub login failed: {result.stderr.strip()}")
 
     def _cleanup_stale_containers(self):
-        """Remove leftover swe-infinite-* containers from previous runs.
+        """Remove exited swe-infinite-* containers left over from prior runs.
 
-        Only called once at startup, where any matching container is guaranteed
-        to be a leftover (this process has not spawned anything yet). Never call
-        from the periodic loop — it would kill in-flight long-running tasks.
+        Filters by status=exited so we never touch a container that another
+        worker process is actively using. Removing a running task container
+        SIGKILLs the agent inside (exit 137) and surfaces as "No such
+        container" on subsequent exec calls — that's how 200+ samples got
+        miscategorized as model failures instead of infrastructure errors.
         """
         prefixes = [
             "swe-infinite-codex-",
@@ -161,7 +163,9 @@ class InfiniteActor:
         for prefix in prefixes:
             try:
                 result = subprocess.run(
-                    ["docker", "ps", "-a", "--filter", f"name={prefix}",
+                    ["docker", "ps", "-a",
+                     "--filter", f"name={prefix}",
+                     "--filter", "status=exited",
                      "--format", "{{.ID}}"],
                     capture_output=True, text=True, timeout=30,
                 )
