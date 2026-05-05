@@ -1,6 +1,7 @@
 """MiniSWE Agent — uses minisweagent library for multi-turn coding inside Docker."""
 
 import asyncio
+import logging
 import os
 import re
 import subprocess
@@ -10,7 +11,19 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, List, Any
 
+import litellm
 import yaml
+from minisweagent.models.litellm_model import (
+    LitellmModel,
+    logger as _litellm_model_logger,
+)
+from tenacity import (
+    before_sleep_log,
+    retry,
+    retry_if_not_exception_type,
+    stop_after_attempt,
+    wait_exponential,
+)
 
 # Allow importing from parent directory (SWE-INFINITE/)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
@@ -22,6 +35,49 @@ from utils import (
     is_blacklisted_command,
     is_container_lost,
 )
+
+
+class FailFastLitellmModel(LitellmModel):
+    """LitellmModel that aborts immediately on any 4xx BadRequest.
+
+    LitellmModel's default tenacity decorator only blacklists
+    ContextWindowExceededError. sglang / vllm return 400 with messages
+    like "Input length (N tokens) exceeds the maximum allowed length"
+    that don't match LiteLLM's context-window keyword list, so they
+    stay typed as BadRequestError and the default decorator burns
+    ~5-6 minutes on 10 doomed retries — slot stays occupied that whole
+    time. Adding BadRequestError to the blacklist surfaces 4xx on the
+    first try; only 5xx / network errors / KeyboardInterrupt still
+    retry. This pairs with env.py's _classify_agent_error, which then
+    records the failure as a non-retryable context_exceeded sample.
+    """
+
+    @retry(
+        reraise=True,
+        stop=stop_after_attempt(int(os.getenv("MSWEA_MODEL_RETRY_STOP_AFTER_ATTEMPT", "10"))),
+        wait=wait_exponential(multiplier=1, min=4, max=60),
+        before_sleep=before_sleep_log(_litellm_model_logger, logging.WARNING),
+        retry=retry_if_not_exception_type((
+            litellm.exceptions.UnsupportedParamsError,
+            litellm.exceptions.NotFoundError,
+            litellm.exceptions.PermissionDeniedError,
+            litellm.exceptions.ContextWindowExceededError,
+            litellm.exceptions.BadRequestError,
+            litellm.exceptions.APIError,
+            litellm.exceptions.AuthenticationError,
+            KeyboardInterrupt,
+        )),
+    )
+    def _query(self, messages, **kwargs):
+        try:
+            return litellm.completion(
+                model=self.config.model_name,
+                messages=messages,
+                **(self.config.model_kwargs | kwargs),
+            )
+        except litellm.exceptions.AuthenticationError as e:
+            e.message += " You can permanently set your API key with `mini-extra config set KEY VALUE`."
+            raise e
 
 
 def _strip_thinking_tags(content: str) -> str:
@@ -145,7 +201,6 @@ class MiniSWEAgent:
         try:
             from minisweagent.agents.default import DefaultAgent, FormatError
             from minisweagent.environments.docker import DockerEnvironment
-            from minisweagent.models.litellm_model import LitellmModel
 
             # Subclass to handle <think> tags in model output
             class ThinkingAwareAgent(DefaultAgent):
@@ -196,7 +251,6 @@ class MiniSWEAgent:
                 model_kwargs["api_key"] = self.config.api_key
 
             # Clear litellm cached HTTP clients to prevent stale connection errors
-            import litellm
             if hasattr(litellm.in_memory_llm_clients_cache, 'flush_cache'):
                 litellm.in_memory_llm_clients_cache.flush_cache()
             elif hasattr(litellm.in_memory_llm_clients_cache, 'cache_dict'):
@@ -207,7 +261,7 @@ class MiniSWEAgent:
             logging.getLogger("minisweagent").setLevel(logging.WARNING)
             logging.getLogger("LiteLLM").setLevel(logging.WARNING)
 
-            model_obj = LitellmModel(
+            model_obj = FailFastLitellmModel(
                 model_name=model_name,
                 model_kwargs=model_kwargs,
                 cost_tracking="ignore_errors",
