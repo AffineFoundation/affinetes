@@ -30,6 +30,7 @@ from cache import TwoLevelCache
 from agents import (
     CodexAgent, CodexConfig,
     MiniSWEAgent, MiniSWEConfig,
+    AffentAgent, AffentConfig,
     SUPPORTED_AGENTS, select_agent,
 )
 from affinetes.core.openenv import OpenEnvResponse
@@ -971,6 +972,14 @@ bash /workspace/entryscript.sh
                 model=model, api_base=base_url, api_key=eval_api_key, timeout=timeout,
             )
             agent_obj = CodexAgent(config)
+        elif agent == "affent":
+            # affent CLI doesn't currently surface temperature/seed flags;
+            # max_iterations maps onto its --max-turns budget.
+            config = AffentConfig(
+                model=model, api_base=base_url, api_key=eval_api_key,
+                timeout=timeout, max_turns=max_iterations,
+            )
+            agent_obj = AffentAgent(config)
         else:
             config = MiniSWEConfig(
                 model=model, api_base=base_url, api_key=eval_api_key,

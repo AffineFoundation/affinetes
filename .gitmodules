@@ -1,0 +1,3 @@
+[submodule "environments/SWE-INFINITE/affent"]
+	path = environments/SWE-INFINITE/affent
+	url = https://github.com/AffineFoundation/affent.git

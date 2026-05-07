@@ -1,12 +1,14 @@
 """Agent registry for SWE-INFINITE.
 
-Provides CodexAgent and MiniSWEAgent, with automatic selection based on task.
+Provides CodexAgent, MiniSWEAgent, and AffentAgent, with automatic
+selection based on task.
 """
 
 from .codex import CodexAgent, CodexConfig, CodexResult
 from .miniswe import MiniSWEAgent, MiniSWEConfig, MiniSWEResult
+from .affent import AffentAgent, AffentConfig, AffentResult
 
-SUPPORTED_AGENTS = ("codex", "miniswe")
+SUPPORTED_AGENTS = ("codex", "miniswe", "affent")
 
 # Languages where codex CLI works well (native tool-use, single-turn)
 _CODEX_PREFERRED_LANGUAGES = frozenset()  # empty for now; miniswe is default
@@ -34,5 +36,6 @@ def select_agent(task: dict, override: str = "") -> str:
 __all__ = [
     "CodexAgent", "CodexConfig", "CodexResult",
     "MiniSWEAgent", "MiniSWEConfig", "MiniSWEResult",
+    "AffentAgent", "AffentConfig", "AffentResult",
     "SUPPORTED_AGENTS", "select_agent",
 ]
