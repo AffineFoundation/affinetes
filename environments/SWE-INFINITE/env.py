@@ -402,12 +402,26 @@ class InfiniteActor:
                 )
             apply_cmds = "\n".join(apply_steps)
 
+            # Stage and commit *all* working-tree changes (test_patch +
+            # augmented_test + fix_patch + canary) into a single commit so
+            # `git ls-files`, `git status`, and `git log` show the canary as
+            # an indistinguishable part of the workspace. Using inline
+            # `-c user.email=...` keeps verifier identity out of .git/config.
+            git_seal_cmd = (
+                'git -c user.email=agent@swe-infinite.local '
+                '-c user.name="SWE-INFINITE Agent" add -A >/dev/null 2>&1 || true; '
+                'git -c user.email=agent@swe-infinite.local '
+                '-c user.name="SWE-INFINITE Agent" '
+                'commit -m "test setup" --quiet --allow-empty >/dev/null 2>&1 || true'
+            )
+
             entryscript = f"""
 {NETWORK_BLOCKLIST_SCRIPT}
 cd /app
 {apply_cmds}
 git apply --recount --whitespace=fix /workspace/fix_patch.diff 2>&1 || {{ echo "PATCH_APPLY_FAILED"; }}
 {canary_inject}
+{git_seal_cmd}
 {effective_test_command} > /workspace/stdout.log 2> /workspace/stderr.log || true
 echo "{STDOUT_BEGIN}"
 cat /workspace/stdout.log
@@ -507,7 +521,6 @@ bash /workspace/entryscript.sh
             # Canary check: detect test-framework subversion before grading
             if canary:
                 subverted, reason = verify_canary(
-                    test_stdout, test_stderr,
                     canary["canaries"],
                     passed_tests, failed_tests,
                 )
