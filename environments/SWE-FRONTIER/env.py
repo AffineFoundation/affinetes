@@ -10,8 +10,8 @@ entrypoint, branching on IFS_STAGE.
 Flow:
   evaluate(task_id) ->
     1. resolve task_id -> image_tag (currently a hardcoded mapping for testing)
-    2. spawn solving container as root, hide /task/verify, copy afentctl into it,
-       run afentctl to write a solution under /workspace
+    2. spawn solving container as root, hide /task/verify, copy affentctl into it,
+       run affentctl to write a solution under /workspace
     3. tar /workspace out to a host temp dir
     4. run a fresh verify container with IFS_STAGE=solver (mounts workspace ro)
     5. run another fresh verify container with IFS_STAGE=score (no workspace)
@@ -30,7 +30,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, Optional
 
-from agents import AfentAgent, AfentConfig
+from agents import AffentAgent, AffentConfig
 
 DOCKER_PULL_TIMEOUT = 300
 VERIFY_TIMEOUT = 1800
@@ -69,7 +69,7 @@ class FrontierActor:
             print(f"[SWE-FRONTIER] Warning: docker login failed: {result.stderr.strip()}")
 
     def _cleanup_stale_containers(self) -> None:
-        for prefix in ("swe-frontier-afent-", "swe-frontier-verify-"):
+        for prefix in ("swe-frontier-affent-", "swe-frontier-verify-"):
             try:
                 ps = subprocess.run(
                     ["docker", "ps", "-a", "--filter", f"name={prefix}",
@@ -189,14 +189,14 @@ class FrontierActor:
         api_key: Optional[str] = None,
         timeout: int = 7200,
     ) -> Dict[str, Any]:
-        """Evaluate an afent agent on a SWE-FRONTIER task.
+        """Evaluate an affent agent on a SWE-FRONTIER task.
 
         Args:
             task_id: int id (lookup in TASK_ID_TO_IMAGE) or a full image tag.
-            model: model name passed to afentctl.
+            model: model name passed to affentctl.
             base_url: OpenAI-compatible endpoint.
             api_key: API key; falls back to env CHUTES_API_KEY.
-            timeout: afent wall-time budget (seconds).
+            timeout: affent wall-time budget (seconds).
         """
         start = time.time()
         eval_api_key = api_key or self.api_key
@@ -207,7 +207,7 @@ class FrontierActor:
         image_tag = self._resolve_image(task_id)
         print(f"[SWE-FRONTIER] Loaded task: id={task_id} image={image_tag}")
 
-        agent = AfentAgent(AfentConfig(
+        agent = AffentAgent(AffentConfig(
             model=model, api_base=base_url, api_key=eval_api_key, timeout=timeout,
         ))
         agent_result = agent.solve(image_tag)
@@ -221,7 +221,7 @@ class FrontierActor:
                 "extra": {
                     "task_id": task_id,
                     "image": image_tag,
-                    "agent_type": "afent",
+                    "agent_type": "affent",
                     "model_calls": agent_result.model_calls,
                     "total_tokens": agent_result.total_tokens,
                     "conversation": agent_result.conversation,
@@ -243,7 +243,7 @@ class FrontierActor:
             "extra": {
                 "task_id": task_id,
                 "image": image_tag,
-                "agent_type": "afent",
+                "agent_type": "affent",
                 "model_calls": agent_result.model_calls,
                 "total_tokens": agent_result.total_tokens,
                 "conversation": agent_result.conversation,

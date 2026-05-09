@@ -1,25 +1,25 @@
-"""Afent agent — runs the affine-agents `afentctl` loop inside the task image.
+"""Affent agent — runs the AffineFoundation/affent `affentctl` loop inside the task image.
 
 Workflow:
   1. Create a host workspace dir; pre-stage stub solution.py + oracle.sh.
   2. Start a solving container from the release image as root, bind-mounting
      host workspace at /workspace, with /task/verify hidden (chmod 000) so
      the agent can't read oracle vectors.
-  3. Copy the afentctl-static binary + the MCP verify forwarder into the
+  3. Copy the affent-static binary + the MCP verify forwarder into the
      container, write an mcp config that points the forwarder at our
      host-side HTTP verify server.
   4. Run a host-side verify HTTP server in a daemon thread. The forwarder
      in the container POSTs to it; the server runs the IFS two-stage
      verifier in fresh containers and returns aggregate scores (no
      per-case expecteds — that would defeat grading).
-  5. Run `afentctl run --mcp-config ...` with system prompt + one-line
+  5. Run `affentctl run --mcp-config ...` with system prompt + one-line
      kickoff. The agent has tools: shell / read_file / write_file /
      edit_file / list_files plus `ifs__verify` from the MCP server.
   6. Stream the JSONL trace, summarising each event for the operator log.
-  7. After afent exits, env.py runs the authoritative final verify on the
+  7. After affent exits, env.py runs the authoritative final verify on the
      same host workspace.
 
-afentctl was chosen over codex / goose because:
+affentctl was chosen over codex / goose because:
   - tiny static Go binary (~5MB vs goose's 270MB) → fast docker cp
   - stream-json trace format is simpler and we control the parser
   - per-call timeout + max_turns are first-class flags
@@ -49,18 +49,18 @@ from wsgiref.simple_server import WSGIServer, make_server
 DOCKER_PULL_TIMEOUT = 300
 
 # Stub-kick attempts: when the agent exits cleanly but never replaces
-# the seeded stub files, we re-prompt it with an explicit kick. afent
+# the seeded stub files, we re-prompt it with an explicit kick. affent
 # itself already retries transient LLM errors (5xx/429/EOF/timeout) via
 # --retry-transient, so we don't need a wrapper retry for those.
-MAX_AFENT_ATTEMPTS = 3
+MAX_AFFENT_ATTEMPTS = 3
 
-# afent's per-LLM-call ceiling. GLM-class reasoning models can take
+# affent's per-LLM-call ceiling. GLM-class reasoning models can take
 # minutes to first-token on long system prompts; we go well past the
 # default 3min so a single slow inference doesn't kill the run before
-# afent's own watchdog/retry has anything to work with.
-AFENT_PER_CALL_TIMEOUT = "15m"
-AFENT_RETRY_TRANSIENT = "3"
-AFENT_RETRY_BACKOFF = "4s"
+# affent's own watchdog/retry has anything to work with.
+AFFENT_PER_CALL_TIMEOUT = "15m"
+AFFENT_RETRY_TRANSIENT = "3"
+AFFENT_RETRY_BACKOFF = "4s"
 
 # Verify-via-MCP: how many times the agent may invoke `ifs__verify` per
 # session. Each call spawns two fresh task containers and grades the
@@ -70,11 +70,11 @@ VERIFY_BUDGET_PER_SESSION = 20
 VERIFY_TIMEOUT_SEC = 1800
 
 
-def _find_afent_binary() -> str:
-    for path in ["/usr/local/bin/afentctl-static", os.path.expanduser("~/afentctl-static")]:
+def _find_affent_binary() -> str:
+    for path in ["/usr/local/bin/affent-static", os.path.expanduser("~/affent-static")]:
         if os.path.isfile(path):
             return path
-    return "afentctl-static"
+    return "affent-static"
 
 
 # Path to the in-container MCP forwarder script. Lives next to this file.
@@ -230,7 +230,7 @@ def _run_verify_server(state: _VerifyServerState, *, host: str = "127.0.0.1"):
         t.join(timeout=5)
 
 
-AFENT_STATIC_BINARY = _find_afent_binary()
+AFFENT_STATIC_BINARY = _find_affent_binary()
 
 SYSTEM_INSTRUCTIONS_HEAD = """\
 You are an autonomous coding agent. ONLY files at /workspace are graded;
@@ -280,7 +280,7 @@ typical workflow:
      revert. Verify is rate-limited (~12 calls per session); spend
      calls on substantive changes, not after every line edit.
 
-The agent loop's session log is at /workspace/.afentctl/ — that's
+The agent loop's session log is at /workspace/.affentctl/ — that's
 internal bookkeeping, not part of the task. Don't read or write it.
 
 The full task brief follows. Begin work on your first turn rather than
@@ -307,16 +307,16 @@ SOLVER_PROMPT_TEMPLATE = (
 # would prefer the agent's new file but our wrapper would still see
 # stale stubs and falsely conclude no work happened. We now leave
 # /workspace empty and detect "real work" by counting any file in the
-# workspace, ignoring afent's own .afentctl/ session log.
+# workspace, ignoring affent's own .affentctl/ session log.
 
 
 @dataclass
-class AfentConfig:
+class AffentConfig:
     model: str
     api_base: str
     api_key: str
     timeout: int = 1800
-    # afent's own per-turn round limit. We raise it well above the
+    # affent's own per-turn round limit. We raise it well above the
     # default 10 because larger benchmark tasks need many tool calls,
     # but cap it so a confused model doesn't burn the wall budget on a
     # cycle.
@@ -324,7 +324,7 @@ class AfentConfig:
 
 
 @dataclass
-class AfentResult:
+class AffentResult:
     success: bool
     workspace_dir: Optional[Path] = None
     model_calls: int = 0
@@ -333,10 +333,10 @@ class AfentResult:
     error: Optional[str] = None
 
 
-class AfentAgent:
-    """Runs afentctl inside a SWE-FRONTIER task release image."""
+class AffentAgent:
+    """Runs affentctl inside a SWE-FRONTIER task release image."""
 
-    def __init__(self, config: AfentConfig):
+    def __init__(self, config: AffentConfig):
         self.config = config
         self._container_name: Optional[str] = None
         self._host_workspace: Optional[Path] = None
@@ -370,20 +370,20 @@ class AfentAgent:
             input=stdin_data,
         )
 
-    def _install_afent(self) -> bool:
+    def _install_affent(self) -> bool:
         cp_result = subprocess.run(
-            ["docker", "cp", AFENT_STATIC_BINARY,
-             f"{self._container_name}:/usr/local/bin/afentctl"],
+            ["docker", "cp", AFFENT_STATIC_BINARY,
+             f"{self._container_name}:/usr/local/bin/affentctl"],
             capture_output=True, text=True, timeout=60,
         )
         if cp_result.returncode != 0:
-            print(f"[AFENT] Failed to copy afentctl: {cp_result.stderr[:500]}")
+            print(f"[AFFENT] Failed to copy affentctl: {cp_result.stderr[:500]}")
             return False
-        result = self._exec("afentctl help", timeout=10)
+        result = self._exec("affentctl help", timeout=10)
         if result.returncode != 0:
-            print(f"[AFENT] afentctl smoke check failed: {result.stderr[:500]}")
+            print(f"[AFFENT] affentctl smoke check failed: {result.stderr[:500]}")
             return False
-        print("[AFENT] afentctl ready")
+        print("[AFFENT] affentctl ready")
         return True
 
     # ---- prompt construction -------------------------------------------------
@@ -420,7 +420,7 @@ class AfentAgent:
 
     @staticmethod
     def _format_event(event: Dict[str, Any]) -> Optional[str]:
-        """Render an afent SSE event as a single short progress line.
+        """Render an affent SSE event as a single short progress line.
 
         Returns None for events that should not be printed (token-level
         deltas + per-line tool output, which would flood the log).
@@ -469,7 +469,7 @@ class AfentAgent:
             etype = ev.get("type")
             data = ev.get("data") or {}
             if etype == "usage":
-                # afent emits one usage event per LLM turn — use that as
+                # affent emits one usage event per LLM turn — use that as
                 # both the model-call count and the token aggregator.
                 model_calls += 1
                 total_input += int(data.get("input_tokens") or 0)
@@ -500,40 +500,40 @@ class AfentAgent:
 
     # ---- streaming runner ----------------------------------------------------
 
-    def _run_afent_streaming(
+    def _run_affent_streaming(
         self,
         *,
         prompt: str,
         timeout: int,
     ) -> Tuple[int, str, str]:
-        """Run `afentctl run` via Popen, streaming the JSONL trace as it arrives.
+        """Run `affentctl run` via Popen, streaming the JSONL trace as it arrives.
 
         Returns (returncode, full_stdout, full_stderr). Raises
         subprocess.TimeoutExpired on wall-time exhaustion.
         """
-        # afentctl prints final assistant text to stdout when --trace points
+        # affentctl prints final assistant text to stdout when --trace points
         # to a file. We redirect both to stdout via `--trace -`, so stdout
         # carries the JSONL trace + final text. We separate them by parsing
         # each line — JSONL events are JSON, the final text is plain.
-        afent_cmd = (
-            "cd /workspace && afentctl run "
+        affent_cmd = (
+            "cd /workspace && affentctl run "
             "--prompt - "
             f"--workspace /workspace "
             f"--base-url {self.config.api_base} "
             f"--api-key {self.config.api_key} "
             f"--model {self.config.model} "
             f"--max-turns {self.config.max_turns} "
-            f"--max-call-timeout {AFENT_PER_CALL_TIMEOUT} "
-            f"--retry-transient {AFENT_RETRY_TRANSIENT} "
-            f"--retry-backoff {AFENT_RETRY_BACKOFF} "
-            "--system-prompt /tmp/afent_system.txt "
-            "--mcp-config /tmp/afent_mcp.json "
+            f"--max-call-timeout {AFFENT_PER_CALL_TIMEOUT} "
+            f"--retry-transient {AFFENT_RETRY_TRANSIENT} "
+            f"--retry-backoff {AFFENT_RETRY_BACKOFF} "
+            "--system-prompt /tmp/affent_system.txt "
+            "--mcp-config /tmp/affent_mcp.json "
             "--quiet --trace -"
         )
         docker_cmd = [
             "docker", "exec", "-i",
             self._container_name,
-            "bash", "-c", afent_cmd,
+            "bash", "-c", affent_cmd,
         ]
         proc = subprocess.Popen(
             docker_cmd,
@@ -560,13 +560,13 @@ class AfentAgent:
                     try:
                         ev = json.loads(stripped)
                     except json.JSONDecodeError:
-                        print(f"[afent/raw] {stripped[:300]}")
+                        print(f"[affent/raw] {stripped[:300]}")
                         continue
                     rendered = self._format_event(ev)
                     if rendered is not None and rendered != last_label:
-                        print(f"[afent] {rendered}")
+                        print(f"[affent] {rendered}")
                         last_label = rendered
-                # else: final assistant text (afent prints after turn.end)
+                # else: final assistant text (affent prints after turn.end)
                 sys.stdout.flush()
 
         def _pump_stderr() -> None:
@@ -575,7 +575,7 @@ class AfentAgent:
                 stderr_chunks.append(line)
                 stripped = line.rstrip()
                 if stripped:
-                    print(f"[afent/stderr] {stripped[:400]}", file=sys.stderr)
+                    print(f"[affent/stderr] {stripped[:400]}", file=sys.stderr)
                     sys.stderr.flush()
 
         t_out = threading.Thread(target=_pump_stdout, daemon=True)
@@ -609,12 +609,12 @@ class AfentAgent:
         full_stderr = "".join(stderr_chunks)
         # Dump the raw trace for offline debugging.
         try:
-            dump_path = Path("/tmp/afent_dumps")
+            dump_path = Path("/tmp/affent_dumps")
             dump_path.mkdir(exist_ok=True)
             stamp = int(time.time() * 1000)
-            (dump_path / f"afent_{stamp}.stdout.ndjson").write_text(full_stdout)
+            (dump_path / f"affent_{stamp}.stdout.ndjson").write_text(full_stdout)
             if full_stderr.strip():
-                (dump_path / f"afent_{stamp}.stderr.log").write_text(full_stderr)
+                (dump_path / f"affent_{stamp}.stderr.log").write_text(full_stderr)
         except Exception:
             pass
         return rc, full_stdout, full_stderr
@@ -629,15 +629,15 @@ class AfentAgent:
             shell=True, capture_output=True, text=True, timeout=120,
         )
         if proc.returncode != 0:
-            print(f"[AFENT] Workspace extraction failed: {proc.stderr[:500]}")
+            print(f"[AFFENT] Workspace extraction failed: {proc.stderr[:500]}")
             return False
         return True
 
     # ---- main entrypoint -----------------------------------------------------
 
-    def solve(self, docker_image: str) -> AfentResult:
+    def solve(self, docker_image: str) -> AffentResult:
         try:
-            print(f"[AFENT] Pulling image: {docker_image}")
+            print(f"[AFFENT] Pulling image: {docker_image}")
             pull = subprocess.run(
                 ["docker", "pull", docker_image],
                 capture_output=True, text=True, timeout=DOCKER_PULL_TIMEOUT,
@@ -648,11 +648,11 @@ class AfentAgent:
                     capture_output=True, timeout=10,
                 )
                 if inspect.returncode != 0:
-                    return AfentResult(
+                    return AffentResult(
                         success=False,
                         error=f"Failed to pull image: {pull.stderr[:500]}",
                     )
-                print(f"[AFENT] Using local image: {docker_image}")
+                print(f"[AFFENT] Using local image: {docker_image}")
 
             # Host workspace shared with the agent container (bind mount) and
             # with the verify containers spawned later by the MCP server.
@@ -668,8 +668,8 @@ class AfentAgent:
             )
             shutil.copy(MCP_FORWARDER_SCRIPT, forwarder_host)
 
-            self._container_name = f"swe-frontier-afent-{uuid.uuid4().hex[:12]}"
-            print(f"[AFENT] Starting container {self._container_name}")
+            self._container_name = f"swe-frontier-affent-{uuid.uuid4().hex[:12]}"
+            print(f"[AFFENT] Starting container {self._container_name}")
             run = subprocess.run(
                 [
                     "docker", "run", "-d",
@@ -686,7 +686,7 @@ class AfentAgent:
                 capture_output=True, text=True, timeout=60,
             )
             if run.returncode != 0:
-                return AfentResult(
+                return AffentResult(
                     success=False,
                     error=f"Failed to start container: {run.stderr[:500]}",
                 )
@@ -696,10 +696,10 @@ class AfentAgent:
             # release image's RO layer and we lock down /task/verify.
             self._exec("chmod -R 000 /task/verify", timeout=10)
 
-            if not self._install_afent():
-                return AfentResult(
+            if not self._install_affent():
+                return AffentResult(
                     success=False,
-                    error="Failed to install afentctl in container",
+                    error="Failed to install affentctl in container",
                 )
 
             # Start the host-side verify HTTP server. Token is short-lived
@@ -716,7 +716,7 @@ class AfentAgent:
             verify_host, verify_port = self._verify_server_ctx.__enter__()
             verify_url = f"http://{verify_host}:{verify_port}/verify"
             print(
-                f"[AFENT] Verify MCP server bound at {verify_url} "
+                f"[AFFENT] Verify MCP server bound at {verify_url} "
                 f"(budget={self._verify_state.budget})"
             )
 
@@ -737,18 +737,18 @@ class AfentAgent:
                 json.dumps(mcp_cfg).encode("utf-8")
             ).decode()
             self._exec(
-                f"echo {mcp_b64} | base64 -d > /tmp/afent_mcp.json",
+                f"echo {mcp_b64} | base64 -d > /tmp/affent_mcp.json",
                 timeout=10,
             )
 
             sys_text, prompt = self._build_prompts()
             sys_b64 = base64.b64encode(sys_text.encode("utf-8")).decode()
             self._exec(
-                f"echo {sys_b64} | base64 -d > /tmp/afent_system.txt",
+                f"echo {sys_b64} | base64 -d > /tmp/affent_system.txt",
                 timeout=10,
             )
 
-            max_attempts = MAX_AFENT_ATTEMPTS
+            max_attempts = MAX_AFFENT_ATTEMPTS
             wall_deadline = time.monotonic() + self.config.timeout
             attempts = 0
             rc = 1
@@ -763,17 +763,17 @@ class AfentAgent:
                 attempts += 1
                 remaining = int(wall_deadline - time.monotonic())
                 if remaining <= 30:
-                    print("[AFENT] wall budget exhausted, stopping retries")
+                    print("[AFFENT] wall budget exhausted, stopping retries")
                     break
 
                 if attempts == 1:
                     attempt_prompt = prompt
                 else:
                     # "Real work" = any non-hidden file in /workspace
-                    # (ignoring afent's own .afentctl/ session log dir).
+                    # (ignoring affent's own .affentctl/ session log dir).
                     prev_marker = self._exec(
                         "find /workspace -mindepth 1 -maxdepth 1 "
-                        "-not -name '.afentctl' 2>/dev/null | wc -l",
+                        "-not -name '.affentctl' 2>/dev/null | wc -l",
                         timeout=10,
                     )
                     file_count = int((prev_marker.stdout or "0").strip() or 0)
@@ -798,12 +798,12 @@ class AfentAgent:
                         )
 
                 print(
-                    f"[AFENT] Running afentctl attempt={attempts}/{max_attempts} "
+                    f"[AFFENT] Running affentctl attempt={attempts}/{max_attempts} "
                     f"(remaining={remaining}s)..."
                 )
                 sys.stdout.flush()
                 try:
-                    rc, full_stdout, full_stderr = self._run_afent_streaming(
+                    rc, full_stdout, full_stderr = self._run_affent_streaming(
                         prompt=attempt_prompt,
                         timeout=remaining,
                     )
@@ -813,7 +813,7 @@ class AfentAgent:
                     # to the post-loop verification path so env.py can grade
                     # whatever's there.
                     print(
-                        f"[AFENT] attempt {attempts} hit wall-time limit; "
+                        f"[AFFENT] attempt {attempts} hit wall-time limit; "
                         "preserving workspace for grading"
                     )
                     rc = 124
@@ -827,13 +827,13 @@ class AfentAgent:
                 agg_calls += calls
                 agg_conversation.extend(conv)
                 print(
-                    f"[AFENT] attempt {attempts} exit={rc} turns={calls} "
+                    f"[AFFENT] attempt {attempts} exit={rc} turns={calls} "
                     f"tokens={tokens}"
                 )
 
                 marker = self._exec(
                     "find /workspace -mindepth 1 -maxdepth 1 "
-                    "-not -name '.afentctl' 2>/dev/null | wc -l",
+                    "-not -name '.affentctl' 2>/dev/null | wc -l",
                     timeout=10,
                 )
                 file_count = int((marker.stdout or "0").strip() or 0)
@@ -842,22 +842,22 @@ class AfentAgent:
 
                 if not stubs_unchanged:
                     # Real work was produced (stubs were replaced). Whether
-                    # afentctl exited cleanly or not, the workspace is
-                    # gradable — afent already retried transient upstream
+                    # affentctl exited cleanly or not, the workspace is
+                    # gradable — affent already retried transient upstream
                     # errors internally before giving up.
                     break
                 if rc == 0:
                     print(
-                        "[AFENT] attempt finished cleanly but workspace empty; "
+                        "[AFFENT] attempt finished cleanly but workspace empty; "
                         "retrying with kick-prompt"
                     )
                 else:
-                    # afent exhausted its own retry budget without producing
+                    # affent exhausted its own retry budget without producing
                     # any code. One more wrapper-level attempt with the same
                     # kick still has a chance — the next attempt seeds a
-                    # fresh `afentctl run` invocation with a new HTTP client.
+                    # fresh `affentctl run` invocation with a new HTTP client.
                     print(
-                        f"[AFENT] attempt {attempts} failed (exit={rc}) "
+                        f"[AFFENT] attempt {attempts} failed (exit={rc}) "
                         f"with workspace empty; retrying with kick-prompt"
                     )
 
@@ -869,7 +869,7 @@ class AfentAgent:
             model_calls = agg_calls
             conversation = agg_conversation
             print(
-                f"[AFENT] Done. attempts={attempts} final_exit={rc} "
+                f"[AFFENT] Done. attempts={attempts} final_exit={rc} "
                 f"turns={model_calls} tokens={total_tokens}"
             )
 
@@ -878,18 +878,18 @@ class AfentAgent:
             agent_warning: Optional[str] = None
             if rc != 0:
                 detail = (full_stderr or full_stdout or "")[:500]
-                agent_warning = f"afentctl exited {rc}: {detail}"
-                print(f"[AFENT] WARNING: {agent_warning[:400]}")
+                agent_warning = f"affentctl exited {rc}: {detail}"
+                print(f"[AFFENT] WARNING: {agent_warning[:400]}")
 
             verify_calls = (
                 self._verify_state.calls if self._verify_state else 0
             )
             print(
-                f"[AFENT] Agent invoked verify {verify_calls}/"
+                f"[AFFENT] Agent invoked verify {verify_calls}/"
                 f"{VERIFY_BUDGET_PER_SESSION} times"
             )
 
-            return AfentResult(
+            return AffentResult(
                 success=True,
                 workspace_dir=self._host_workspace,
                 model_calls=model_calls,
@@ -898,10 +898,10 @@ class AfentAgent:
                 error=agent_warning,
             )
         except subprocess.TimeoutExpired:
-            return AfentResult(success=False, error="Operation timed out")
+            return AffentResult(success=False, error="Operation timed out")
         except Exception:
             import traceback
-            return AfentResult(success=False, error=traceback.format_exc())
+            return AffentResult(success=False, error=traceback.format_exc())
         finally:
             self.cleanup()
 
@@ -912,7 +912,7 @@ class AfentAgent:
                     ["docker", "rm", "-f", self._container_name],
                     capture_output=True, timeout=30,
                 )
-                print(f"[AFENT] Container {self._container_name} removed")
+                print(f"[AFFENT] Container {self._container_name} removed")
             except Exception:
                 pass
             self._container_name = None
@@ -920,7 +920,7 @@ class AfentAgent:
             try:
                 self._verify_server_ctx.__exit__(None, None, None)
             except Exception as e:
-                print(f"[AFENT] Verify server shutdown failed: {e!r}")
+                print(f"[AFFENT] Verify server shutdown failed: {e!r}")
             self._verify_server_ctx = None
         # NOTE: we don't shutil.rmtree(self._host_workspace) here because
         # env.py needs to run the authoritative final verify on it. The

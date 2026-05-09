@@ -1,3 +1,3 @@
-from .afent import AfentAgent, AfentConfig, AfentResult
+from .affent import AffentAgent, AffentConfig, AffentResult
 
-__all__ = ["AfentAgent", "AfentConfig", "AfentResult"]
+__all__ = ["AffentAgent", "AffentConfig", "AffentResult"]

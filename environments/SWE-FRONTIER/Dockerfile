@@ -1,5 +1,15 @@
 # SWE-FRONTIER Environment Dockerfile
 
+# Build affent (Go agent loop) as a static binary — same submodule + same
+# build recipe as SWE-INFINITE, so both environments speak to one upstream
+# (AffineFoundation/affent) with one binary name.
+FROM golang:1.22-alpine AS affent-builder
+WORKDIR /src/affent
+COPY affent/go.mod affent/go.sum ./
+RUN go mod download
+COPY affent/ ./
+RUN CGO_ENABLED=0 go build -ldflags="-s -w" -o /out/affent-static ./cmd/affentctl
+
 FROM python:3.11-slim
 
 RUN apt-get update && apt-get install -y \
@@ -7,21 +17,11 @@ RUN apt-get update && apt-get install -y \
     curl \
     ca-certificates \
     docker.io \
-    golang-1.22-go \
     && rm -rf /var/lib/apt/lists/*
 
-# afentctl static binary — agent loop core from affine-agents (Go).
-# Build from source so the binary always matches the repo we develop
-# against. Static linkage (CGO_ENABLED=0) makes the binary portable
-# across the various distros our task release images use.
-ARG AFENT_REPO=https://github.com/affine-io/affine-agents.git
-ARG AFENT_REF=main
-RUN export PATH="/usr/lib/go-1.22/bin:$PATH" \
- && git clone --depth=1 --branch "$AFENT_REF" "$AFENT_REPO" /tmp/affine-agents \
- && cd /tmp/affine-agents/afent \
- && CGO_ENABLED=0 go build -ldflags="-s -w" -o /usr/local/bin/afentctl-static ./cmd/afentctl \
- && chmod +x /usr/local/bin/afentctl-static \
- && rm -rf /tmp/affine-agents /root/.cache/go-build
+# affent static binary — docker-cp'd into task containers by AffentAgent.
+COPY --from=affent-builder /out/affent-static /usr/local/bin/affent-static
+RUN chmod +x /usr/local/bin/affent-static
 
 WORKDIR /app
 
