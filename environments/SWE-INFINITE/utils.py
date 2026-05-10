@@ -2,6 +2,32 @@
 
 import json
 import re
+import subprocess
+
+
+# Sentinel file written by affine-swe-infinite at image build time once it
+# has applied the full sanitize_git + normalize_timestamps preprocessing.
+# When present we can skip those scripts in _prepare_container and only
+# apply the runtime-only network blocklist (which docker re-creates from
+# scratch on every container start).
+PREPARED_SENTINEL = "/etc/swe-infinite-prepared"
+
+
+def is_image_prepared(container: str) -> bool:
+    """Return True if the container's image baked sanitize+normalize at build time.
+
+    container: docker container name or id.
+    Returns False on any error (timeout, container gone, etc.) so callers
+    fall back to the full preprocessing path safely.
+    """
+    try:
+        r = subprocess.run(
+            ["docker", "exec", container, "test", "-f", PREPARED_SENTINEL],
+            capture_output=True, timeout=5,
+        )
+        return r.returncode == 0
+    except Exception:
+        return False
 
 # Source code file extensions for git diff filtering
 DIFF_EXTENSIONS = (

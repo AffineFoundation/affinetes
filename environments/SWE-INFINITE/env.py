@@ -40,6 +40,7 @@ from utils import (
     NETWORK_BLOCKLIST_SCRIPT,
     DIFF_EXTENSIONS,
     is_container_lost,
+    is_image_prepared,
     parse_test_output,
 )
 from canary import generate_canary, verify_canary
@@ -638,9 +639,18 @@ bash /workspace/entryscript.sh
         print(f"[SWE-INFINITE] Applied {label} patch: {result.get('output', '')[:200]}")
 
     def _sanitize_git_in_container(self, container_id: str) -> None:
-        """Apply network blocklist, sanitize git, normalize timestamps."""
+        """Apply network blocklist, sanitize git, normalize timestamps.
+
+        Fast path: skip sanitize+normalize when the image already baked them
+        (sentinel /etc/swe-infinite-prepared present). Network blocklist
+        always runs because docker recreates /etc/hosts on every run.
+        """
         self._execute_in_container(container_id, NETWORK_BLOCKLIST_SCRIPT, timeout=10)
         print("[SWE-INFINITE] Network blocklist applied")
+
+        if is_image_prepared(container_id):
+            print("[SWE-INFINITE] Image pre-prepared, skipping sanitize+normalize")
+            return
 
         result = self._execute_in_container(container_id, SANITIZE_GIT_SCRIPT, timeout=60)
         print(f"[SWE-INFINITE] Git sanitized: {result.get('output', '')[:200]}")

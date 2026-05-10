@@ -17,6 +17,7 @@ from utils import (
     DIFF_EXTENSIONS,
     ContainerLostError,
     is_container_lost,
+    is_image_prepared,
 )
 
 DOCKER_PULL_TIMEOUT = 300
@@ -184,9 +185,19 @@ class CodexAgent:
         print(f"[CODEX] Applied {label} patch: {result.stdout[:200]}")
 
     def _prepare_container(self) -> None:
-        """Apply network blocklist, sanitize git history, normalize timestamps."""
+        """Apply network blocklist, sanitize git history, normalize timestamps.
+
+        Fast path: skip sanitize+normalize if the image already baked them
+        (sentinel /etc/swe-infinite-prepared present).
+        """
+        # Network blocklist must always run at container start (docker
+        # rebuilds /etc/hosts from scratch on every run).
         self._exec(NETWORK_BLOCKLIST_SCRIPT, timeout=10)
         print("[CODEX] Network blocklist applied")
+
+        if is_image_prepared(self._container_name):
+            print("[CODEX] Image pre-prepared, skipping sanitize+normalize")
+            return
 
         result = self._exec(SANITIZE_GIT_SCRIPT, timeout=60)
         print(f"[CODEX] Git sanitized: {result.stdout[:200]}")

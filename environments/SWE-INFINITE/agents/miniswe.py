@@ -31,6 +31,7 @@ from utils import (
     SANITIZE_GIT_SCRIPT,
     NORMALIZE_TIMESTAMPS_SCRIPT,
     NETWORK_BLOCKLIST_SCRIPT,
+    is_image_prepared,
     ContainerLostError,
     is_blacklisted_command,
     is_container_lost,
@@ -163,12 +164,23 @@ class MiniSWEAgent:
         print(f"[MINISWE] Applied {label} patch: {result.stdout[:200]}")
 
     def _prepare_container(self) -> None:
-        """Apply network blocklist, sanitize git history, normalize timestamps."""
+        """Apply network blocklist, sanitize git history, normalize timestamps.
+
+        Fast path: if the image baked sanitize+normalize at build time
+        (sentinel present), only apply the network blocklist — docker
+        always rebuilds /etc/hosts on container start, so that step
+        cannot be moved to image build.
+        """
+        # Network blocklist must always run at container start.
         subprocess.run(
             ["docker", "exec", self._container_name, "bash", "-c", NETWORK_BLOCKLIST_SCRIPT],
             capture_output=True, text=True, timeout=10,
         )
         print("[MINISWE] Network blocklist applied")
+
+        if is_image_prepared(self._container_name):
+            print("[MINISWE] Image pre-prepared, skipping sanitize+normalize")
+            return
 
         result = subprocess.run(
             ["docker", "exec", self._container_name, "bash", "-c", SANITIZE_GIT_SCRIPT],
