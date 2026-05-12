@@ -359,30 +359,29 @@ class CodexAgent:
                 if result.stdout:
                     print(f"[CODEX] stdout: {result.stdout[:1000]}")
 
-            if result.returncode != 0 and model_calls == 0:
-                # Prefer the structured failure message from the JSON event
-                # stream; under `--json` codex routes errors there and leaves
-                # stderr empty. The stdout fallback used to truncate to the
-                # opening `thread.started` chunk and lose the real cause.
-                error_detail = (
+            # Capture failure detail for the caller, but always attempt to
+            # harvest the patch — codex frequently exits non-zero (rate-limit,
+            # credit exhaustion, dropped connection) after the agent has
+            # already produced real edits on disk. Gating diff extraction on
+            # `model_calls == 0` discarded those edits because codex emits
+            # `item.completed` for every tool call without ever sending a
+            # closing `turn.completed`, so the counter stays zero.
+            error_detail: Optional[str] = None
+            if result.returncode != 0:
+                detail = (
                     last_error
                     or (result.stderr or result.stdout or "")[:500]
                 )
-                # Classify the error from the captured detail
-                if any(kw in error_detail for kw in ("404", "No matching chute", "not found", "authentication", "401", "403")):
+                if any(kw in detail for kw in ("404", "No matching chute", "not found", "authentication", "401", "403")):
                     error_prefix = "api_error"
-                elif any(kw in error_detail for kw in ("Reconnecting", "connection", "network", "timeout")):
+                elif any(kw in detail for kw in ("Reconnecting", "connection", "network", "timeout")):
                     error_prefix = "api_error"
                 else:
                     error_prefix = "codex_error"
-                return CodexResult(
-                    patch="", success=False,
-                    model_calls=0, total_tokens=0,
-                    conversation=conversation,
-                    error=f"{error_prefix}: exit {result.returncode}: {error_detail}",
-                )
+                error_detail = f"{error_prefix}: exit {result.returncode}: {detail}"
 
-            # 8. Extract diff from container
+            # 8. Extract diff from container — run unconditionally so that
+            # partial edits left by a failed codex run are not silently lost.
             diff_result = self._exec(
                 f"cd /app && git add -A && git diff --cached -- {DIFF_EXTENSIONS}",
                 timeout=60,
@@ -397,6 +396,7 @@ class CodexAgent:
                 total_tokens=total_tokens,
                 conversation=conversation,
                 success=bool(patch),
+                error=error_detail,
             )
 
         except subprocess.TimeoutExpired:

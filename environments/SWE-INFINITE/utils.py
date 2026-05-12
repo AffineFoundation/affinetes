@@ -33,7 +33,8 @@ def is_image_prepared(container: str) -> bool:
 DIFF_EXTENSIONS = (
     "'*.js' '*.ts' '*.jsx' '*.tsx' '*.py' '*.java' '*.go' "
     "'*.c' '*.cpp' '*.h' '*.rs' '*.rb' '*.php' '*.cs' "
-    "'*.swift' '*.kt' '*.scala' '*.vue' '*.svelte'"
+    "'*.swift' '*.kt' '*.scala' '*.vue' '*.svelte' "
+    "'*.yaml' '*.yml' '*.toml' '*.json'"
 )
 
 # Git history sanitization script (prevent cheating via git log)
