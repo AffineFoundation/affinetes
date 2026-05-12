@@ -406,26 +406,52 @@ def _dir_from_cd(test_command: str) -> Optional[str]:
 
 
 def _extend_go_run(cmd: str, canary_name: str) -> Optional[str]:
+    # -run "pattern"
     m = re.search(r'-run\s+"([^"]+)"', cmd)
     if m:
         new_pattern = f'{m.group(1)}|{canary_name}'
-        return cmd.replace(m.group(0), f'-run "{new_pattern}"')
+        return cmd.replace(m.group(0), f'-run "{new_pattern}"', 1)
+    # -run 'pattern'
     m = re.search(r"-run\s+'([^']+)'", cmd)
     if m:
         new_pattern = f"{m.group(1)}|{canary_name}"
-        return cmd.replace(m.group(0), f"-run '{new_pattern}'")
+        return cmd.replace(m.group(0), f"-run '{new_pattern}'", 1)
+    # -run pattern  or  -run=pattern  (unquoted, single shell token)
+    # Without this branch, an existing unquoted -run would survive untouched
+    # while the fallback below appends a second -run; go test honors only the
+    # last -run flag, so the canary pattern would be discarded.
+    m = re.search(r'-run(\s+|=)(\S+)', cmd)
+    if m:
+        sep, pattern = m.group(1), m.group(2)
+        new_pattern = f'{pattern}|{canary_name}'
+        return cmd.replace(m.group(0), f'-run{sep}"{new_pattern}"', 1)
     if re.search(r'\bgo\s+test\b', cmd):
-        return re.sub(r'\bgo\s+test\b', f'go test -run "{canary_name}|.*"', cmd, count=1)
+        return re.sub(
+            r'\bgo\s+test\b',
+            lambda _: f'go test -run "{canary_name}|.*"',
+            cmd,
+            count=1,
+        )
     return None
 
 
 def _extend_pytest(cmd: str, canary_name: str) -> Optional[str]:
+    # -k "expr"
     m = re.search(r'-k\s+"([^"]+)"', cmd)
     if m:
         new_filter = f'{m.group(1)} or {canary_name}'
-        return cmd.replace(m.group(0), f'-k "{new_filter}"')
+        return cmd.replace(m.group(0), f'-k "{new_filter}"', 1)
+    # -k 'expr'
     m = re.search(r"-k\s+'([^']+)'", cmd)
     if m:
         new_filter = f"{m.group(1)} or {canary_name}"
-        return cmd.replace(m.group(0), f"-k '{new_filter}'")
+        return cmd.replace(m.group(0), f"-k '{new_filter}'", 1)
+    # -k expr  or  -k=expr  (unquoted, single shell token).
+    # Same hazard as the -run case: an unquoted -k would otherwise filter the
+    # canary tests out without us extending the expression.
+    m = re.search(r'-k(\s+|=)(\S+)', cmd)
+    if m:
+        sep, expr = m.group(1), m.group(2)
+        new_filter = f'{expr} or {canary_name}'
+        return cmd.replace(m.group(0), f'-k{sep}"{new_filter}"', 1)
     return cmd
