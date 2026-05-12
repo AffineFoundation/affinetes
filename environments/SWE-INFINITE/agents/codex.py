@@ -144,15 +144,21 @@ class CodexAgent:
             timeout=10,
         )
 
-    def _parse_json_output(self, stdout: str) -> Tuple[int, int, List[Dict[str, Any]]]:
-        """Parse JSONL output from codex --experimental-json.
+    def _parse_json_output(
+        self, stdout: str
+    ) -> Tuple[int, int, List[Dict[str, Any]], Optional[str]]:
+        """Parse JSONL output from codex --json.
 
-        Returns (total_tokens, model_calls, conversation).
+        Returns (total_tokens, model_calls, conversation, last_error).
+        Under `--json` codex emits failures as structured events on stdout
+        (`error` / `turn.failed`) and leaves stderr empty, so we capture the
+        most recent such message for callers that need to report the cause.
         """
         total_input = 0
         total_output = 0
         model_calls = 0
         conversation: List[Dict[str, Any]] = []
+        last_error: Optional[str] = None
 
         for line in stdout.splitlines():
             line = line.strip()
@@ -171,8 +177,17 @@ class CodexAgent:
                 total_output += usage.get("output_tokens", 0)
             elif event_type == "item.completed":
                 conversation.append(event.get("item", {}))
+            elif event_type == "error":
+                msg = event.get("message")
+                if isinstance(msg, str) and msg.strip():
+                    last_error = msg.strip()
+            elif event_type == "turn.failed":
+                err = event.get("error") or {}
+                msg = err.get("message") if isinstance(err, dict) else None
+                if isinstance(msg, str) and msg.strip():
+                    last_error = msg.strip()
 
-        return total_input + total_output, model_calls, conversation
+        return total_input + total_output, model_calls, conversation, last_error
 
     def _apply_patch(self, patch: str, label: str = "augmented test") -> None:
         """Apply a patch inside the container via base64 pipe."""
@@ -329,20 +344,31 @@ class CodexAgent:
                 )
 
             # 7. Parse output
-            total_tokens, model_calls, conversation = self._parse_json_output(result.stdout)
+            total_tokens, model_calls, conversation, last_error = (
+                self._parse_json_output(result.stdout)
+            )
             # Prepend initial prompt as first conversation entry
             conversation.insert(0, {"role": "user", "content": prompt})
             print(f"[CODEX] Exit code: {result.returncode}, turns: {model_calls}, tokens: {total_tokens}")
 
             if result.returncode != 0:
+                if last_error:
+                    print(f"[CODEX] event error: {last_error[:1000]}")
                 if result.stderr:
                     print(f"[CODEX] stderr: {result.stderr[:1000]}")
                 if result.stdout:
                     print(f"[CODEX] stdout: {result.stdout[:1000]}")
 
             if result.returncode != 0 and model_calls == 0:
-                error_detail = (result.stderr or result.stdout or "")[:500]
-                # Classify the error from stdout/stderr content
+                # Prefer the structured failure message from the JSON event
+                # stream; under `--json` codex routes errors there and leaves
+                # stderr empty. The stdout fallback used to truncate to the
+                # opening `thread.started` chunk and lose the real cause.
+                error_detail = (
+                    last_error
+                    or (result.stderr or result.stdout or "")[:500]
+                )
+                # Classify the error from the captured detail
                 if any(kw in error_detail for kw in ("404", "No matching chute", "not found", "authentication", "401", "403")):
                     error_prefix = "api_error"
                 elif any(kw in error_detail for kw in ("Reconnecting", "connection", "network", "timeout")):
