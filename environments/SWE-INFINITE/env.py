@@ -223,7 +223,7 @@ class InfiniteActor:
         if cleaned > 0:
             print(f"[SWE-INFINITE] Cleaned up {cleaned} stale containers")
 
-    def _cleanup_docker_resources(self, current_image: str = None, max_images: int = 10) -> None:
+    def _cleanup_docker_resources(self, current_image: str = None, max_images: int = 310) -> None:
         """Clean up Docker resources to free disk space.
 
         Args:
