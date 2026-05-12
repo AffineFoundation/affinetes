@@ -28,6 +28,7 @@ from tenacity import (
 # Allow importing from parent directory (SWE-INFINITE/)
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from utils import (
+    DIFF_EXTENSIONS,
     SANITIZE_GIT_SCRIPT,
     NORMALIZE_TIMESTAMPS_SCRIPT,
     NETWORK_BLOCKLIST_SCRIPT,
@@ -322,8 +323,26 @@ class MiniSWEAgent:
             except Exception:
                 import traceback
                 error = traceback.format_exc()
-            finally:
-                self.cleanup()
+
+            # Fallback: harvest the diff straight from the container before
+            # cleanup. mini-swe-agent returns the final patch from agent.run(),
+            # but when it raises (most commonly LimitsExceeded at step_limit)
+            # the patch is lost even though the agent already wrote real edits
+            # to /app. Run git diff while the container is still alive.
+            if not patch and self._container_name:
+                try:
+                    diff_result = subprocess.run(
+                        ["docker", "exec", self._container_name, "bash", "-c",
+                         f"cd /app && git add -A && git diff --cached -- {DIFF_EXTENSIONS}"],
+                        capture_output=True, text=True, timeout=60,
+                    )
+                    fallback = diff_result.stdout.lstrip()
+                    if fallback:
+                        patch = fallback.rstrip("\n") + "\n"
+                except Exception:
+                    pass
+
+            self.cleanup()
 
             # 8. Extract usage stats
             total_tokens = 0
