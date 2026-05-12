@@ -149,7 +149,22 @@ class InfiniteActor:
         # Authenticate with Docker Hub to avoid pull rate limits
         self._setup_docker_auth()
 
-        # Initialize two-level cache (L1 local + L2 R2 public HTTP)
+        # Task cache. Tiers (TwoLevelCache picks the first hit):
+        #   L1  : local filesystem under cache_dir
+        #   L1.5: R2 PRIVATE staging via boto3 — INTERNAL only. Lets
+        #         internal evaluators read tasks that release_tasks.py
+        #         has staged but not yet promoted to the public bucket
+        #         (24h publication delay).
+        #   L2  : R2 public bucket via anonymous HTTP — only tasks
+        #         past the publication delay live here.
+        #
+        # Fallback policy: L1.5 is purely opt-in. If the R2_STAGING_*
+        # env vars (ENDPOINT / ACCESS_KEY / SECRET_KEY / BUCKET) are
+        # absent — or even partially set, or boto3 init throws —
+        # TwoLevelCache silently disables the staging tier and reads
+        # only go L1 -> L2. External (miner) deployments rely on this
+        # fallback: do NOT set the R2_STAGING_* env vars there, or the
+        # 24h delay is bypassed.
         self.cache = TwoLevelCache(
             local_cache_dir=cache_dir,
             r2_base_url=r2_base_url,
