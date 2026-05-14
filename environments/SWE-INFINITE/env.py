@@ -1007,7 +1007,8 @@ bash /workspace/entryscript.sh
 
         if agent == "codex":
             config = CodexConfig(
-                model=model, api_base=base_url, api_key=eval_api_key, timeout=timeout,
+                model=model, api_base=base_url, api_key=eval_api_key,
+                timeout=timeout, max_turns=max_iterations,
             )
             agent_obj = CodexAgent(config)
         elif agent == "affent":

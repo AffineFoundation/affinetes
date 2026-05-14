@@ -38,6 +38,7 @@ class CodexConfig:
     api_base: str
     api_key: str
     timeout: int = 1800
+    max_turns: int = 50
 
 
 @dataclass
@@ -93,6 +94,86 @@ class CodexAgent:
                 f"docker container lost: {(result.stderr or '').strip()[:300]}"
             )
         return result
+
+    def _exec_codex_with_turn_cap(
+        self,
+        cmd: str,
+        env: Dict[str, str],
+        stdin_data: str,
+        timeout: int,
+        max_turns: int,
+    ) -> subprocess.CompletedProcess:
+        """Run codex via docker exec; SIGTERM codex when turn_context count reaches max_turns.
+
+        codex 0.94 CLI has no native --max-turns flag, so we stream its --json
+        stdout and count `"type":"turn_context"` events. When the cap is hit,
+        we issue `pkill -TERM codex` inside the container, then keep draining
+        stdout until codex exits so the final patch / partial state isn't lost.
+        """
+        import time
+
+        docker_cmd = ["docker", "exec", "-i"]
+        for k, v in (env or {}).items():
+            docker_cmd.extend(["-e", f"{k}={v}"])
+        docker_cmd.extend([self._container_name, "bash", "-c", cmd])
+
+        proc = subprocess.Popen(
+            docker_cmd,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        if stdin_data is not None:
+            try:
+                proc.stdin.write(stdin_data)
+            finally:
+                proc.stdin.close()
+
+        stdout_parts: List[str] = []
+        turn_count = 0
+        cap_signalled = False
+        deadline = time.monotonic() + timeout
+        try:
+            for line in proc.stdout:
+                stdout_parts.append(line)
+                if '"type":"turn_context"' in line:
+                    turn_count += 1
+                    if turn_count >= max_turns and not cap_signalled:
+                        cap_signalled = True
+                        print(f"[CODEX] turn cap reached ({max_turns}), terminating codex")
+                        try:
+                            subprocess.run(
+                                ["docker", "exec", self._container_name,
+                                 "pkill", "-TERM", "-x", "codex"],
+                                capture_output=True, timeout=5,
+                            )
+                        except Exception:
+                            pass
+                if time.monotonic() > deadline:
+                    print(f"[CODEX] hard timeout {timeout}s reached, killing")
+                    proc.kill()
+                    raise subprocess.TimeoutExpired(docker_cmd, timeout)
+        finally:
+            try:
+                err = proc.stderr.read() if proc.stderr else ""
+            except Exception:
+                err = ""
+            try:
+                proc.wait(timeout=30)
+            except subprocess.TimeoutExpired:
+                proc.kill()
+                proc.wait()
+            stdout = "".join(stdout_parts)
+
+        if proc.returncode != 0 and is_container_lost(err or ""):
+            raise ContainerLostError(
+                f"docker container lost: {(err or '').strip()[:300]}"
+            )
+        return subprocess.CompletedProcess(
+            args=docker_cmd, returncode=proc.returncode, stdout=stdout, stderr=err or "",
+        )
 
     def _install_codex(self) -> bool:
         """Copy pre-built codex binary into the task container."""
@@ -329,13 +410,17 @@ class CodexAgent:
                 "--json "
                 "-"
             )
-            print(f"[CODEX] Running codex exec (timeout={self.config.timeout}s)...")
+            print(
+                f"[CODEX] Running codex exec (timeout={self.config.timeout}s, "
+                f"max_turns={self.config.max_turns})..."
+            )
             try:
-                result = self._exec(
+                result = self._exec_codex_with_turn_cap(
                     codex_cmd,
-                    timeout=self.config.timeout,
                     env={"CODEX_API_KEY": self.config.api_key},
                     stdin_data=prompt,
+                    timeout=self.config.timeout,
+                    max_turns=self.config.max_turns,
                 )
             except subprocess.TimeoutExpired:
                 return CodexResult(
