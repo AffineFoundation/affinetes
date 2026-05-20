@@ -28,23 +28,20 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
-import httpx
 
 logger = logging.getLogger(__name__)
 
 # ==================== Reuse QQR's MCP System ====================
 # Import from mcp_wrapper (copied from QQR to avoid slime dependency)
 from mcp_wrapper import MCPServerStdioCacheable, MCPServerStdioParams, MCPState
+from affent_runner import run_affent_agent
 
 # Import from local modules
 from config import (
     SYSTEM_PROMPT,
     MAX_TOOL_STEPS,
-    TOOLS_SCHEMA,
-    CHUTES_API_KEY,
     AMAP_MAPS_API_KEY,
     PYTHONPATH,
-    REQUIRED_TOOLS_BY_TYPE,
     REQUIRES_TRANSPORT,
 )
 from problem_generator import TravelProblem, get_generator
@@ -201,10 +198,6 @@ def mcp_server_config_fn() -> list:
     )
 
     return [amap_server, transport_server]
-
-
-class EmptyLLMResponseError(RuntimeError):
-    """LLM returned a response with no content and no tool_calls."""
 
 
 # ==================== Step Reward Calculator ====================
@@ -399,11 +392,6 @@ class Actor:
         self._mcp_initialized = False
 
         # ==================== Production Hardening ====================
-        # Shared HTTP client — reuse connection pool across evaluations
-        self._http_client = httpx.AsyncClient(
-            timeout=httpx.Timeout(360.0, connect=30.0),
-            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
-        )
         # Protect lazy initialization of _llm_validator from concurrent access
         self._init_lock = asyncio.Lock()
         # Limit max concurrent evaluations to prevent resource exhaustion
@@ -725,168 +713,87 @@ class Actor:
         task_id: Optional[int] = None,
         seed: Optional[int] = None,
         timeout: int = 300,
-        temperature: float = 0.7,
+        temperature: float = 0.7,    # accepted for af-eval compat; affentctl has no --temperature flag yet
         api_key: Optional[str] = None,
         collect_logprobs: bool = False,
     ) -> Dict[str, Any]:
-        """Complete evaluation flow using OpenAI Function Calling.
+        """Drive a real agent loop via affent (Go binary at /usr/local/bin/affentctl).
 
-        Two-phase design:
-        Phase 1 — Tool calling: model calls tools to gather information.
-        Phase 2 — Final answer: model produces a complete travel plan.
-                  If the model's natural answer is insufficient, an explicit
-                  final-answer prompt is sent (with tools=None to prevent
-                  further tool calls).
+        affent provides streaming, reasoning_content handling, transient-error retry,
+        stream watchdog, and context compaction — none of which the old in-Python
+        loop had. We spawn `affentctl run` per evaluation, read back the session
+        JSONL + trace JSONL, populate the episode's conversation/tool_trace, then
+        call step(tool_calls=None) to trigger scoring through the existing path.
         """
+        del temperature  # not piped through to affent yet
         start_time = datetime.now()
         seed = seed if seed is not None else random.randint(0, 2**32 - 1)
         task_id = task_id if task_id is not None else (seed & 0x7FFFFFFF)
         api_key = api_key or os.getenv("CHUTES_API_KEY")
 
-        # Lazy-init LLM evaluator when api_key arrives via evaluate() param
         if api_key and not self._llm_evaluator:
             async with self._init_lock:
-                # Double-check after acquiring lock
                 if not self._llm_evaluator:
                     self._llm_evaluator = get_llm_evaluator(api_key=api_key)
                     if self._llm_evaluator:
                         self._scorer = TravelScorer(llm_validator=self._llm_evaluator)
 
-        episode_id = None  # guard: ensure defined before try/finally
+        episode_id = None
+        total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+
         async with self._eval_semaphore:
             reset_resp = await self.reset(task_id=task_id, seed=seed)
             episode_id = reset_resp.episode_id
             ep = self._episodes[episode_id]
-
-            total_usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-
-            def _accum_usage(usage: dict):
-                if usage:
-                    total_usage["prompt_tokens"] += usage.get("prompt_tokens", 0)
-                    total_usage["completion_tokens"] += usage.get("completion_tokens", 0)
-                    total_usage["total_tokens"] += usage.get("total_tokens",
-                        usage.get("prompt_tokens", 0) + usage.get("completion_tokens", 0))
-                    total_usage["last_call"] = usage
-
-            final_content = None
-            llm_failed = False
+            user_prompt = reset_resp.observation
 
             try:
-                client = self._http_client
-                # ===== Phase 1: Tool-calling loop =====
-                for _ in range(MAX_TOOL_STEPS + 2):
-                    response = await self._call_llm(
-                        client=client,
-                        messages=ep.conversation,
-                        model=model,
-                        base_url=base_url,
-                        api_key=api_key,
-                        temperature=temperature,
-                        timeout=timeout,
-                        tools=TOOLS_SCHEMA,
+                affent_result = await run_affent_agent(
+                    user_prompt=user_prompt,
+                    model=model,
+                    base_url=base_url,
+                    api_key=api_key,
+                    epoch_salt=_EPOCH_SALT,
+                    timeout=timeout,
+                    max_turns=MAX_TOOL_STEPS + 2,
+                )
+
+                total_usage = affent_result["usage"]
+                final_answer = affent_result["final_answer"]
+
+                # affent's session JSONL is the canonical conversation: it includes
+                # our SYSTEM_PROMPT (passed via --system-prompt), the user prompt
+                # we sent on stdin, and every assistant/tool exchange.
+                ep.conversation = affent_result["conversation"] or ep.conversation
+                ep.tool_trace = affent_result["tool_trace"]
+
+                if not final_answer.strip():
+                    logger.warning(
+                        "affent produced no final answer (exit=%s); stderr_tail=%s",
+                        affent_result["exit_code"], affent_result["stderr_tail"][-512:],
                     )
+                    return {
+                        "task_name": "qqr",
+                        "score": 0.0,
+                        "success": False,
+                        "time_taken": (datetime.now() - start_time).total_seconds(),
+                        "extra": {
+                            "error": "Agent produced no final answer",
+                            "seed": seed,
+                            "task_id": task_id,
+                            "usage": total_usage,
+                            "agent": "affent",
+                            "tool_trace": ep.tool_trace,
+                        },
+                    }
 
-                    if response is None:
-                        logger.debug("LLM returned None in tool-calling phase")
-                        llm_failed = True
-                        break
-
-                    content = response.get("content") or ""
-                    tool_calls = response.get("tool_calls")
-                    usage = response.get("usage", {})
-                    logger.debug("LLM response: content_len=%d, tool_calls=%d", len(content), len(tool_calls) if tool_calls else 0)
-
-                    _accum_usage(usage)
-
-                    if tool_calls:
-                        logger.debug("tool_calls sample: %s", tool_calls[0])
-                        # Check if we'd exceed MAX_TOOL_STEPS — if so, stop
-                        # tool-calling and move to Phase 2 for a proper final answer
-                        if ep.current_step >= MAX_TOOL_STEPS:
-                            logger.debug("MAX_TOOL_STEPS reached (%d), ending tool phase", ep.current_step)
-                            final_content = content
-                            break
-                        # Execute tools via step() — returns done=False
-                        step_resp = await self.step(
-                            action=content,
-                            episode_id=episode_id,
-                            tool_calls=tool_calls,
-                        )
-                        # step() may terminate early on env errors (API quota etc)
-                        if step_resp.done:
-                            logger.debug("step() returned done=True, stopping evaluation")
-                            break
-                    else:
-                        # Model stopped calling tools — this is its natural answer
-                        final_content = content
-                        logger.debug("Model gave natural answer: len=%d", len(content))
-                        break
-
-                # ===== Phase 2: Ensure a complete final answer =====
-                if ep and not ep.done:
-                    if llm_failed and final_content is None:
-                        # LLM failed — retry up to 3 times with increasing delay
-                        for retry_i in range(3):
-                            wait_secs = 2 ** retry_i  # 1, 2, 4 seconds
-                            logger.debug("Retrying LLM call (%d/3) after %ds wait", retry_i+1, wait_secs)
-                            await asyncio.sleep(wait_secs)
-                            response = await self._call_llm(
-                                client=client,
-                                messages=ep.conversation,
-                                model=model,
-                                base_url=base_url,
-                                api_key=api_key,
-                                temperature=temperature,
-                                timeout=timeout,
-                                tools=TOOLS_SCHEMA,
-                            )
-                            if response:
-                                final_content = response.get("content") or ""
-                                tool_calls = response.get("tool_calls")
-                                _accum_usage(response.get("usage", {}))
-                                # If model wants to call tools, let it do one round
-                                if tool_calls and ep.current_step < MAX_TOOL_STEPS:
-                                    retry_step = await self.step(action=final_content, episode_id=episode_id, tool_calls=tool_calls)
-                                    if retry_step.done:
-                                        break
-                                    final_content = None  # Need another response
-                                    continue
-                                break
-
-                    if not self._is_substantive_answer(final_content, ep.problem):
-                        # Answer is not complete — explicitly request final answer
-                        # with tools=None so the model MUST produce text
-                        logger.debug("Answer not substantive (len=%d), requesting final answer", len(final_content or ''))
-                        prompt = self._build_final_answer_prompt(ep.problem)
-                        ep.conversation.append({"role": "user", "content": prompt})
-
-                        response = await self._call_llm(
-                            client=client,
-                            messages=ep.conversation,
-                            model=model,
-                            base_url=base_url,
-                            api_key=api_key,
-                            temperature=temperature,
-                            timeout=timeout,
-                            tools=None,  # No tools — force text answer
-                        )
-                        if response and (response.get("content") or "").strip():
-                            final_content = response.get("content")
-                            _accum_usage(response.get("usage", {}))
-                            logger.debug("Got final answer via explicit request: len=%d", len(final_content))
-                        else:
-                            # Final-answer call returned None / empty / whitespace —
-                            # don't fall through to score an empty answer.
-                            raise EmptyLLMResponseError(
-                                "Phase 2 final-answer call returned empty reply"
-                            )
-
-                    # Phase 3: Score with the final answer
-                    step_resp = await self.step(
-                        action=final_content or "",
-                        episode_id=episode_id,
-                        tool_calls=None,
-                    )
+                # Trigger scoring via the existing step() path (tool_calls=None branch
+                # handles env_error detection + scorer.score() + ep.final_score).
+                await self.step(
+                    action=final_answer,
+                    episode_id=episode_id,
+                    tool_calls=None,
+                )
 
                 final_ep = self._episodes.get(episode_id)
                 if not final_ep:
@@ -899,7 +806,6 @@ class Actor:
                     }
 
                 score = final_ep.final_score
-
                 conv = final_ep.conversation
 
                 result = {
@@ -922,10 +828,10 @@ class Actor:
                             sum(final_ep.step_rewards) / len(final_ep.step_rewards)
                             if final_ep.step_rewards else 0.0
                         ),
+                        "agent": "affent",
+                        "affent_exit_code": affent_result["exit_code"],
                     },
                 }
-                # Propagate LLM validator error to extra.error so callers
-                # can detect invalid evaluations without digging into breakdown.
                 llm_error = final_ep.score_breakdown.get("error")
                 if llm_error:
                     result["extra"]["error"] = llm_error
@@ -946,15 +852,28 @@ class Actor:
 
                 return result
 
-            except EmptyLLMResponseError as e:
-                logger.warning("Evaluation aborted: model returned empty reply: %s", e)
+            except FileNotFoundError as e:
+                logger.error("affent binary missing: %s", e)
                 return {
                     "task_name": "qqr",
                     "score": 0.0,
                     "success": False,
                     "time_taken": (datetime.now() - start_time).total_seconds(),
                     "extra": {
-                        "error": f"Model returned empty reply: {e}",
+                        "error": f"affent binary not available: {e}",
+                        "seed": seed,
+                        "task_id": task_id,
+                    },
+                }
+            except RuntimeError as e:
+                logger.warning("affent run failed: %s", e)
+                return {
+                    "task_name": "qqr",
+                    "score": 0.0,
+                    "success": False,
+                    "time_taken": (datetime.now() - start_time).total_seconds(),
+                    "extra": {
+                        "error": f"Agent run failed: {e}",
                         "seed": seed,
                         "task_id": task_id,
                         "usage": total_usage,
@@ -967,24 +886,6 @@ class Actor:
                 self._eval_count += 1
                 if self._eval_count % self._gc_interval == 0:
                     gc.collect()
-
-    def _is_substantive_answer(self, content: Optional[str], problem: TravelProblem) -> bool:
-        """Check if content is a substantive final answer worth scoring."""
-        if not content or len(content.strip()) < 200:
-            return False
-        type_patterns = {
-            "intercity": r'(航班|火车|高铁|飞机|车次)',
-            "multiday": r'(?:第\s*(?:\d+|[一二三四五六七八九十]+)\s*天|Day\s*\d+)',
-            "hybrid": r'(航班|火车|高铁|第\s*[一二三四五六七八九十\d]+\s*天|Day\s*\d+)',
-            "single_poi": r'(景点|游览|路线|门票|开放)',
-            "food_tour": r'(美食|餐厅|小吃|特色|推荐)',
-            "business": r'(航班|火车|高铁|酒店|商务)',
-            "family_study": r'(亲子|儿童|学习|博物馆|科技馆|体验)',
-        }
-        pattern = type_patterns.get(problem.problem_type)
-        if pattern:
-            return bool(re.search(pattern, content))
-        return True
 
     @staticmethod
     def _truncate_tool_result(content: str, max_chars: int = 2000) -> str:
@@ -1091,147 +992,6 @@ class Actor:
 
         return f"Environment error (not model fault): {len(env_errors)} tool call(s) failed due to API limit — {env_errors[0]}"
 
-    def _build_final_answer_prompt(self, problem: TravelProblem) -> str:
-        """Build a problem-type-specific prompt requesting the final answer."""
-        type_requirements = {
-            "intercity": (
-                "方案必须包含：\n"
-                "1. 具体的航班或火车车次推荐（包含编号、出发/到达时间、价格）\n"
-                "2. 目的地景点、酒店、餐厅推荐（使用工具查询到的具体名称和地址）\n"
-                "3. 天气情况及出行建议\n"
-                "4. 景点之间的交通路线和时间\n"
-                "5. 预算明细"
-            ),
-            "multiday": (
-                "方案必须按天安排（第一天、第二天...），每天包含：\n"
-                "1. 景点安排（使用工具查询到的具体名称和地址）\n"
-                "2. 景点之间的交通路线和所需时间\n"
-                "3. 餐饮推荐\n"
-                "4. 住宿推荐\n"
-                "5. 天气情况及注意事项\n"
-                "6. 每日预算"
-            ),
-            "hybrid": (
-                "方案必须包含：\n"
-                "1. 城际交通推荐（航班/火车车次、时间、价格）\n"
-                "2. 按天安排的详细行程（第一天、第二天...）\n"
-                "3. 每天的景点、餐饮、交通安排\n"
-                "4. 天气情况\n"
-                "5. 总体预算"
-            ),
-            "single_poi": (
-                "方案必须包含：\n"
-                "1. 景点详细信息（名称、地址、门票、开放时间）\n"
-                "2. 周边推荐（餐厅、住宿等，使用工具查询到的具体名称）\n"
-                "3. 游览路线建议及交通方式\n"
-                "4. 天气情况及出行建议"
-            ),
-            "food_tour": (
-                "方案必须包含：\n"
-                "1. 具体的美食/餐厅推荐（使用工具查询到的名称和地址）\n"
-                "2. 推荐的美食路线和顺序\n"
-                "3. 各餐厅之间的交通方式和时间\n"
-                "4. 特色菜品推荐\n"
-                "5. 天气情况\n"
-                "6. 预算建议"
-            ),
-            "business": (
-                "方案必须包含：\n"
-                "1. 航班或火车车次推荐（编号、时间、价格）\n"
-                "2. 商务酒店推荐（名称、地址、价格）\n"
-                "3. 会议/办公相关设施\n"
-                "4. 商务餐饮推荐\n"
-                "5. 天气情况\n"
-                "6. 详细的时间安排"
-            ),
-            "family_study": (
-                "方案必须包含：\n"
-                "1. 亲子/研学景点推荐（博物馆、科技馆等，具体名称和地址）\n"
-                "2. 适合儿童的体验活动\n"
-                "3. 景点之间的交通路线\n"
-                "4. 亲子餐饮推荐\n"
-                "5. 天气情况及安全提示\n"
-                "6. 预算明细"
-            ),
-        }
-
-        requirements = type_requirements.get(
-            problem.problem_type,
-            "方案必须包含具体的地点名称、交通安排、时间规划和预算明细。"
-        )
-
-        return (
-            "请根据以上所有工具查询到的信息，给出完整、详细的旅行规划方案。\n\n"
-            f"{requirements}\n\n"
-            "**重要**：方案中的所有地点名称、交通信息、价格等必须来自工具查询结果，不要编造。\n"
-            "请直接输出完整方案，不要再调用任何工具。"
-        )
-
-    async def _call_llm(
-        self,
-        client: httpx.AsyncClient,
-        messages: List[Dict],
-        model: str,
-        base_url: str,
-        api_key: str,
-        temperature: float,
-        timeout: int,
-        tools: Optional[List[Dict]] = None,
-    ) -> Optional[Dict[str, Any]]:
-        """Call LLM API with OpenAI Function Calling support."""
-        try:
-            payload = {
-                "model": model,
-                "messages": messages,
-                "temperature": temperature,
-                "max_tokens": 4096,
-            }
-
-            if tools:
-                payload["tools"] = tools
-                payload["tool_choice"] = "auto"
-
-            logger.debug("Sending messages count: %d", len(messages))
-
-            resp = await client.post(
-                f"{base_url}/chat/completions",
-                headers={"Authorization": f"Bearer {api_key}"},
-                json=payload,
-                timeout=float(timeout),
-            )
-
-            if resp.status_code != 200:
-                logger.debug("LLM API Error: %d - %s", resp.status_code, resp.text[:500])
-                return None
-            logger.debug("LLM API success, parsing response")
-
-            data = resp.json()
-            choice = data.get("choices", [{}])[0]
-            message = choice.get("message", {})
-
-            content = message.get("content") or ""
-            tool_calls = message.get("tool_calls")
-            result = {
-                "content": content,
-                "tool_calls": tool_calls,
-                "usage": data.get("usage", {}),
-            }
-
-        except EmptyLLMResponseError:
-            raise
-        except Exception as e:
-            logger.error("LLM API Exception: %s", e, exc_info=True)
-            return None
-
-        # Empty response (no text, no tool_calls) is a model failure —
-        # raise so evaluate() returns a clean error instead of silently
-        # scoring an empty answer as 0.0. Raised outside the try/except
-        # above so it isn't swallowed by the generic exception handler.
-        if not content.strip() and not tool_calls:
-            raise EmptyLLMResponseError("Phase 1 LLM call returned empty reply (no content, no tool_calls)")
-
-        return result
-
     def _format_tool_results(self, results: List[Dict]) -> str:
         """Format tool return results."""
         return "\n\n".join(
@@ -1263,12 +1023,9 @@ class Actor:
         return stats
 
     async def cleanup(self):
-        """Clean up resources — close MCP servers, HTTP client, and release memory."""
+        """Clean up resources — close MCP servers and release memory."""
         # Clear any lingering episodes
         self._episodes.clear()
-        # Close shared HTTP client
-        if self._http_client:
-            await self._http_client.aclose()
         # Shut down MCP servers
         if self._mcp_state:
             try:
