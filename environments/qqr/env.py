@@ -730,14 +730,15 @@ class Actor:
         task_id = task_id if task_id is not None else (seed & 0x7FFFFFFF)
         api_key = api_key or os.getenv("CHUTES_API_KEY")
 
-        # Judge always uses CHUTES_API_KEY from env (with DashScope fallback inside
-        # the validator). Do NOT reuse the agent's api_key here — when callers point
-        # the agent at DashScope, that key won't authenticate against Chutes and
-        # the whole judge chain collapses to "all models failed".
-        if os.getenv("CHUTES_API_KEY") and not self._llm_evaluator:
+        # Judge picks up its own endpoint creds (CHUTES_API_KEY primary,
+        # DASHSCOPE_API_KEY backstop). Either may be absent; the validator
+        # returns None if neither is set. Do not pipe the agent's api_key
+        # through — when the agent runs against DashScope, that key would
+        # mis-authenticate against the Chutes base_url.
+        if not self._llm_evaluator:
             async with self._init_lock:
                 if not self._llm_evaluator:
-                    self._llm_evaluator = get_llm_evaluator()  # picks up CHUTES_API_KEY itself
+                    self._llm_evaluator = get_llm_evaluator()
                     if self._llm_evaluator:
                         self._scorer = TravelScorer(llm_validator=self._llm_evaluator)
 

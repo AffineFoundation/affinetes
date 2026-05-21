@@ -224,16 +224,17 @@ class LLMScorerGroup(ABC):
     def __init__(
         self,
         models: List[str],
-        client: AsyncOpenAI,
+        client: Optional[AsyncOpenAI],
         timeout: int = 180,
         fallback_client: Optional[AsyncOpenAI] = None,
         fallback_model_map: Optional[Dict[str, str]] = None,
     ):
+        if client is None and fallback_client is None:
+            raise ValueError("at least one of client/fallback_client must be configured")
         self.models = models
-        self.client = client
+        self.client = client                       # primary; None ⇒ skip and use fallback directly
         self.timeout = timeout
-        # Optional fallback (e.g. official Qwen API when Chutes is down)
-        self.fallback_client = fallback_client
+        self.fallback_client = fallback_client     # stable backstop (e.g. official Qwen API)
         self.fallback_model_map = fallback_model_map or {}
 
     @property
@@ -282,14 +283,17 @@ class LLMScorerGroup(ABC):
     FALLBACK_RETRIES = 3
 
     async def _call_one(self, model: str, prompt: str) -> Optional[Dict[str, Any]]:
-        """Try primary; on failure retry the configured fallback up to N times."""
-        result = await self._do_call(self.client, model, prompt, model)
-        if result is not None:
-            return result
+        """Try primary; on failure (or when no primary is configured) retry the
+        fallback endpoint up to N times."""
+        if self.client is not None:
+            result = await self._do_call(self.client, model, prompt, model)
+            if result is not None:
+                return result
         fb_model = self.fallback_model_map.get(model)
         if not (self.fallback_client and fb_model):
             return None
-        print(f"[{self.group_name}] {model} primary failed → fallback to {fb_model}")
+        if self.client is not None:
+            print(f"[{self.group_name}] {model} primary failed → fallback to {fb_model}")
         for attempt in range(self.FALLBACK_RETRIES):
             suffix = f" retry{attempt}" if attempt else ""
             result = await self._do_call(
@@ -469,7 +473,7 @@ class LLMEvaluator:
 
     def __init__(
         self,
-        client: AsyncOpenAI,
+        client: Optional[AsyncOpenAI],
         models: List[str],
         fallback_client: Optional[AsyncOpenAI] = None,
         fallback_model_map: Optional[Dict[str, str]] = None,
@@ -1148,8 +1152,10 @@ def get_llm_evaluator(
 ) -> Optional[LLMEvaluator]:
     """Get or create the default LLMEvaluator singleton.
 
-    Primary: Chutes (api_key or CHUTES_API_KEY env var).
-    Fallback: official Qwen DashScope (DASHSCOPE_API_KEY env var, optional).
+    Endpoints:
+      - Chutes (primary, fast):  api_key or CHUTES_API_KEY env var
+      - DashScope (stable backstop): DASHSCOPE_API_KEY env var
+    Either may be absent; at least one must be set or the judge is disabled.
     """
     global _default_evaluator
     if _default_evaluator is None:
@@ -1157,21 +1163,19 @@ def get_llm_evaluator(
             LLM_MODELS, QWEN_FALLBACK_API_KEY,
             QWEN_FALLBACK_BASE_URL, QWEN_FALLBACK_MODEL_MAP,
         )
-        key = api_key or os.getenv("CHUTES_API_KEY")
-        if not key:
+        chutes_key = api_key or os.getenv("CHUTES_API_KEY")
+        primary = AsyncOpenAI(base_url=base_url, api_key=chutes_key) if chutes_key else None
+        fallback = (
+            AsyncOpenAI(base_url=QWEN_FALLBACK_BASE_URL, api_key=QWEN_FALLBACK_API_KEY)
+            if QWEN_FALLBACK_API_KEY else None
+        )
+        if primary is None and fallback is None:
             return None
-        client = AsyncOpenAI(base_url=base_url, api_key=key)
-        fallback_client = None
-        if QWEN_FALLBACK_API_KEY:
-            fallback_client = AsyncOpenAI(
-                base_url=QWEN_FALLBACK_BASE_URL,
-                api_key=QWEN_FALLBACK_API_KEY,
-            )
         _default_evaluator = LLMEvaluator(
-            client=client,
+            client=primary,
             models=LLM_MODELS,
-            fallback_client=fallback_client,
-            fallback_model_map=QWEN_FALLBACK_MODEL_MAP if fallback_client else None,
+            fallback_client=fallback,
+            fallback_model_map=QWEN_FALLBACK_MODEL_MAP if fallback else None,
         )
     return _default_evaluator
 
