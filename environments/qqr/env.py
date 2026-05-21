@@ -678,11 +678,10 @@ class Actor:
                 ep._score_breakdown_full = score_result.to_dict()
 
                 if score_result.llm_validation_error:
-                    # LLM validator unavailable after all retries/fallbacks.
-                    # Code scores are computed and available in breakdown for
-                    # diagnostics, but evaluation is marked invalid for fairness:
-                    # comparing scores with/without LLM 30-pt bonus is unfair.
-                    ep.final_score = score_result.total
+                    # No working judge → score is invalid. Force 0 + error so
+                    # callers filter on error; code breakdown stays available
+                    # for diagnostics.
+                    ep.final_score = 0.0
                     ep.score_breakdown["error"] = (
                         f"LLM validator unavailable: {score_result.llm_validation_error}"
                     )

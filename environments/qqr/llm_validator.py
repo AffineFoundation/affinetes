@@ -276,17 +276,30 @@ class LLMScorerGroup(ABC):
             print(f"[{self.group_name}] {label} error: {e}")
         return None
 
+    # Chutes primary stays single-attempt — its failure modes (empty content,
+    # slow timeouts on long prompts) don't recover on retry. DashScope is the
+    # stable backstop and its failures (429, network, brief timeout) usually do.
+    FALLBACK_RETRIES = 3
+
     async def _call_one(self, model: str, prompt: str) -> Optional[Dict[str, Any]]:
-        """Try primary judge, fall back to alt endpoint on failure."""
+        """Try primary; on failure retry the configured fallback up to N times."""
         result = await self._do_call(self.client, model, prompt, model)
         if result is not None:
             return result
-        # Fallback (e.g. official Qwen API) — only if configured for this model
         fb_model = self.fallback_model_map.get(model)
-        if self.fallback_client and fb_model:
-            print(f"[{self.group_name}] {model} primary failed → fallback to {fb_model}")
-            result = await self._do_call(self.fallback_client, fb_model, prompt, f"{fb_model}(fallback)")
-        return result
+        if not (self.fallback_client and fb_model):
+            return None
+        print(f"[{self.group_name}] {model} primary failed → fallback to {fb_model}")
+        for attempt in range(self.FALLBACK_RETRIES):
+            suffix = f" retry{attempt}" if attempt else ""
+            result = await self._do_call(
+                self.fallback_client, fb_model, prompt, f"{fb_model}(fallback{suffix})"
+            )
+            if result is not None:
+                return result
+            if attempt < self.FALLBACK_RETRIES - 1:
+                await asyncio.sleep(2 ** attempt)  # 1s, 2s
+        return None
 
     async def evaluate(self, context: Dict[str, Any]) -> Dict[str, Any]:
         """Run all models in parallel, take per-dimension median.
@@ -421,7 +434,12 @@ class UnifiedScorer(LLMScorerGroup):
         )
 
     def parse_response(self, content: str) -> Optional[Dict[str, Any]]:
-        """Parse unified scorer response into 5 dimension scores."""
+        """Parse unified scorer response into 5 dimension scores.
+
+        Returns None when the JSON parses but carries none of the expected
+        dimension keys; without this check ``{}`` or an error envelope would
+        silently become all-zero scores and suppress the fallback chain.
+        """
         try:
             json_str = content
             if "```json" in content:
@@ -430,6 +448,9 @@ class UnifiedScorer(LLMScorerGroup):
                 json_str = content.split("```")[1].split("```")[0]
 
             data = json.loads(json_str.strip())
+            if not isinstance(data, dict) or not any(d in data for d in self.dimension_names):
+                return None
+
             result = {}
             for dim in self.dimension_names:
                 score, reason = _extract_dimension_score(data.get(dim, 0))
