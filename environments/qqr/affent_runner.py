@@ -245,7 +245,10 @@ async def run_affent_agent(
             raise RuntimeError(f"affentctl timed out after {timeout}s")
 
         stderr_tail = stderr.decode(errors="replace")[-2048:]
-        if proc.returncode != 0:
+        # affentctl exit codes: 0 completed, 2 max_turns, 3 error, 130 cancelled.
+        # max_turns means the agent did real work, just didn't finish naturally —
+        # the trace + session log are complete, so let the scorer grade what we have.
+        if proc.returncode not in (0, 2):
             # Pull the error event from the trace JSONL — gives a much more useful
             # message than the raw stderr (which is INFO-level zerolog noise).
             trace_error = _extract_first_error_event(trace_file)

@@ -293,8 +293,8 @@ LLM_SCORE_WEIGHTS = {
 
 # Unified LLM evaluation model list (single call for all 5 dimensions)
 LLM_MODELS = [
-    "Qwen/Qwen3-235B-A22B-Instruct-2507-TEE",
-    "Qwen/Qwen2.5-72B-Instruct",
+    "Qwen/Qwen3.5-397B-A17B-TEE",
+    "Qwen/Qwen3.6-27B-TEE",
 ]
 
 # Official Qwen DashScope API as fallback when Chutes judges fail.
@@ -302,8 +302,8 @@ LLM_MODELS = [
 QWEN_FALLBACK_BASE_URL = "https://dashscope.aliyuncs.com/compatible-mode/v1"
 QWEN_FALLBACK_API_KEY = os.getenv("DASHSCOPE_API_KEY", "")
 QWEN_FALLBACK_MODEL_MAP = {
-    "Qwen/Qwen3-235B-A22B-Instruct-2507-TEE": "qwen3-235b-a22b-instruct-2507",
-    "Qwen/Qwen2.5-72B-Instruct": "qwen2.5-72b-instruct",
+    "Qwen/Qwen3.5-397B-A17B-TEE": "qwen3.5-397b-a17b",
+    "Qwen/Qwen3.6-27B-TEE": "qwen3.6-27b",
 }
 
 # Total scores

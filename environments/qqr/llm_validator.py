@@ -225,7 +225,7 @@ class LLMScorerGroup(ABC):
         self,
         models: List[str],
         client: AsyncOpenAI,
-        timeout: int = 60,
+        timeout: int = 180,
         fallback_client: Optional[AsyncOpenAI] = None,
         fallback_model_map: Optional[Dict[str, str]] = None,
     ):
@@ -264,7 +264,7 @@ class LLMScorerGroup(ABC):
                     model=model,
                     messages=[{"role": "user", "content": prompt}],
                     temperature=0,
-                    max_tokens=2000,
+                    max_tokens=8000,  # Qwen reasoning models burn tokens on CoT before emitting JSON
                 ),
                 timeout=self.timeout,
             )

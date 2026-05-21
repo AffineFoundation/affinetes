@@ -7,7 +7,7 @@ FROM golang:1.23-bookworm AS affent-build
 
 # Pin commit for reproducibility. Update when affent ships a fix we need.
 ARG AFFENT_REPO=https://github.com/AffineFoundation/affent.git
-ARG AFFENT_REF=cc4f423
+ARG AFFENT_REF=dbf9df9
 
 WORKDIR /src
 RUN apt-get update && apt-get install -y --no-install-recommends git ca-certificates \
