@@ -79,19 +79,24 @@ def _strip_mcp_prefix(name: str) -> Tuple[str, bool]:
 
 
 def _parse_trace_events(trace_path: Path) -> Dict[str, Any]:
-    """Walk affent's trace JSONL and pull out tool_trace, usage, final_answer.
+    """Walk affent's trace JSONL and pull out tool_trace + usage.
 
     Tool requests/results are matched by call_id. Builtin tool calls (shell/read_file/
     write_file/edit_file/list_files) are filtered out — qqr scoring only looks at
     travel-planning tool calls.
+
+    final_answer extraction is NOT done here. A `message.done` event fires for any
+    assistant content, including the preamble paragraph the model emits alongside
+    its first tool_calls; using it as the final answer would let mid-turn chatter
+    score as if the agent had produced a plan. Derive final_answer from the session
+    conversation instead — see _extract_final_answer.
     """
     pending_requests: Dict[str, Dict[str, Any]] = {}
     tool_trace: List[Dict[str, Any]] = []
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
-    final_answer = ""
 
     if not trace_path.exists():
-        return {"tool_trace": tool_trace, "usage": usage, "final_answer": final_answer}
+        return {"tool_trace": tool_trace, "usage": usage}
 
     for line in trace_path.read_text().splitlines():
         if not line.strip():
@@ -122,16 +127,33 @@ def _parse_trace_events(trace_path: Path) -> Dict[str, Any]:
                 "arguments": req["args"],
                 "result": {"text": result_text},
             })
-        elif etype == "message.done":
-            text = payload.get("text") or ""
-            if text.strip():
-                final_answer = text  # last non-empty assistant content wins
         elif etype == "usage":
             usage["prompt_tokens"] += payload.get("input_tokens", 0) or 0
             usage["completion_tokens"] += payload.get("output_tokens", 0) or 0
             usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
 
-    return {"tool_trace": tool_trace, "usage": usage, "final_answer": final_answer}
+    return {"tool_trace": tool_trace, "usage": usage}
+
+
+def _extract_final_answer(conversation: List[Dict[str, Any]]) -> str:
+    """Return the agent's genuine final plan, or "" if it never produced one.
+
+    A "final answer" is the last assistant message with non-empty content AND no
+    tool_calls — i.e. the model deliberately stopped calling tools and synthesized
+    a plan. Assistant messages that still carry tool_calls are mid-turn preamble
+    text that travels alongside a tool dispatch; scoring those as final answers
+    rewards models for talking while they call tools rather than for actually
+    producing a plan.
+    """
+    for msg in reversed(conversation):
+        if msg.get("role") != "assistant":
+            continue
+        if msg.get("tool_calls"):
+            continue
+        content = (msg.get("content") or "").strip()
+        if content:
+            return content
+    return ""
 
 
 def _extract_first_error_event(trace_path: Path) -> Optional[str]:
@@ -261,18 +283,10 @@ async def run_affent_agent(
         conversation = _parse_session_log(session_log)
         trace = _parse_trace_events(trace_file)
 
-        # Fallback: if the trace yielded no final answer (e.g. model stopped
-        # via tool budget), pull the last assistant content from the session log.
-        if not trace["final_answer"]:
-            for msg in reversed(conversation):
-                if msg.get("role") == "assistant" and (msg.get("content") or "").strip():
-                    trace["final_answer"] = msg["content"]
-                    break
-
         return {
             "conversation": conversation,
             "tool_trace": trace["tool_trace"],
-            "final_answer": trace["final_answer"],
+            "final_answer": _extract_final_answer(conversation),
             "usage": trace["usage"],
             "exit_code": proc.returncode,
             "stderr_tail": stderr_tail,
