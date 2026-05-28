@@ -51,6 +51,13 @@ if "/app" not in sys.path:
     sys.path.insert(0, "/app")
 
 
+# Public R2 bucket holding the published rollout shards. Hardcoded so
+# callers don't need to pass ``dataset_base_url`` or set the env var on
+# every host; override at runtime via ``DISTILL_V2_DATASET_BASE_URL`` if
+# the dataset ever moves.
+_DEFAULT_DATASET_BASE_URL = "https://pub-f6e8aaa82d31450daad5b16e3ca040b1.r2.dev"
+
+
 class Actor:
     """Distill-V2 evaluator actor.
 
@@ -104,8 +111,10 @@ class Actor:
 
         start = time.time()
         try:
-            dataset_base_url = dataset_base_url or os.getenv(
-                "DISTILL_V2_DATASET_BASE_URL", ""
+            dataset_base_url = (
+                dataset_base_url
+                or os.getenv("DISTILL_V2_DATASET_BASE_URL", "")
+                or _DEFAULT_DATASET_BASE_URL
             )
             self._require("model", model)
             self._require("base_url", base_url)
