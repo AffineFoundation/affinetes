@@ -57,7 +57,16 @@ class VLLMLogprobEngine:
         *,
         base_url: str,
         model_name: str,
-        request_timeout_s: float = 300.0,
+        # Per-forward read timeout against the miner's vLLM endpoint. A
+        # single cell forwards N (8~13) rollouts serially, each an
+        # ``echo=true`` full-prompt prefill of up to ~tens of thousands of
+        # tokens. Slow / loaded miner endpoints routinely take minutes on
+        # one such request; at the old 300s default every such cell hit
+        # ReadTimeout and the whole task was scored INVALID, so distill-v2
+        # produced almost no samples. 600s lets a slow endpoint finish a
+        # single forward while staying under cortex's outer proxy timeout
+        # (1260s) for the cell as a whole.
+        request_timeout_s: float = 600.0,
     ) -> None:
         self._base_url = base_url.rstrip("/")
         self._model_name = model_name
@@ -135,12 +144,19 @@ class VLLMLogprobEngine:
     def _score_one(self, sample: RenderedSample) -> CEMeasurement:
         # vLLM accepts a list of token IDs as the prompt; sending IDs avoids
         # re-tokenization drift (the renderer already used the right vocab).
+        #
+        # ``max_tokens`` and ``logprobs`` are both set to 1 (not 0) because
+        # sglang rejects ``max_tokens=0`` (400 "must be positive") and
+        # crashes on ``logprobs=0`` with echo=true ("input_top_logprobs"
+        # KeyError, 500). vLLM accepts these values too. ``_ce_from_logprobs``
+        # truncates to ``len(loss_mask)`` so the extra trailing generated
+        # token doesn't enter the CE sum.
         payload = {
             "model": self._model_name,
             "prompt": list(sample.input_ids),
-            "max_tokens": 0,
+            "max_tokens": 1,
             "echo": True,
-            "logprobs": 0,
+            "logprobs": 1,
             "temperature": 0,
         }
         resp = self._client.post(f"{self._base_url}/completions", json=payload)  # type: ignore[union-attr]

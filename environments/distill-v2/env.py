@@ -34,7 +34,7 @@ Contract (affinetes' standard Actor protocol):
         hf_repo="<owner/repo>",              # tokenizer source; defaults to model
         arch="qwen",                         # renderer family
         dataset_base_url="https://...",      # R2 base URL (or DISTILL_V2_DATASET_BASE_URL env var)
-        scoring_name="ce_diff",
+        scoring_name="reward_weighted_ce",
         max_seq_len=32768,
     )
 """
@@ -101,7 +101,7 @@ class Actor:
         # dataset location once at container start.
         dataset_base_url: str = "",
         # scoring knobs
-        scoring_name: str = "ce_diff",
+        scoring_name: str = "reward_weighted_ce",
         dtype: str = "bfloat16",
         max_seq_len: int = 32768,
         mask_reasoning: bool = True,
