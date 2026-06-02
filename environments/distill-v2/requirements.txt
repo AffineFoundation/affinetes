@@ -4,7 +4,11 @@
 # caller's vLLM endpoint), no SQLAlchemy/asyncpg (rollouts come from a
 # parquet URL on R2, not PG).
 httpx>=0.27
-transformers>=4.43
+# Pinned: ``>=`` let build-time version drift to a release whose lazy
+# ``from transformers import AutoTokenizer`` failed at runtime (ImportError),
+# which scored every distill-v2 cell INVALID in ~1-2s. Pin so the image is
+# reproducible.
+transformers==5.9.0
 sentencepiece>=0.2
 pydantic>=2.7
 pydantic-settings>=2.3
