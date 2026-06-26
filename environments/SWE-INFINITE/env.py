@@ -44,6 +44,8 @@ from utils import (
     parse_test_output,
 )
 from canary import generate_canary, verify_canary
+from boundary import sanitize_fix_patch, extract_patch_paths
+from oracle import build_oracle, ORACLE_OUT as ORACLE_OUT_PATH
 
 # Timeout constants (seconds)
 DOCKER_PULL_TIMEOUT = 300
@@ -98,6 +100,8 @@ STDOUT_BEGIN = "===SWE_INFINITE_STDOUT_BEGIN==="
 STDOUT_END = "===SWE_INFINITE_STDOUT_END==="
 STDERR_BEGIN = "===SWE_INFINITE_STDERR_BEGIN==="
 STDERR_END = "===SWE_INFINITE_STDERR_END==="
+ORACLE_BEGIN = "===SWE_INFINITE_ORACLE_BEGIN==="
+ORACLE_END = "===SWE_INFINITE_ORACLE_END==="
 # Legacy combined marker (kept for backward compat)
 OUTPUT_BEGIN = "===SWE_INFINITE_OUTPUT_BEGIN==="
 OUTPUT_END = "===SWE_INFINITE_OUTPUT_END==="
@@ -403,10 +407,42 @@ class InfiniteActor:
         canary_inject = canary["inject_cmds"] if canary else ""
         effective_test_command = canary["test_command"] if canary else test_command
 
+        # Verifier boundary (static half): the fix_patch must only touch
+        # implementation source. Any edit to a verifier-owned test path or a
+        # test-runner control surface (conftest.py / pytest.py / *_test.go with
+        # TestMain / .rspec / spec_helper.rb / ...) would let the miner force the
+        # graded tests to pass while leaving the canaries failing. Reject such a
+        # submission outright instead of silently stripping it, so cheating
+        # surfaces as score=0 with an explicit reason. The dynamic half
+        # (materializing the verifier tests *after* fix_patch) is enforced by the
+        # apply order in the entryscript below.
+        verifier_paths = extract_patch_paths(test_patch) | extract_patch_paths(augmented_test_patch)
+        boundary_violations = sanitize_fix_patch(fix_patch, verifier_paths)
+        if boundary_violations:
+            return 0.0, {
+                "error": "fix_patch_boundary_violation",
+                "violations": boundary_violations[:20],
+            }
+
         try:
-            # Build verification entry script
-            # Apply order: test_patch -> augmented_test_patch -> fix_patch
-            # test_patch contains the augmented/enhanced tests not baked into the image.
+            # Build verification entry script.
+            #
+            # Apply order (verifier-boundary, dynamic half):
+            #   fix_patch -> restore verifier paths -> test_patch -> augmented_test_patch
+            #
+            # The miner's fix_patch is applied FIRST, then the verifier tests are
+            # materialized on top. This guarantees the graded tests are the
+            # verifier's pristine version even if the fix_patch somehow reached a
+            # test file: any such edit is overwritten here. `git checkout` of the
+            # known verifier paths is a belt-and-suspenders reset before the test
+            # patches re-apply (no-op for brand-new test files).
+            restore_steps = []
+            if verifier_paths:
+                # cwd is /app (repo root); use repo-relative pathspecs.
+                quoted = " ".join(f"'{p}'" for p in sorted(verifier_paths))
+                restore_steps.append(f"git checkout -- {quoted} 2>/dev/null || true")
+            restore_cmds = "\n".join(restore_steps)
+
             apply_steps = []
             if test_patch and test_patch.strip():
                 apply_steps.append(
@@ -431,21 +467,43 @@ class InfiniteActor:
                 'commit -m "test setup" --quiet --allow-empty >/dev/null 2>&1 || true'
             )
 
+            # Layer 2: trusted out-of-repo oracle (per language; see oracle.py).
+            # Loaded before any model/test module imports, it reports the
+            # authoritative per-test outcome out-of-band and flags in-process
+            # runner tampering that A+B cannot catch because it lives in a
+            # regular implementation source file the fix legitimately edits.
+            # Kill-switch: SWE_INFINITE_DISABLE_ORACLE=1 disables Layer 2 (ops
+            # fallback if the plugin ever misbehaves on an exotic repo).
+            oracle_setup = ""
+            oracle_emit = ""
+            use_oracle = False
+            if not os.getenv("SWE_INFINITE_DISABLE_ORACLE"):
+                oracle_setup = build_oracle(language, test_command, test_patch, augmented_test_patch)
+                if oracle_setup:
+                    use_oracle = True
+                    oracle_emit = (
+                        'echo "' + ORACLE_BEGIN + '"\n'
+                        'cat ' + ORACLE_OUT_PATH + ' 2>/dev/null || true\n'
+                        'echo "' + ORACLE_END + '"\n'
+                    )
+
             entryscript = f"""
 {NETWORK_BLOCKLIST_SCRIPT}
 cd /app
-{apply_cmds}
+export PYTHONDONTWRITEBYTECODE=1
 git apply --recount --whitespace=fix /workspace/fix_patch.diff 2>&1 || {{ echo "PATCH_APPLY_FAILED"; }}
+{restore_cmds}
+{apply_cmds}
 {canary_inject}
 {git_seal_cmd}
-{effective_test_command} > /workspace/stdout.log 2> /workspace/stderr.log || true
+{oracle_setup}{effective_test_command} > /workspace/stdout.log 2> /workspace/stderr.log || true
 echo "{STDOUT_BEGIN}"
 cat /workspace/stdout.log
 echo "{STDOUT_END}"
 echo "{STDERR_BEGIN}"
 cat /workspace/stderr.log
 echo "{STDERR_END}"
-"""
+{oracle_emit}"""
 
             fix_patch_b64 = base64.b64encode(fix_patch.encode('utf-8')).decode('ascii')
             entryscript_b64 = base64.b64encode(entryscript.encode('utf-8')).decode('ascii')
@@ -533,6 +591,58 @@ bash /workspace/entryscript.sh
                     errors = int(summary_m.group(3))
                     if total > 0 and failures == 0 and errors == 0:
                         passed_tests = all_required.copy()
+
+            # Layer 2: if the trusted oracle plugin ran, its out-of-band outcomes
+            # are authoritative (defeats fabricated/suppressed stdout) and its
+            # integrity verdict flags in-process runner tampering.
+            if use_oracle and ORACLE_BEGIN in container_stdout and ORACLE_END in container_stdout:
+                oracle_blob = container_stdout[
+                    container_stdout.index(ORACLE_BEGIN) + len(ORACLE_BEGIN):
+                    container_stdout.index(ORACLE_END)
+                ]
+                o_passed, o_failed = set(), set()
+                integrity_ok, integrity_reasons, finished = None, [], False
+                go_exit = None
+                for line in oracle_blob.splitlines():
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        ev = json.loads(line)
+                    except (json.JSONDecodeError, TypeError):
+                        continue
+                    if ev.get("event") == "test" and ev.get("nodeid"):
+                        (o_passed if ev.get("outcome") == "passed" else o_failed).add(ev["nodeid"])
+                    elif ev.get("event") == "finish":
+                        finished = True
+                        integrity_ok = ev.get("integrity_ok")
+                        integrity_reasons = ev.get("reasons", [])
+                        go_exit = ev.get("go_exit")
+                if finished:
+                    if go_exit is not None:
+                        # Go cross-check: a trusted TestMain reported the REAL
+                        # aggregate exit code. stdout claiming all-pass while the
+                        # real run had failures (or vice versa) means the
+                        # `go test -json` stream was fabricated/suppressed.
+                        if (go_exit == 0) != (len(failed_tests) == 0):
+                            return 0.0, {
+                                "error": "runner_integrity_violation",
+                                "reasons": [
+                                    "go_aggregate_mismatch",
+                                    f"go_exit={go_exit}",
+                                    f"stdout_failures={len(failed_tests)}",
+                                ],
+                            }
+                    elif integrity_ok is False:
+                        return 0.0, {
+                            "error": "runner_integrity_violation",
+                            "reasons": integrity_reasons[:10],
+                        }
+                    # Trust the oracle's per-test outcomes when it emitted them
+                    # (python/ruby/js). Go emits only the aggregate, so keep the
+                    # stdout-parsed per-test results.
+                    if o_passed or o_failed:
+                        passed_tests, failed_tests = o_passed, o_failed
 
             # Canary check: detect test-framework subversion before grading
             if canary:

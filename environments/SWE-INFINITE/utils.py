@@ -246,7 +246,9 @@ def _parse_jest(stdout: str) -> tuple[list[str], list[str]]:
             return passed, failed
 
     for suite in data.get("testResults", []):
-        file_path = suite.get("testFilePath", "")
+        # `jest --json` serializes the file path as "name"; the reporter API
+        # uses "testFilePath". Accept either so node ids match fail_to_pass.
+        file_path = suite.get("testFilePath") or suite.get("name", "")
         if file_path.startswith("/app/"):
             file_path = file_path[len("/app/"):]
         for t in suite.get("assertionResults") or suite.get("testResults", []):
