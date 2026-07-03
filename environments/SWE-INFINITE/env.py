@@ -621,16 +621,20 @@ bash /workspace/entryscript.sh
                 if finished:
                     if go_exit is not None:
                         # Go cross-check: a trusted TestMain reported the REAL
-                        # aggregate exit code. stdout claiming all-pass while the
-                        # real run had failures (or vice versa) means the
-                        # `go test -json` stream was fabricated/suppressed.
-                        if (go_exit == 0) != (len(failed_tests) == 0):
+                        # aggregate exit code of the test package. If the real run
+                        # failed (go_exit != 0) but stdout shows ZERO failures, the
+                        # `go test -json` stream was suppressed/fabricated. We only
+                        # flag this one direction: go_exit reflects a single package
+                        # while stdout failures span all packages under `./...`, so
+                        # "go_exit==0 but stdout has failures" is a legitimate
+                        # multi-package case, not tampering (avoids false negatives).
+                        if go_exit != 0 and len(failed_tests) == 0:
                             return 0.0, {
                                 "error": "runner_integrity_violation",
                                 "reasons": [
-                                    "go_aggregate_mismatch",
+                                    "go_output_suppressed",
                                     f"go_exit={go_exit}",
-                                    f"stdout_failures={len(failed_tests)}",
+                                    "stdout_failures=0",
                                 ],
                             }
                     elif integrity_ok is False:

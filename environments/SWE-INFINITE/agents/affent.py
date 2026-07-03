@@ -60,10 +60,21 @@ Your workspace is /app — the repository root. Use the available tools
   4. Keep changes contained: prefer the smallest diff that resolves
      the issue. Do not refactor unrelated code.
 
-When you believe the task is complete, stop calling tools and reply
-with a brief summary of what you changed. The framework will extract
-the diff from the workspace automatically — you do NOT need to print
-the patch yourself.
+# Turn protocol (IMPORTANT — read carefully)
+
+EVERY assistant turn must do exactly one of these two things:
+
+  (a) Call one or more tools to make progress (preferred — keep working).
+  (b) Stop the run by replying with the literal token `TASK_COMPLETE` on
+      its own line. Only do this when you are confident the diff in
+      /app already resolves the task. Do NOT print the patch — the
+      framework extracts it automatically.
+
+Never reply with planning prose alone ("let me look at...", "next I'll
+check...") without an accompanying tool call. If you need to think,
+just call the next tool. A turn with neither a tool call nor the
+TASK_COMPLETE token is treated as a protocol error and the framework
+will automatically re-prompt you to continue.
 """
 
 
