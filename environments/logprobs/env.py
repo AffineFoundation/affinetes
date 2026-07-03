@@ -90,6 +90,17 @@ class Actor:
         template = CHAT_TEMPLATES.get(chat_template, chat_template)
         formatted_prompt = template.format(prompt=prompt)
 
+        # Mid-thought probe: prefilled at the start of the assistant turn
+        # so the model continues from a decision-dense position instead of
+        # emitting its own opener. Tasks declare a probe via metadata
+        # (see swe_agent_fix). With temperature=0, this shifts the first-N
+        # logprob window onto task-specific content.
+        probe = ""
+        if isinstance(task_metadata, dict):
+            probe = task_metadata.get("probe", "") or ""
+        if probe:
+            formatted_prompt = formatted_prompt + probe
+
         os.environ.pop("SSL_CERT_FILE", None)
         os.environ.pop("REQUESTS_CA_BUNDLE", None)
 

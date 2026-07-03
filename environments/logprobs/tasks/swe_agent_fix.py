@@ -5,13 +5,19 @@ The prompt contains:
   - System prompt (agent instructions with THOUGHT + bash format)
   - Bug report (instance prompt with PR description)
   - Prior conversation turns (THOUGHT + bash + observation pairs)
+  - Mid-thought probe: a seed-chosen half-finished sentence that forces
+    the model to continue from a decision-dense position rather than from
+    the cold "THOUGHT:" template. This shifts the first-N logprob window
+    onto task-specific tokens (file names, line numbers, command args)
+    where fine-tune differences actually show up.
 
-The model should generate the next THOUGHT + bash action, which is where
-we extract logprobs to measure agent-style reasoning capability.
+The model should continue from the probe, which is where we extract
+logprobs to measure agent-style reasoning capability.
 
 Sample space:
   15 bug reports × 8 conversation styles × seed-based variations
-  (turn count, turn selection, ordering) → easily covers 100M unique seeds.
+  (turn count, turn selection, ordering, probe) → easily covers 100M
+  unique seeds.
 """
 
 import random
@@ -29,6 +35,33 @@ from data.swe_agent_scenarios import (
     OBSERVATION_TEMPLATE,
     ACTION_TEMPLATE,
 )
+
+
+# Half-finished THOUGHT / bash probes. The model is forced to continue from
+# one of these, so the first N generated tokens land on task-specific
+# content (file paths, line numbers, variable names, conditional logic)
+# instead of the boilerplate "THOUGHT:" opener. Each probe ends mid-phrase
+# so the model has no choice but to commit to a concrete next token.
+MID_PROBES = [
+    "THOUGHT: The bug is in the function that handles",
+    "THOUGHT: Looking at the traceback, the error happens when",
+    "THOUGHT: Let me check the implementation of",
+    "THOUGHT: I need to modify the logic that",
+    "THOUGHT: The fix requires changing the condition on line",
+    "THOUGHT: After examining the test failure, I should",
+    "THOUGHT: The root cause appears to be that",
+    "THOUGHT: Let me trace through what happens when",
+    "THOUGHT: The current code incorrectly assumes",
+    "THOUGHT: I will fix this by",
+    "THOUGHT: Before patching, let me confirm by",
+    "THOUGHT: The reproduction script shows that",
+    "```bash\ngrep -rn \"",
+    "```bash\nsed -i 's/",
+    "```bash\ncat ",
+    "```bash\npython -c \"import ",
+    "```bash\nls -la ",
+    "```bash\npytest -xvs ",
+]
 
 
 class SWEAgentFixTask(BaseTask):
@@ -68,11 +101,19 @@ class SWEAgentFixTask(BaseTask):
 
         prompt = "\n\n".join(parts)
 
+        # Mid-thought probe — returned via metadata, NOT appended to the
+        # user prompt. env.py injects it at the start of the assistant
+        # turn (after the chat template's assistant header), so the model
+        # is forced to continue from this half-finished sentence instead
+        # of emitting its own "<think>...</think>\nTHOUGHT:" boilerplate.
+        probe = rng.choice(MID_PROBES)
+
         metadata = {
             "seed": seed,
             "repo": bug["repo"],
             "language": bug["language"],
             "n_prior_turns": len(history_turns),
             "files": bug["files"],
+            "probe": probe,
         }
         return prompt, metadata
