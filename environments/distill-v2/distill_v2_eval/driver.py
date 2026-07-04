@@ -33,11 +33,16 @@ from distill_v2_eval.adapters.forward_engines.render import (
 )
 from distill_v2_eval.adapters.forward_engines.render_registry import build_renderer
 from distill_v2_eval.adapters.forward_engines.vllm_logprob import VLLMLogprobEngine
-from distill_v2_eval.adapters.scoring.registry import build_rollout_scoring
+from distill_v2_eval.adapters.scoring.registry import (
+    build_cell_scoring,
+    build_rollout_scoring,
+    is_cell_scoring,
+)
 from distill_v2_eval.application.advantage import compute_advantages
 from distill_v2_eval.domain.errors import EvalError
 from distill_v2_eval.domain.ids import Revision, StudentName
 from distill_v2_eval.domain.models import StudentSubmission
+from distill_v2_eval.domain.ports.scoring import RolloutMeasurement
 from distill_v2_eval.infrastructure.logging import get_logger
 from distill_v2_eval.parquet_source import (
     FetchParams,
@@ -71,7 +76,7 @@ class DistillV2Evaluator:
         served_model_name: str,
         dataset_base_url: str,
         task_idx: int,
-        scoring_name: str = "ce_diff",
+        scoring_name: str = "softmax_advantage",
         dtype: str = "bfloat16",
         max_seq_len: int = 32768,
         mask_reasoning: bool = True,
@@ -109,7 +114,11 @@ class DistillV2Evaluator:
                     mask_reasoning=mask_reasoning, max_seq_len=max_seq_len,
                 ),
             )
-            scoring = build_rollout_scoring(scoring_name)
+            scoring = (
+                build_cell_scoring(scoring_name)
+                if is_cell_scoring(scoring_name)
+                else build_rollout_scoring(scoring_name)
+            )
             return await asyncio.to_thread(
                 _score_cell,
                 rollouts=rollouts,
@@ -136,39 +145,60 @@ def _score_cell(
     except Exception as exc:  # noqa: BLE001
         raise EvalError(f"advantage computation failed: {exc}") from exc
 
-    scored: list[_Scored] = []
+    # Single forward pass over the cell: collect CE + advantage per rollout.
+    # Aggregation differs by scorer family (below) but the measurements are
+    # the same, so we gather them once.
+    measured: list[tuple[Any, float, int, float]] = []  # (rollout, ce, n_tokens, advantage)
     total_tokens = 0
     with engine.session():
         for rollout in rollouts:
             rendered = render_rollout(rollout, student, renderer=renderer)
             m = engine.compute_ce([rendered])[0]
             advantage = advantages.get(rollout.rollout_id, 0.0)
-            score = scoring.score_rollout(
-                ce=m.ce_sum, n_tokens=m.n_tokens,
-                reward=float(rollout.reward or 0.0),
-                advantage=advantage,
-            )
-            scored.append(_Scored(
-                rollout_id=str(rollout.rollout_id),
-                score=score, advantage=advantage,
-                ce=m.ce_sum, n_tokens=m.n_tokens,
-            ))
+            measured.append((rollout, m.ce_sum, m.n_tokens, advantage))
             total_tokens += m.n_tokens
 
-    # |advantage|-weighted mean inside the cell — rollouts at the
-    # baseline (advantage≈0) contribute nothing, high-|advantage|
-    # outliers carry the signal. Matches reborn's per-teacher
-    # aggregation in ``eval_student_rollout._aggregate``.
-    weights = [abs(s.advantage) for s in scored]
-    total_w = sum(weights)
-    if total_w > 0:
-        mean_score = sum(s.score * w for s, w in zip(scored, weights)) / total_w
-        win_rate = sum(w for s, w in zip(scored, weights) if s.score > 0) / total_w
+    if hasattr(scoring, "score_cell"):
+        # Whole-cell scorer (softmax_advantage): softmax over the rollouts'
+        # per-token NLL, then expected advantage. Bounded by construction.
+        cell = scoring.score_cell([
+            RolloutMeasurement(ce=ce, n_tokens=n, advantage=adv)
+            for (_r, ce, n, adv) in measured
+        ])
+        mean_score, win_rate = cell.mean_score, cell.win_rate
+        per_scores = cell.per_rollout_scores
     else:
-        mean_score = statistics.fmean(s.score for s in scored) if scored else 0.0
-        win_rate = (
-            sum(1 for s in scored if s.score > 0) / len(scored) if scored else 0.0
+        # Per-rollout scorer (reward_weighted_ce): score each rollout, then
+        # take the |advantage|-weighted mean — baseline rollouts (adv≈0)
+        # contribute nothing, high-|advantage| outliers carry the signal.
+        per_scores = [
+            scoring.score_rollout(
+                ce=ce, n_tokens=n,
+                reward=float(r.reward or 0.0),
+                advantage=adv,
+            )
+            for (r, ce, n, adv) in measured
+        ]
+        weights = [abs(adv) for (_r, _ce, _n, adv) in measured]
+        total_w = sum(weights)
+        if total_w > 0:
+            mean_score = sum(s * w for s, w in zip(per_scores, weights)) / total_w
+            win_rate = sum(w for s, w in zip(per_scores, weights) if s > 0) / total_w
+        else:
+            mean_score = statistics.fmean(per_scores) if per_scores else 0.0
+            win_rate = (
+                sum(1 for s in per_scores if s > 0) / len(per_scores)
+                if per_scores else 0.0
+            )
+
+    scored: list[_Scored] = [
+        _Scored(
+            rollout_id=str(r.rollout_id),
+            score=s, advantage=adv,
+            ce=ce, n_tokens=n,
         )
+        for (r, ce, n, adv), s in zip(measured, per_scores)
+    ]
 
     return {
         "mean_score": mean_score,

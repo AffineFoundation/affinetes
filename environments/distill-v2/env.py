@@ -15,10 +15,15 @@ performs only teacher-forcing (max_tokens=0, echo=true, no sampling).
 
 Distinct from cortex's pre-existing ``distill`` env: that one is a
 direct token-level KL between student and stored teacher logprobs.
-This one (``distill-v2``) is REINFORCE/GRPO-style — per-rollout
-advantage-weighted CE on tokens the agent actually committed to, with
-advantage computed strictly within the cell (one teacher) to avoid
-style leakage between teachers.
+This one (``distill-v2``) is REINFORCE/GRPO-style — advantage-weighted
+CE on tokens the agent actually committed to, with advantage computed
+strictly within the cell (one teacher) to avoid style leakage between
+teachers. The default scorer (``softmax_advantage``) softmaxes the
+per-token NLL across the cell's rollouts and returns the expected
+advantage under that distribution, so the score is *bounded* to the
+advantage envelope and does not blow up as the student's NLL spread
+grows with training. The legacy ``reward_weighted_ce`` (unbounded,
+linear in CE) stays available for replay/ablation.
 
 All evaluator code is vendored under ``distill_v2_eval/`` in this
 image; the environment is self-contained.
@@ -34,7 +39,7 @@ Contract (affinetes' standard Actor protocol):
         hf_repo="<owner/repo>",              # tokenizer source; defaults to model
         arch="qwen",                         # renderer family
         dataset_base_url="https://...",      # R2 base URL (or DISTILL_V2_DATASET_BASE_URL env var)
-        scoring_name="reward_weighted_ce",
+        scoring_name="softmax_advantage",
         max_seq_len=32768,
     )
 """
@@ -101,7 +106,7 @@ class Actor:
         # dataset location once at container start.
         dataset_base_url: str = "",
         # scoring knobs
-        scoring_name: str = "reward_weighted_ce",
+        scoring_name: str = "softmax_advantage",
         dtype: str = "bfloat16",
         max_seq_len: int = 32768,
         mask_reasoning: bool = True,
