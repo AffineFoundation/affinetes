@@ -25,6 +25,7 @@ from __future__ import annotations
 
 import io
 import json
+import os
 from dataclasses import dataclass
 
 import httpx
@@ -70,6 +71,94 @@ def _task_object_url(base_url: str, task_idx: int) -> str:
     return f"{base_url.rstrip('/')}/tasks/{task_idx:08d}.parquet"
 
 
+def _task_object_key(task_idx: int) -> str:
+    # Object key within a bucket, matching the publisher's layout. This is the
+    # SAME key in the private (staging) and public buckets — the promoter copies
+    # a shard verbatim — so a given ``task_idx`` maps to the same shard on both
+    # sides, whether we read over authenticated S3 or public HTTP.
+    return f"tasks/{task_idx:08d}.parquet"
+
+
+# --------------------------------------------------------------------------- #
+# Optional private "staging" tier (opt-in, same pattern as SWE-Infinite).
+#
+# When the host sets R2_STAGING_* the validator reads the manifest + shards
+# straight from the PRIVATE bucket over authenticated S3, so it can evaluate a
+# cell during the 24h maturation window — before the promoter mirrors it to the
+# public bucket that miners pull from. Without those env vars this module
+# transparently degrades to public-HTTP-only reads (external reproducers).
+# --------------------------------------------------------------------------- #
+def _resolve_staging_config() -> dict | None:
+    """Return a staging config iff every required field is set (via
+    R2_STAGING_* env vars). Returns None otherwise so public reads work
+    unchanged. Prefix defaults to "" — the publisher writes to the private
+    bucket root, unlike SWE-Infinite's "staging/" prefix."""
+    endpoint = os.getenv("R2_STAGING_ENDPOINT") or os.getenv("R2_ENDPOINT")
+    access_key = os.getenv("R2_STAGING_ACCESS_KEY") or os.getenv("R2_ACCESS_KEY")
+    secret_key = os.getenv("R2_STAGING_SECRET_KEY") or os.getenv("R2_SECRET_KEY")
+    bucket = os.getenv("R2_STAGING_BUCKET") or os.getenv("R2_PRIVATE_BUCKET")
+    prefix = os.getenv("R2_STAGING_PREFIX", "")
+    if not (endpoint and access_key and secret_key and bucket):
+        return None
+    return {"endpoint": endpoint, "access_key": access_key,
+            "secret_key": secret_key, "bucket": bucket, "prefix": prefix}
+
+
+class _R2Staging:
+    """Authenticated S3 reader for the private staging bucket."""
+
+    def __init__(self, cfg: dict) -> None:
+        import boto3
+        from botocore.config import Config
+        self._bucket = cfg["bucket"]
+        self._prefix = cfg["prefix"].rstrip("/")
+        self._client = boto3.client(
+            "s3",
+            endpoint_url=cfg["endpoint"],
+            aws_access_key_id=cfg["access_key"],
+            aws_secret_access_key=cfg["secret_key"],
+            region_name="auto",
+            config=Config(signature_version="s3v4", retries={"max_attempts": 3}),
+        )
+
+    def _full_key(self, key: str) -> str:
+        return f"{self._prefix}/{key}" if self._prefix else key
+
+    def get_bytes(self, key: str) -> bytes:
+        obj = self._client.get_object(Bucket=self._bucket, Key=self._full_key(key))
+        return obj["Body"].read()
+
+
+_STAGING_UNSET = object()
+_STAGING: object | None = _STAGING_UNSET
+
+
+def _staging() -> _R2Staging | None:
+    """Lazily build (once) the staging reader from R2_STAGING_* env vars."""
+    global _STAGING
+    if _STAGING is _STAGING_UNSET:
+        cfg = _resolve_staging_config()
+        if cfg is None:
+            _STAGING = None
+        else:
+            try:
+                _STAGING = _R2Staging(cfg)
+            except Exception as e:  # noqa: BLE001 — never break public reads
+                print(f"[distill-v2] R2 staging init failed: {e}; public-only")
+                _STAGING = None
+    return _STAGING  # type: ignore[return-value]
+
+
+def _get_bytes(base_url: str, key: str, timeout_s: float) -> bytes:
+    """Fetch object ``key`` (manifest.jsonl / metadata.json / tasks/*.parquet),
+    preferring the private staging bucket over authenticated S3 when configured,
+    else the public HTTP mirror. Same key convention on both sides."""
+    staging = _staging()
+    if staging is not None:
+        return staging.get_bytes(key)
+    return _http_get_bytes(f"{base_url.rstrip('/')}/{key}", timeout_s)
+
+
 def fetch_manifest(
     base_url: str, *,
     timeout_s: float = 60.0,
@@ -88,7 +177,7 @@ def fetch_manifest(
     before the maturation hook) are treated as already mature.
     """
     from datetime import datetime, timezone
-    payload = _http_get_bytes(_manifest_url(base_url), timeout_s)
+    payload = _get_bytes(base_url, "manifest.jsonl", timeout_s)
     text = payload.decode("utf-8").strip()
     out: list[ManifestEntry] = []
     if not text:
@@ -140,8 +229,7 @@ def fetch_task_rollouts(params: FetchParams) -> tuple[list[Rollout], ManifestEnt
     """
     manifest = fetch_manifest(params.base_url, timeout_s=params.timeout_s)
     entry = _lookup(manifest, params.task_idx)
-    object_url = _task_object_url(params.base_url, entry.task_idx)
-    payload = _http_get_bytes(object_url, params.timeout_s)
+    payload = _get_bytes(params.base_url, _task_object_key(entry.task_idx), params.timeout_s)
     table = pq.read_table(io.BytesIO(payload))
     return _table_to_rollouts(table), entry
 
@@ -165,8 +253,7 @@ def fetch_metadata(base_url: str, *, timeout_s: float = 30.0) -> DatasetMetadata
     callers can poll it on every sample to enumerate the valid
     ``task_idx`` range without paying the manifest cost.
     """
-    url = f"{base_url.rstrip('/')}/metadata.json"
-    payload = _http_get_bytes(url, timeout_s)
+    payload = _get_bytes(base_url, "metadata.json", timeout_s)
     obj = json.loads(payload.decode("utf-8"))
     tasks = obj.get("tasks") or {}
     # ``staged_up_to`` is the source of truth on the PRIVATE bucket
@@ -194,8 +281,7 @@ def fetch_task_rollouts_direct(
     return rows. Use after ``fetch_metadata`` has bounded the valid range.
     Skips the full manifest download (5 MB+ at scale).
     """
-    object_url = _task_object_url(base_url, task_idx)
-    payload = _http_get_bytes(object_url, timeout_s)
+    payload = _get_bytes(base_url, _task_object_key(task_idx), timeout_s)
     table = pq.read_table(io.BytesIO(payload))
     return _table_to_rollouts(table)
 

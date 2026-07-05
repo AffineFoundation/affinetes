@@ -17,3 +17,6 @@ structlog>=24.1
 orjson>=3.10
 pyarrow>=15.0
 pyyaml>=6.0
+# Authenticated S3 reads of the private staging bucket (opt-in via R2_STAGING_*;
+# see parquet_source._R2Staging). Inert without those env vars.
+boto3>=1.34
