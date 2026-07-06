@@ -88,16 +88,28 @@ def _task_object_key(task_idx: int) -> str:
 # public bucket that miners pull from. Without those env vars this module
 # transparently degrades to public-HTTP-only reads (external reproducers).
 # --------------------------------------------------------------------------- #
+#: distill-v2's staged shards live in this private bucket (root prefix). The
+#: promoter mirrors them to the public bucket after the maturation window.
+_DEFAULT_STAGING_BUCKET = "affine-distill-v2-private"
+
+
 def _resolve_staging_config() -> dict | None:
-    """Return a staging config iff every required field is set (via
-    R2_STAGING_* env vars). Returns None otherwise so public reads work
-    unchanged. Prefix defaults to "" — the publisher writes to the private
-    bucket root, unlike SWE-Infinite's "staging/" prefix."""
+    """Return a staging config iff the shared R2 credentials are set.
+
+    Only the credentials (endpoint/access/secret) come from the shared
+    ``R2_STAGING_*`` env vars — the SAME the validator already forwards to
+    swe-infinite. The *bucket* is NOT taken from the global
+    ``R2_STAGING_BUCKET`` (that one points at swe-infinite's bucket, and
+    optional_env_vars are forwarded host-globally to every env container).
+    distill-v2 defaults to its own ``affine-distill-v2-private`` bucket at the
+    root prefix, overridable by distill-specific vars. Returns None when the
+    credentials are absent so public-HTTP reads work unchanged.
+    """
     endpoint = os.getenv("R2_STAGING_ENDPOINT") or os.getenv("R2_ENDPOINT")
     access_key = os.getenv("R2_STAGING_ACCESS_KEY") or os.getenv("R2_ACCESS_KEY")
     secret_key = os.getenv("R2_STAGING_SECRET_KEY") or os.getenv("R2_SECRET_KEY")
-    bucket = os.getenv("R2_STAGING_BUCKET") or os.getenv("R2_PRIVATE_BUCKET")
-    prefix = os.getenv("R2_STAGING_PREFIX", "")
+    bucket = os.getenv("R2_STAGING_BUCKET_DISTILL_V2") or _DEFAULT_STAGING_BUCKET
+    prefix = os.getenv("R2_STAGING_PREFIX_DISTILL_V2", "")
     if not (endpoint and access_key and secret_key and bucket):
         return None
     return {"endpoint": endpoint, "access_key": access_key,
