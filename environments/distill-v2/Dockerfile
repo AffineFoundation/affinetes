@@ -1,5 +1,10 @@
 FROM python:3.12-slim
 
+# Many worker threads doing large transient allocations (echo-logprob JSON
+# bodies) make glibc grow one malloc arena per thread and never return the
+# RSS. Two arenas keep the container's memory close to live usage.
+ENV MALLOC_ARENA_MAX=2
+
 RUN apt-get update && apt-get install -y \
     ca-certificates \
     git \

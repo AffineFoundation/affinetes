@@ -39,6 +39,8 @@ from collections.abc import Sequence
 from contextlib import contextmanager
 from typing import Iterator
 
+import orjson
+
 from distill_v2_eval.domain.errors import EvalError
 from distill_v2_eval.domain.models import RenderedSample, StudentSubmission
 from distill_v2_eval.domain.ports.forward_engine import CEMeasurement
@@ -85,7 +87,10 @@ class VLLMLogprobEngine:
         interchangeable with :class:`HFForwardEngine`.
         """
         import httpx
-        from transformers import AutoTokenizer
+
+        from distill_v2_eval.adapters.forward_engines.tokenizer_cache import (
+            get_tokenizer,
+        )
 
         if self._client is not None:
             raise EvalError("engine already loaded; call unload() first")
@@ -98,9 +103,8 @@ class VLLMLogprobEngine:
                 f"student {student.student_name}@{student.revision} has no hf_repo / local_path"
             )
 
-        self._tokenizer = AutoTokenizer.from_pretrained(source, trust_remote_code=True)
-        if self._tokenizer.pad_token is None:
-            self._tokenizer.pad_token = self._tokenizer.eos_token
+        # Shared, content-deduplicated instance — do NOT mutate it here.
+        self._tokenizer = get_tokenizer(source)
 
         self._client = httpx.Client(timeout=self._timeout)
         # Sanity check the served model id matches what we plan to request.
@@ -161,7 +165,13 @@ class VLLMLogprobEngine:
         }
         resp = self._client.post(f"{self._base_url}/completions", json=payload)  # type: ignore[union-attr]
         resp.raise_for_status()
-        token_lp = resp.json()["choices"][0]["logprobs"]["token_logprobs"]
+        # The echo response also carries tokens / top_logprobs / text_offset —
+        # tens of MB of Python objects at 32k positions. Extract the one field
+        # we use and drop the rest before CE computation, so concurrent
+        # forwards don't stack full parsed bodies.
+        body = orjson.loads(resp.content)
+        token_lp = body["choices"][0]["logprobs"]["token_logprobs"]
+        del body, resp
         return _ce_from_logprobs(
             token_logprobs=token_lp,
             loss_mask=list(sample.loss_mask),

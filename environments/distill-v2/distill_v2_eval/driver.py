@@ -4,7 +4,10 @@ One ``evaluate`` call = one cell (one ``task_idx``) = one
 ``(env, task, teacher)`` group of N rollouts.
 
 Sequence:
-    1. Fetch the cell's parquet from R2 (resolved via manifest).
+    1. Fetch the cell's parquet from R2 (direct by task_idx — the shard
+       key is ``tasks/{task_idx:08d}.parquet`` by construction, so the
+       manifest is not needed; downloading + parsing it per call was a
+       per-request memory/latency tax that grows with the corpus).
     2. Spin up the ``vllm_logprob`` forward engine against the
        caller-supplied vLLM endpoint and load the student tokenizer.
     3. Within the cell, z-score rewards → per-rollout advantage. (All
@@ -44,11 +47,7 @@ from distill_v2_eval.domain.ids import Revision, StudentName
 from distill_v2_eval.domain.models import StudentSubmission
 from distill_v2_eval.domain.ports.scoring import RolloutMeasurement
 from distill_v2_eval.infrastructure.logging import get_logger
-from distill_v2_eval.parquet_source import (
-    FetchParams,
-    ManifestEntry,
-    fetch_task_rollouts,
-)
+from distill_v2_eval.parquet_source import fetch_task_rollouts_direct
 
 log = get_logger("driver")
 
@@ -81,14 +80,13 @@ class DistillV2Evaluator:
         max_seq_len: int = 32768,
         mask_reasoning: bool = True,
     ) -> dict[str, Any]:
-        rollouts, entry = await asyncio.to_thread(
-            fetch_task_rollouts,
-            FetchParams(base_url=dataset_base_url, task_idx=task_idx),
+        rollouts = await asyncio.to_thread(
+            fetch_task_rollouts_direct, dataset_base_url, task_idx,
         )
         if not rollouts:
-            log.warning("driver.no_rollouts", task_idx=task_idx,
-                        entry_key=entry.object_key)
-            return _empty_snapshot(entry)
+            log.warning("driver.no_rollouts", task_idx=task_idx)
+            return _empty_snapshot(task_idx)
+        cell = _cell_info(task_idx, rollouts)
 
         student = StudentSubmission(
             student_name=StudentName(student_name),
@@ -126,14 +124,32 @@ class DistillV2Evaluator:
                 engine=engine,
                 renderer=renderer,
                 scoring=scoring,
-                entry=entry,
+                cell=cell,
             )
         finally:
             engine.unload()
 
 
+def _cell_info(task_idx: int, rollouts) -> dict[str, Any]:  # type: ignore[no-untyped-def]
+    """Cell coordinates for the result snapshot, from the shard itself.
+
+    Every row in a shard shares (env, task, teacher) by construction.
+    reward_mean/std are recomputed from the rows — same data the publisher
+    aggregated into the manifest, which we no longer download.
+    """
+    rewards = [float(r.reward or 0.0) for r in rollouts]
+    return {
+        "task_idx": task_idx,
+        "env_name": str(rollouts[0].env_name),
+        "task_id": int(rollouts[0].task_id),
+        "teacher_name": str(rollouts[0].teacher_name),
+        "reward_mean": statistics.fmean(rewards),
+        "reward_std": statistics.pstdev(rewards) if len(rewards) > 1 else 0.0,
+    }
+
+
 def _score_cell(
-    *, rollouts, student, engine, renderer, scoring, entry: ManifestEntry,
+    *, rollouts, student, engine, renderer, scoring, cell: dict[str, Any],
 ) -> dict[str, Any]:  # type: ignore[no-untyped-def]
     # All rollouts in a cell share (env, task, teacher); both grouping
     # modes collapse to the same single z-score bucket. We pass
@@ -205,14 +221,7 @@ def _score_cell(
         "win_rate": win_rate,
         "n_rollouts": len(scored),
         "total_forward_tokens": total_tokens,
-        "cell": {
-            "task_idx": entry.task_idx,
-            "env_name": entry.env_name,
-            "task_id": entry.task_id,
-            "teacher_name": entry.teacher_name,
-            "reward_mean": entry.reward_mean,
-            "reward_std": entry.reward_std,
-        },
+        "cell": cell,
         "per_rollout": [
             {
                 "rollout_id": s.rollout_id,
@@ -224,19 +233,19 @@ def _score_cell(
     }
 
 
-def _empty_snapshot(entry: ManifestEntry) -> dict[str, Any]:
+def _empty_snapshot(task_idx: int) -> dict[str, Any]:
     return {
         "mean_score": 0.0,
         "win_rate": 0.0,
         "n_rollouts": 0,
         "total_forward_tokens": 0,
         "cell": {
-            "task_idx": entry.task_idx,
-            "env_name": entry.env_name,
-            "task_id": entry.task_id,
-            "teacher_name": entry.teacher_name,
-            "reward_mean": entry.reward_mean,
-            "reward_std": entry.reward_std,
+            "task_idx": task_idx,
+            "env_name": None,
+            "task_id": None,
+            "teacher_name": None,
+            "reward_mean": None,
+            "reward_std": None,
         },
         "per_rollout": [],
     }
