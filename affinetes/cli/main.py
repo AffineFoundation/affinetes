@@ -8,7 +8,12 @@ from typing import Optional, Dict, Any
 from dotenv import load_dotenv
 
 from ..utils.logger import logger
-from .commands import run_environment, call_method, build_and_push, init_environment, test_environment
+from .commands import run_environment, call_method, build_and_push, init_environment
+from .validate import (
+    parse_environment_assignments,
+    resolve_api_key,
+    validate_environment,
+)
 
 load_dotenv(override=True)
 
@@ -173,53 +178,113 @@ Examples:
     # === validate command ===
     validate_parser = subparsers.add_parser(
         'validate',
-        help='Validate environment seed consistency and generate rollouts'
+        help='Run fail-closed lifecycle and task-identity validation'
     )
     validate_parser.add_argument(
         'env_dir',
-        help='Environment directory path'
+        nargs='?',
+        help='Environment directory to build (mutually exclusive with --image)'
+    )
+    validate_parser.add_argument(
+        '--image',
+        help='Pre-built Docker image (mutually exclusive with ENV_DIR)'
+    )
+    validate_parser.add_argument(
+        '--task-id',
+        action='append',
+        dest='task_ids',
+        type=int,
+        help='Valid task ID; repeat for an explicit set (at least two)'
     )
     validate_parser.add_argument(
         '--num-tests',
         type=int,
-        default=100,
-        help='Number of tests to run (default: 100)'
+        help='Number of consecutive valid task IDs (default: 2)'
     )
     validate_parser.add_argument(
         '--task-id-start',
         type=int,
-        default=1,
-        help='Starting task_id (default: 1)'
+        help='Inclusive valid task range start (default: 0)'
     )
     validate_parser.add_argument(
         '--task-id-end',
         type=int,
-        help='Ending task_id (default: start + num_tests - 1)'
+        help='Inclusive valid task range end; cannot combine with --num-tests'
+    )
+    validate_parser.add_argument(
+        '--expect-failure-task-id',
+        '--expected-failure-task-id',
+        action='append',
+        dest='expected_failure_task_ids',
+        type=int,
+        default=[],
+        help='Task ID that must be rejected twice with a stable error code'
+    )
+    validate_parser.add_argument(
+        '--expected-failure-error-code',
+        help='Require expected failures to return this exact extra.error_code'
     )
     validate_parser.add_argument(
         '--output',
         default='rollouts',
-        help='Output directory for rollouts (default: rollouts/)'
+        help='Directory for summary.json (default: rollouts/)'
     )
     validate_parser.add_argument(
+        '--model',
+        help='Model argument passed to evaluate'
+    )
+    api_key_group = validate_parser.add_mutually_exclusive_group()
+    api_key_group.add_argument(
         '--api-key',
-        help='API key for LLM service (default: CHUTES_API_TOKEN env var)'
+        help=(
+            'Legacy API key argument passed to evaluate; visible in process argv. '
+            'Prefer --api-key-env.'
+        )
+    )
+    api_key_group.add_argument(
+        '--api-key-env',
+        help='Environment variable containing the API key (preferred)'
     )
     validate_parser.add_argument(
         '--base-url',
-        help='Base URL for LLM API (default: auto-detect from MINER_SLUG)'
+        help='Base URL argument passed to evaluate'
     )
     validate_parser.add_argument(
         '--temperature',
         type=float,
-        default=0.7,
-        help='Temperature for LLM generation (default: 0.7)'
+        default=0.0,
+        help='Temperature for evaluation (default: 0.0)'
     )
     validate_parser.add_argument(
         '--timeout',
         type=int,
         default=60,
         help='Timeout for each evaluation in seconds (default: 60)'
+    )
+    validate_parser.add_argument(
+        '--env',
+        action='append',
+        dest='env_vars',
+        help='Container environment variable KEY=VALUE; repeat as needed'
+    )
+    validate_parser.add_argument(
+        '--pull',
+        action='store_true',
+        help='Pull a pre-built --image before starting'
+    )
+    validate_parser.add_argument(
+        '--host-network',
+        action='store_true',
+        help='Run the validation container with host networking'
+    )
+    validate_parser.add_argument(
+        '--container-name',
+        help='Dedicated unused validation container name (default: unique)'
+    )
+    validate_parser.add_argument(
+        '--no-cache',
+        action='store_true',
+        help='Disable Docker build cache when validating ENV_DIR'
     )
 
     return parser
@@ -329,17 +394,40 @@ def main():
             ))
 
         elif args.command == 'validate':
-            asyncio.run(test_environment(
+            env_vars = parse_environment_assignments(args.env_vars)
+            api_key = resolve_api_key(
+                api_key=args.api_key,
+                api_key_env=args.api_key_env,
+            )
+            if args.api_key is not None:
+                logger.warning(
+                    "--api-key exposes credentials in process arguments; "
+                    "prefer --api-key-env"
+                )
+            report = asyncio.run(validate_environment(
                 env_dir=args.env_dir,
+                image=args.image,
+                task_ids=args.task_ids,
                 num_tests=args.num_tests,
                 task_id_start=args.task_id_start,
                 task_id_end=args.task_id_end,
+                expected_failure_task_ids=args.expected_failure_task_ids,
+                expected_failure_error_code=args.expected_failure_error_code,
                 output_dir=args.output,
-                api_key=args.api_key,
+                model=args.model,
+                api_key=api_key,
                 base_url=args.base_url,
                 temperature=args.temperature,
-                timeout=args.timeout
+                timeout=args.timeout,
+                pull=args.pull,
+                host_network=args.host_network,
+                container_name=args.container_name,
+                env_vars=env_vars,
+                no_cache=args.no_cache,
             ))
+            print(json.dumps(report, sort_keys=True, ensure_ascii=False))
+            if not report.get("passed"):
+                sys.exit(1)
 
         else:
             parser.print_help()

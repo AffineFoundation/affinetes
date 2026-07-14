@@ -3,6 +3,7 @@
 import docker
 import re
 import time
+from collections.abc import Mapping
 from typing import Optional, Any, Tuple
 
 from ..utils.exceptions import ContainerError, ImageNotFoundError
@@ -188,9 +189,11 @@ class DockerManager:
         name: Optional[str] = None,
         detach: bool = True,
         force_recreate: bool = False,
+        create_only: bool = False,
+        expected_owner: Optional[Tuple[str, str]] = None,
         mem_limit: Optional[str] = None,
         cpu_limit: Optional[str] = None,
-        **kwargs
+        **kwargs,
     ) -> Any:
         """
         Start a Docker container (no port exposure)
@@ -200,6 +203,10 @@ class DockerManager:
             name: Optional container name
             detach: Run container in background
             force_recreate: If True, remove existing container and create new one
+            create_only: If True, fail when ``name`` already exists instead of
+                reusing, starting, or deleting it
+            expected_owner: Optional ``(label_name, label_value)`` pair that
+                must be present in the labels for a create-only container
             mem_limit: Memory limit (e.g., "512m", "1g", "2g")
             cpu_limit: CPU limit (e.g., "1.0", "2.0")
             **kwargs: Additional docker.containers.run() parameters
@@ -212,6 +219,35 @@ class DockerManager:
             ContainerError: If container fails to start
         """
         try:
+            if not isinstance(create_only, bool):
+                raise ContainerError("create_only must be a boolean")
+            if force_recreate and create_only:
+                raise ContainerError(
+                    "force_recreate and create_only cannot both be enabled"
+                )
+            if expected_owner is not None:
+                if (
+                    not create_only
+                    or not isinstance(expected_owner, tuple)
+                    or len(expected_owner) != 2
+                    or not all(
+                        isinstance(item, str) and item for item in expected_owner
+                    )
+                ):
+                    raise ContainerError(
+                        "expected_owner requires create_only and a non-empty "
+                        "(label_name, label_value) pair"
+                    )
+                labels = kwargs.get("labels")
+                label_name, label_value = expected_owner
+                if (
+                    not isinstance(labels, Mapping)
+                    or labels.get(label_name) != label_value
+                ):
+                    raise ContainerError(
+                        "create-only container labels do not match expected_owner"
+                    )
+
             # Check if image exists
             try:
                 self.client.images.get(image)
@@ -222,6 +258,13 @@ class DockerManager:
             if name:
                 existing = self.get_existing_container(name)
                 if existing:
+                    if create_only:
+                        # The name may have appeared after a caller's preflight.
+                        # Never mutate it: even a matching label is not proof
+                        # that this invocation created this particular object.
+                        raise ContainerError(
+                            f"Container '{name}' already exists in create-only mode"
+                        )
                     if force_recreate:
                         # Force recreate: remove and create new
                         logger.info(f"Force recreating container: {name}")
