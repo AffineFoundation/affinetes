@@ -9,8 +9,10 @@ import os
 import re
 import secrets
 from collections.abc import Mapping, Sequence
+from ipaddress import ip_address
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlsplit
 
 import docker
 
@@ -33,6 +35,41 @@ _OWNER_LABEL = "io.affinetes.validation.owner"
 _MAX_VALIDATION_TASKS = 10_000
 _MAX_REPORT_STRING = 1024
 _UNSAFE_REPORT_ERROR = "UnsafeReportString"
+
+
+def _is_loopback_host(host: str | None) -> bool:
+    if host is None:
+        return False
+    if host.casefold() == "localhost":
+        return True
+    try:
+        return ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+def _assert_local_docker_endpoint() -> None:
+    """Refuse validation against a remote Docker daemon by default."""
+
+    context = os.environ.get("DOCKER_CONTEXT", "")
+    if context not in {"", "default"}:
+        raise ValidationError(
+            "afs validate refuses non-default DOCKER_CONTEXT in local-only mode"
+        )
+    raw_host = os.environ.get("DOCKER_HOST", "")
+    if not raw_host:
+        # docker.from_env() uses the local Unix socket when DOCKER_HOST is absent.
+        return
+    parsed = urlsplit(raw_host)
+    if parsed.scheme == "unix" and not parsed.netloc and parsed.path.startswith("/"):
+        return
+    if parsed.scheme in {"tcp", "http", "https", "http+docker"} and _is_loopback_host(
+        parsed.hostname
+    ):
+        return
+    raise ValidationError(
+        "afs validate refuses a non-loopback Docker daemon in local-only mode"
+    )
 
 
 def _contains_control_character(value: str) -> bool:
@@ -321,6 +358,47 @@ def _validate_optional_text(
         )
 
 
+def _validate_model_endpoint(
+    base_url: str | None,
+    *,
+    allow_remote_model_endpoint: bool,
+) -> None:
+    """Require an explicit owner opt-in before using a non-loopback model URL."""
+
+    if not isinstance(allow_remote_model_endpoint, bool):
+        raise ValidationError("allow_remote_model_endpoint must be a boolean")
+    if base_url is None:
+        if allow_remote_model_endpoint:
+            raise ValidationError(
+                "allow_remote_model_endpoint requires an explicit base_url"
+            )
+        return
+
+    try:
+        parsed = urlsplit(base_url)
+        host = parsed.hostname
+        # Accessing ``port`` makes urlsplit reject malformed and out-of-range ports.
+        parsed.port
+    except ValueError as exc:
+        raise ValidationError("base_url must be a valid HTTP(S) URL") from exc
+    if (
+        parsed.scheme not in {"http", "https"}
+        or not parsed.netloc
+        or host is None
+        or parsed.username is not None
+        or parsed.password is not None
+        or parsed.fragment
+    ):
+        raise ValidationError(
+            "base_url must be an HTTP(S) URL without userinfo or a fragment"
+        )
+    if not allow_remote_model_endpoint and not _is_loopback_host(host):
+        raise ValidationError(
+            "base_url must use a loopback host unless "
+            "allow_remote_model_endpoint is explicitly enabled"
+        )
+
+
 def _validate_inputs(
     *,
     env_dir: str | None,
@@ -329,6 +407,7 @@ def _validate_inputs(
     expected_failure_error_code: str | None,
     model: str | None,
     base_url: str | None,
+    allow_remote_model_endpoint: bool,
     api_key: str | None,
     temperature: float,
     timeout: int,
@@ -386,6 +465,10 @@ def _validate_inputs(
 
     _validate_optional_text(model, name="model", max_length=256)
     _validate_optional_text(base_url, name="base_url", max_length=2048)
+    _validate_model_endpoint(
+        base_url,
+        allow_remote_model_endpoint=allow_remote_model_endpoint,
+    )
     _validate_optional_text(api_key, name="api_key", max_length=4096)
     if (
         isinstance(temperature, bool)
@@ -859,6 +942,7 @@ async def validate_environment(
     expected_failure_error_code: str | None = None,
     model: str | None = None,
     base_url: str | None = None,
+    allow_remote_model_endpoint: bool = False,
     api_key: str | None = None,
     temperature: float = 0.0,
     timeout: int = 60,
@@ -878,6 +962,7 @@ async def validate_environment(
         expected_failure_error_code=expected_failure_error_code,
         model=model,
         base_url=base_url,
+        allow_remote_model_endpoint=allow_remote_model_endpoint,
         api_key=api_key,
         temperature=temperature,
         timeout=timeout,
@@ -887,6 +972,7 @@ async def validate_environment(
         host_network=host_network,
         no_cache=no_cache,
     )
+    _assert_local_docker_endpoint()
     secrets_to_protect = _report_secrets(api_key, env_vars)
     selected_task_ids = _task_ids(
         task_ids=task_ids,

@@ -152,6 +152,7 @@ async def test_image_validation_passes_all_fail_closed_gates(
         expected_failure_error_code="invalid_task_id",
         model="evaluation-model",
         base_url="https://model.example/v1",
+        allow_remote_model_endpoint=True,
         api_key="super-secret",
         temperature=0.0,
         timeout=30,
@@ -584,6 +585,26 @@ async def test_directory_mode_builds_required_files_without_pull(
         ({"image": "a", "temperature": float("nan")}, "temperature"),
         ({"image": "a", "timeout": 0}, "timeout"),
         (
+            {"image": "a", "base_url": "https://model.example/v1"},
+            "loopback host",
+        ),
+        (
+            {"image": "a", "allow_remote_model_endpoint": True},
+            "requires an explicit base_url",
+        ),
+        (
+            {
+                "image": "a",
+                "base_url": "file:///tmp/model",
+                "allow_remote_model_endpoint": True,
+            },
+            r"HTTP\(S\) URL",
+        ),
+        (
+            {"image": "a", "allow_remote_model_endpoint": "yes"},
+            "must be a boolean",
+        ),
+        (
             {"image": "repo-super-secret", "api_key": "super-secret"},
             "must not contain a supplied secret",
         ),
@@ -627,10 +648,106 @@ def test_environment_assignment_parser_is_strict() -> None:
         validate_module.parse_environment_assignments(["A=1", "A=2"])
 
 
+@pytest.mark.parametrize(
+    "base_url",
+    (
+        "http://localhost:18080/v1",
+        "http://127.0.0.1:18080/v1",
+        "https://127.42.0.7/v1",
+        "http://[::1]:18080/v1",
+    ),
+)
+def test_model_endpoint_accepts_loopback_without_remote_opt_in(base_url) -> None:
+    validate_module._validate_model_endpoint(
+        base_url,
+        allow_remote_model_endpoint=False,
+    )
+
+
+def test_model_endpoint_accepts_owner_authorized_remote_url() -> None:
+    validate_module._validate_model_endpoint(
+        "https://model.example/v1",
+        allow_remote_model_endpoint=True,
+    )
+
+
+@pytest.mark.asyncio
+async def test_remote_model_endpoint_is_rejected_before_docker_access(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        validate_module,
+        "_assert_local_docker_endpoint",
+        lambda: pytest.fail(
+            "Docker preflight must not run for an unauthorized endpoint"
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="loopback host"):
+        await validate_module.validate_environment(
+            image="env:v1",
+            base_url="https://model.example/v1",
+        )
+
+
 def test_seed_pair_is_always_distinct(monkeypatch) -> None:
     monkeypatch.setattr(validate_module, "_seed", lambda *_args: 17)
 
     assert validate_module._seed_pair("env:v1", 0) == (17, 18)
+
+
+@pytest.mark.parametrize(
+    ("docker_host", "docker_context"),
+    (
+        (None, None),
+        ("unix:///var/run/docker.sock", "default"),
+        ("tcp://127.0.0.1:2375", None),
+        ("http://[::1]:2375", "default"),
+    ),
+)
+def test_local_docker_endpoint_preflight_accepts_only_local_endpoints(
+    monkeypatch,
+    docker_host,
+    docker_context,
+) -> None:
+    for name, value in (
+        ("DOCKER_HOST", docker_host),
+        ("DOCKER_CONTEXT", docker_context),
+    ):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    validate_module._assert_local_docker_endpoint()
+
+
+@pytest.mark.parametrize(
+    ("docker_host", "docker_context", "message"),
+    (
+        ("tcp://docker.internal:2375", None, "non-loopback"),
+        ("ssh://root@127.0.0.1", None, "non-loopback"),
+        (None, "remote-production", "non-default DOCKER_CONTEXT"),
+        ("unix://remote/var/run/docker.sock", None, "non-loopback"),
+    ),
+)
+def test_local_docker_endpoint_preflight_rejects_remote_or_ambiguous_endpoints(
+    monkeypatch,
+    docker_host,
+    docker_context,
+    message,
+) -> None:
+    for name, value in (
+        ("DOCKER_HOST", docker_host),
+        ("DOCKER_CONTEXT", docker_context),
+    ):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    with pytest.raises(ValidationError, match=message):
+        validate_module._assert_local_docker_endpoint()
 
 
 def test_container_name_preflight_accepts_only_an_absent_name(monkeypatch) -> None:
@@ -1103,6 +1220,7 @@ def test_validate_parser_supports_image_and_all_runtime_options() -> None:
             "model",
             "--base-url",
             "https://model.example/v1",
+            "--allow-remote-model-endpoint",
             "--api-key",
             "secret",
             "--env",
@@ -1125,6 +1243,13 @@ def test_validate_parser_supports_image_and_all_runtime_options() -> None:
     assert args.container_name == "validate-owned"
     assert args.api_key == "secret"
     assert args.api_key_env is None
+    assert args.allow_remote_model_endpoint is True
+
+
+def test_validate_parser_defaults_to_loopback_only_model_endpoints() -> None:
+    args = main_module.create_parser().parse_args(["validate", "--image", "env:v1"])
+
+    assert args.allow_remote_model_endpoint is False
 
 
 def test_validate_parser_rejects_two_api_key_sources() -> None:
@@ -1191,6 +1316,9 @@ def test_main_routes_validation_and_prints_report(monkeypatch, capsys) -> None:
             "WORKERS=1",
             "--api-key-env",
             "MODEL_API_KEY",
+            "--base-url",
+            "https://model.example/v1",
+            "--allow-remote-model-endpoint",
         ],
     )
 
@@ -1200,6 +1328,8 @@ def test_main_routes_validation_and_prints_report(monkeypatch, capsys) -> None:
     assert observed["task_ids"] == [0, 1]
     assert observed["env_vars"] == {"WORKERS": "1"}
     assert observed["api_key"] == "resolved-secret"
+    assert observed["base_url"] == "https://model.example/v1"
+    assert observed["allow_remote_model_endpoint"] is True
     assert json.loads(capsys.readouterr().out) == {
         "passed": True,
         "schema_version": "1.0",

@@ -247,7 +247,15 @@ Examples:
     )
     validate_parser.add_argument(
         '--base-url',
-        help='Base URL argument passed to evaluate'
+        help='Loopback model base URL passed to evaluate by default'
+    )
+    validate_parser.add_argument(
+        '--allow-remote-model-endpoint',
+        action='store_true',
+        help=(
+            'Explicit owner authorization to use a non-loopback --base-url; '
+            'the default is loopback-only'
+        )
     )
     validate_parser.add_argument(
         '--temperature',
@@ -417,6 +425,7 @@ def main():
                 model=args.model,
                 api_key=api_key,
                 base_url=args.base_url,
+                allow_remote_model_endpoint=args.allow_remote_model_endpoint,
                 temperature=args.temperature,
                 timeout=args.timeout,
                 pull=args.pull,

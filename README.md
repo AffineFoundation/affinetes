@@ -379,6 +379,17 @@ any check fails. Ownership is bound to a per-run 256-bit Docker label and the
 created container ID; a same-name container is never reused, started, replaced,
 or removed by validation.
 
+Validation is local-daemon-only by default. It accepts the default Unix socket,
+an explicit local Unix socket, or a loopback TCP endpoint; non-default Docker
+contexts, SSH endpoints and non-loopback daemons fail before image build, pull or
+container mutation. Run owner-authorized registry validation from a clean host
+whose Docker daemon is local.
+
+Model endpoints are also loopback-only by default. A non-loopback `--base-url`
+fails before Docker access unless an owner explicitly supplies
+`--allow-remote-model-endpoint`. That opt-in preserves remote validation as a
+deliberate operation; it must not be used by the local release gate.
+
 **Syntax:**
 ```bash
 afs validate [ENV_DIR | --image IMAGE] [OPTIONS]
@@ -396,6 +407,8 @@ afs validate [ENV_DIR | --image IMAGE] [OPTIONS]
 - `--expected-failure-error-code CODE`: Exact expected-failure code; required
   whenever an expected-failure task ID is supplied
 - `--model MODEL`, `--base-url URL`: Arguments passed to `evaluate`
+- `--allow-remote-model-endpoint`: Explicit owner authorization for a
+  non-loopback `--base-url`; omitted by default and by local release gates
 - `--api-key-env NAME`: Read the API key from an environment variable without
   placing the credential in process arguments; this is the preferred input
 - `--api-key KEY`: Backward-compatible credential input; avoid it because the
@@ -449,6 +462,7 @@ afs validate --image ghcr.io/example/instruction-gym@sha256:DIGEST \
   --expected-failure-error-code invalid_task_id \
   --model evaluation-model \
   --base-url https://model.example/v1 \
+  --allow-remote-model-endpoint \
   --api-key-env MODEL_API_KEY \
   --pull
 
