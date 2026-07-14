@@ -1,15 +1,14 @@
 """Public API for affinetes"""
 
-import time
 import asyncio
-from typing import Optional, Dict, Any, List
-from pathlib import Path
+from typing import Optional, Dict, List
 
 from .backends import LocalBackend, BasilicaBackend, URLBackend
 from .infrastructure import ImageBuilder
 from .core import EnvironmentWrapper, get_registry, InstancePool, InstanceInfo
 from .utils.logger import logger
 from .utils.exceptions import ValidationError, BackendError
+from .utils.config import image_reference_name
 
 
 def build_image_from_env(
@@ -92,7 +91,7 @@ def build_image_from_env(
         
         # Push to registry if requested
         if push:
-            logger.info(f"Pushing image to registry...")
+            logger.info("Pushing image to registry...")
             builder.push_image(image_tag=image_tag, registry=registry)
             
             # Return final tag (with registry prefix if applicable)
@@ -410,7 +409,7 @@ def _load_multi_instance(
         logger.info(f"Successfully deployed {len(instances)} instances")
         
         # Generate meaningful pool name based on image and container name
-        safe_image = image.split('/')[-1].replace(':', '-')
+        safe_image = image_reference_name(image)
         name_prefix = container_name or safe_image
         pool_name = f"{name_prefix}-pool-{replicas}"
         
@@ -474,7 +473,7 @@ async def _deploy_instance(
     # Docker deployment (supports SSH remote via host parameter)
     if mode == "docker":
         # Generate unique container name (sanitize image name)
-        safe_image = image.split('/')[-1].replace(':', '-')
+        safe_image = image_reference_name(image)
         name_prefix = container_name or safe_image
         unique_name = f"{name_prefix}-{instance_id}"
         

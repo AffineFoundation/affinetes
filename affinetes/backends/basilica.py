@@ -22,6 +22,7 @@ from .base import AbstractBackend
 from ..infrastructure import HTTPExecutor, EnvType
 from ..utils.exceptions import BackendError
 from ..utils.logger import logger
+from ..utils.config import image_reference_name
 
 # Set AFFINETES_MAX_CONCURRENT_DEPLOYMENTS to limit concurrent SDK operations
 _max_concurrent_env = os.getenv("AFFINETES_MAX_CONCURRENT_DEPLOYMENTS")
@@ -101,7 +102,7 @@ class BasilicaBackend(AbstractBackend):
             self.env_vars["UVICORN_WORKERS"] = "1"
 
         # Generate unique backend name
-        safe_image = image.split('/')[-1].replace(':', '-')
+        safe_image = image_reference_name(image, kubernetes=True)
         self.name = f"basilica-pod-{safe_image}-{int(time.time())}"
 
         logger.info(
@@ -124,7 +125,7 @@ class BasilicaBackend(AbstractBackend):
             Unique deployment name
         """
         # Sanitize image name
-        safe_image = self.image.split('/')[-1].replace(':', '-').replace('_', '-')[:15]
+        safe_image = image_reference_name(self.image, kubernetes=True)[:15].rstrip("-")
 
         # Build name components
         timestamp = int(time.time())

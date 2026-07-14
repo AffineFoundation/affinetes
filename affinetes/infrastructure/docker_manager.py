@@ -1,8 +1,9 @@
 """Docker container lifecycle management"""
 
 import docker
+import re
 import time
-from typing import Dict, Optional, Any
+from typing import Optional, Any, Tuple
 
 from ..utils.exceptions import ContainerError, ImageNotFoundError
 from ..utils.logger import logger
@@ -10,6 +11,10 @@ from ..utils.logger import logger
 
 class DockerManager:
     """Manages Docker container lifecycle operations"""
+
+    _SHA256_DIGEST_REFERENCE = re.compile(
+        r"^(?P<repository>[^@\s]+)@sha256:(?P<digest>[0-9a-fA-F]{64})$"
+    )
     
     def __init__(self, host: Optional[str] = None):
         """
@@ -44,29 +49,33 @@ class DockerManager:
         Pull Docker image from registry
 
         Args:
-            image: Image name with tag (e.g., "affine:latest")
+            image: Image name with tag or digest
+                (e.g., "affine:latest" or "affine@sha256:<64hex>")
             quiet: Suppress pull output
 
         Raises:
-            ContainerError: If pull fails AND image doesn't exist locally
+            ContainerError: If the reference is invalid, or if pull fails AND
+                the image doesn't exist locally
         """
+        repository, tag = self._parse_pull_reference(image)
+
         try:
             logger.info(f"Pulling image '{image}' from registry")
 
-            # Parse image name and tag
-            if ":" in image:
-                repository, tag = image.rsplit(":", 1)
-            else:
-                repository = image
-                tag = "latest"
+            pull_kwargs = {"stream": True, "decode": True}
+            if tag is not None:
+                pull_kwargs["tag"] = tag
 
-            # Pull image
-            for line in self.client.api.pull(repository, tag=tag, stream=True, decode=True):
-                if not quiet:
-                    if "status" in line:
-                        logger.debug(f"Pull {image}: {line['status']}")
-                    if "error" in line:
-                        raise ContainerError(f"Pull failed: {line['error']}")
+            # For digest references, pass repository@digest through intact and
+            # let docker-py translate it to the Engine API's repository + digest
+            # parameters. Splitting on the digest colon would turn the digest
+            # into a normal tag and leave an invalid repository ending in
+            # "@sha256".
+            for line in self.client.api.pull(repository, **pull_kwargs):
+                if "error" in line:
+                    raise ContainerError(f"Pull failed: {line['error']}")
+                if not quiet and "status" in line:
+                    logger.debug(f"Pull {image}: {line['status']}")
 
             logger.info(f"Successfully pulled image '{image}'")
 
@@ -78,6 +87,33 @@ class DockerManager:
             # Pull failed - check if image exists locally
             logger.warning(f"Error pulling image '{image}': {e}")
             self._fallback_to_local_image(image)
+
+    @classmethod
+    def _parse_pull_reference(cls, image: str) -> Tuple[str, Optional[str]]:
+        """Return the repository argument and optional tag for ``api.pull``.
+
+        Immutable digest references must be passed to docker-py intact. Normal
+        tagged references retain the existing explicit-tag behavior, while a
+        registry port is not mistaken for a tag.
+        """
+        if not isinstance(image, str) or not image:
+            raise ContainerError("Docker image reference must be a non-empty string")
+
+        if "@" in image:
+            if cls._SHA256_DIGEST_REFERENCE.fullmatch(image) is None:
+                raise ContainerError(
+                    "Invalid Docker digest reference. Expected "
+                    "'<repository>@sha256:<64 hexadecimal characters>'."
+                )
+            return image, None
+
+        last_slash = image.rfind("/")
+        last_colon = image.rfind(":")
+        if last_colon > last_slash:
+            repository, tag = image.rsplit(":", 1)
+            return repository, tag
+
+        return image, "latest"
 
     def _fallback_to_local_image(self, image: str) -> None:
         """
