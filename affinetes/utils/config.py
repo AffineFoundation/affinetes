@@ -1,7 +1,22 @@
 """Global configuration with environment variable overrides"""
 
 import os
-from typing import Tuple
+import re
+
+
+def image_reference_name(image: str, *, kubernetes: bool = False) -> str:
+    """Derive a bounded runtime name from a tag or immutable digest reference."""
+
+    if not isinstance(image, str) or not image:
+        raise ValueError("image must be a non-empty string")
+    leaf = image.rsplit("/", 1)[-1]
+    if kubernetes:
+        value = re.sub(r"[^a-z0-9-]+", "-", leaf.lower())
+        value = value.strip("-")
+        return (value or "environment")[:63].rstrip("-")
+    value = re.sub(r"[^A-Za-z0-9_.-]+", "-", leaf)
+    value = value.strip("-._")
+    return (value or "environment")[:128].rstrip("-._")
 
 
 class Config:

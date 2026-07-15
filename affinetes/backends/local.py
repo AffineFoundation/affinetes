@@ -3,7 +3,6 @@
 import time
 import asyncio
 import threading
-from datetime import datetime
 from typing import Dict, Optional, Any, Tuple
 from pathlib import Path
 
@@ -13,9 +12,9 @@ nest_asyncio.apply()
 from .base import AbstractBackend
 from ..infrastructure import DockerManager, HTTPExecutor, EnvType
 from ..infrastructure.ssh_tunnel import SSHTunnelManager
-from ..utils.exceptions import BackendError, SetupError
+from ..utils.exceptions import BackendError
 from ..utils.logger import logger
-from ..utils.config import Config
+from ..utils.config import image_reference_name
 
 
 class LocalBackend(AbstractBackend):
@@ -77,8 +76,9 @@ class LocalBackend(AbstractBackend):
         else:
             if not image:
                 raise ValueError("image is required when connect_only=False")
-            # Sanitize image name for container naming (remove / and :)
-            safe_image = image.split('/')[-1].replace(':', '-')
+            # Digest references contain ``@`` and cannot be used directly as
+            # Docker container names.
+            safe_image = image_reference_name(image)
             self.name = container_name or f"{safe_image}"
         
         self._container = None
