@@ -372,103 +372,100 @@ afs call agentgym evaluate \
 
 ### `afs validate` - Validate Environment
 
-Validate environment seed consistency and generate test rollouts.
+Run a fail-closed validation against either a local environment directory or an
+already-built image. The command owns a temporary container, calls `evaluate`
+twice for every task ID, writes `summary.json`, cleans up, and exits non-zero if
+any check fails. Ownership is bound to a per-run 256-bit Docker label and the
+created container ID; a same-name container is never reused, started, replaced,
+or removed by validation.
 
 **Syntax:**
 ```bash
-afs validate ENV_DIR [OPTIONS]
+afs validate [ENV_DIR | --image IMAGE] [OPTIONS]
 ```
 
 **Parameters:**
-- `ENV_DIR`: Environment directory path
-- `--num-tests N`: Number of tests to run (default: 100)
-- `--task-id-start N`: Starting task_id (default: 1)
-- `--task-id-end N`: Ending task_id (default: start + num_tests - 1)
-- `--output DIR`: Output directory for test results (default: rollouts/)
-- `--api-key KEY`: API key for LLM service (default: CHUTES_API_TOKEN env var)
-- `--base-url URL`: Base URL for LLM API (default: auto-detect from MINER_SLUG)
-- `--temperature T`: Temperature for LLM generation (default: 0.7)
+- `ENV_DIR`: Build an environment directory containing `env.py` and `Dockerfile`
+- `--image IMAGE`: Validate a pre-built image instead of building `ENV_DIR`
+- `--task-id ID`: Explicit valid task ID; repeat for a set of at least two
+- `--task-id-start N`: Inclusive range start (default: `0`)
+- `--task-id-end N`: Inclusive range end; mutually exclusive with `--num-tests`
+- `--num-tests N`: Number of consecutive IDs from the range start (default: `2`)
+- `--expect-failure-task-id ID`: ID that must return `success=false` twice with
+  the same non-empty `extra.error_code`; repeat as needed
+- `--expected-failure-error-code CODE`: Exact expected-failure code; required
+  whenever an expected-failure task ID is supplied
+- `--model MODEL`, `--base-url URL`: Arguments passed to `evaluate`
+- `--api-key-env NAME`: Read the API key from an environment variable without
+  placing the credential in process arguments; this is the preferred input
+- `--api-key KEY`: Backward-compatible credential input; avoid it because the
+  value is visible in process arguments
+- `--env KEY=VALUE`: Container environment variable; repeat as needed
+- `--output DIR`: Output directory for `summary.json` (default: `rollouts/`)
+- `--pull`: Pull a pre-built `--image` before starting
+- `--host-network`: Start the validation container with host networking
+- `--container-name NAME`: Dedicated, unused container name (default: unique)
+- `--no-cache`: Disable build cache; only valid with `ENV_DIR`
+- `--temperature T`: Evaluation temperature (default: `0.0`)
 - `--timeout SECS`: Timeout for each evaluation in seconds (default: 60)
 
 **What it validates:**
-1. **Seed Consistency**: Same seed generates identical questions
-2. **Seed Diversity**: Different seeds generate different questions
-3. Each test runs twice to verify deterministic behavior
+1. **Successful evaluation**: every valid task returns a mapping with exact
+   `success=true`, a finite numeric non-boolean `score`, and no contradictory
+   error code on both calls.
+2. **Seed independence**: the same `task_id`, called with two different model
+   seeds, has the same verified prompt SHA-256. The seed may change model
+   sampling, but it must not select a different evaluation question.
+3. **Task diversity**: different valid `task_id` values have different prompt
+   SHA-256 values. This is why at least two valid IDs are required.
+4. **Expected rejection**: each expected-failure ID is rejected on both seeds
+   with a stable structured error code.
+5. **Lifecycle ownership and cleanup**: Docker creation is create-only, the
+   loaded container's ownership label, container ID, and immutable local image
+   ID are verified before evaluation, and cleanup removes only that same
+   labeled object. A name/label/ID mismatch fails validation without deleting
+   the mismatched container.
+
+A prompt commitment is accepted only when both a lowercase SHA-256 value and an
+`extra.conversation` containing a user message are present. The command hashes
+the first user message and requires it to match the commitment; a bare
+self-attested hash is rejected. Transport exceptions, malformed results,
+duplicate IDs, ambiguous ranges, unsafe report strings, and cleanup failures
+all fail validation.
 
 **Examples:**
 ```bash
-# Basic validation (no model calls, only seed consistency)
-afs validate environments/my-env
+# Build a local environment and validate task IDs 0 and 1
+afs validate environments/my-env \
+  --model validation-model \
+  --base-url http://127.0.0.1:8001/v1
 
-# Run 50 tests with real model
-export CHUTES_API_TOKEN=your_token
-export MINER_SLUG=your_slug
-afs validate environments/my-env --num-tests 50
+# Validate InstructionGym's pre-built image. Its case_id_end is exclusive, so
+# Actor rejects this boundary before materialization with invalid_task_id.
+afs validate --image ghcr.io/example/instruction-gym@sha256:DIGEST \
+  --task-id 0 \
+  --task-id 1 \
+  --expect-failure-task-id 102636151 \
+  --expected-failure-error-code invalid_task_id \
+  --model evaluation-model \
+  --base-url https://model.example/v1 \
+  --api-key-env MODEL_API_KEY \
+  --pull
 
-# Test specific task_id range
-afs validate environments/my-env --task-id-start 100 --task-id-end 199
+# Test a specific inclusive range and pass container configuration
+afs validate environments/my-env \
+  --task-id-start 100 \
+  --task-id-end 199 \
+  --env UVICORN_WORKERS=1 \
+  --host-network \
+  --output validation-results
 
-# Test starting from specific task_id
+# Select 50 consecutive IDs beginning at 1000
 afs validate environments/my-env --task-id-start 1000 --num-tests 50
-
-# Custom parameters
-afs validate environments/my-env \
-  --num-tests 100 \
-  --output validation_results \
-  --temperature 0.8 \
-  --timeout 300
-
-# Use custom API endpoint
-afs validate environments/my-env \
-  --api-key your_key \
-  --base-url https://custom-api.com/v1 \
-  --num-tests 20
 ```
 
-**Output:**
-```
-Running 100 tests (each test runs twice to validate seed consistency)
---------------------------------------------------------------------------------
-Progress: 10/100 tests completed
-Progress: 20/100 tests completed
-...
-
-✓ Completed 100 tests
-Output directory: rollouts/
-Success rate: 45/100 (45.0%)
-Seed consistency: 100/100 (100.0%)
-Seed diversity: 100/100 unique questions (100.0%)
-```
-
-**Generated Files:**
-- `test_task00001.json` ~ `test_taskNNNNN.json`: Individual test results (filename includes task_id)
-- `summary.json`: Aggregated statistics
-
-**Summary Format:**
-```json
-{
-  "total_tests": 100,
-  "task_id_range": {
-    "start": 1,
-    "end": 100
-  },
-  "success_count": 45,
-  "success_rate": 0.45,
-  "seed_consistency_failures": 0,
-  "seed_consistency_rate": 1.0,
-  "seed_diversity": {
-    "unique_prompts": 100,
-    "total_prompts": 100,
-    "diversity_rate": 1.0
-  }
-}
-```
-
-**Use Cases:**
-- Test environment before deployment
-- Verify seed-based task generation works correctly
-- Generate rollouts for manual review
-- Debug environment implementation
+The report contains only validation observations and hashes, not full prompts,
+model responses, API keys, container environment values, or the ownership token.
 
 ---
 
