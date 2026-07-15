@@ -46,6 +46,7 @@ from distill_v2_eval.domain.errors import EvalError
 from distill_v2_eval.domain.ids import Revision, StudentName
 from distill_v2_eval.domain.models import StudentSubmission
 from distill_v2_eval.domain.ports.scoring import RolloutMeasurement
+from distill_v2_eval.infrastructure.compression import decompress_json
 from distill_v2_eval.infrastructure.logging import get_logger
 from distill_v2_eval.parquet_source import fetch_task_rollouts_direct
 
@@ -83,10 +84,16 @@ class DistillV2Evaluator:
         rollouts = await asyncio.to_thread(
             fetch_task_rollouts_direct, dataset_base_url, task_idx,
         )
+        n_fetched = len(rollouts)
+        rollouts = await asyncio.to_thread(_drop_harness_failures, rollouts)
         if not rollouts:
-            log.warning("driver.no_rollouts", task_idx=task_idx)
+            log.warning(
+                "driver.no_rollouts", task_idx=task_idx, n_fetched=n_fetched,
+            )
             return _empty_snapshot(task_idx)
         cell = _cell_info(task_idx, rollouts)
+        if n_fetched != len(rollouts):
+            cell["n_harness_dropped"] = n_fetched - len(rollouts)
 
         student = StudentSubmission(
             student_name=StudentName(student_name),
@@ -128,6 +135,47 @@ class DistillV2Evaluator:
             )
         finally:
             engine.unload()
+
+
+# Signature of a producer-side sandbox death (see affine-opeg PytestEvaluator):
+# the grader's ``docker exec`` hit a dead container, so its "test output" is
+# the docker CLI's daemon error and no test ever ran.
+_DAEMON_ERROR_MARKER = "Error response from daemon"
+
+
+def _drop_harness_failures(rollouts):  # type: ignore[no-untyped-def]
+    """Drop rollouts whose reward is a producer infra artifact, not a grade.
+
+    A sandbox container that dies mid-rollout (OOM kill, eviction) leaves
+    reward=0 with ``tests_total=0`` and the daemon error as ``raw_output``.
+    That zero says nothing about the trajectory, but as a within-cell z-score
+    outlier it poisons every miner's advantage on the cell — so filter before
+    ``compute_advantages``. Rows whose extra fails to parse are kept; the
+    renderer will surface the real problem later.
+    """
+    kept = []
+    for rollout in rollouts:
+        try:
+            extra = decompress_json(rollout.extra_compressed)
+            breakdown = (extra or {}).get("reward_breakdown") or {}
+        except Exception:  # noqa: BLE001
+            kept.append(rollout)
+            continue
+        if _is_harness_failure(breakdown):
+            continue
+        kept.append(rollout)
+    if len(kept) != len(rollouts):
+        log.warning(
+            "driver.harness_failures_dropped",
+            n_dropped=len(rollouts) - len(kept), n_kept=len(kept),
+        )
+    return kept
+
+
+def _is_harness_failure(breakdown: dict) -> bool:
+    if breakdown.get("tests_total") not in (0, None):
+        return False
+    return _DAEMON_ERROR_MARKER in str(breakdown.get("raw_output") or "")
 
 
 def _cell_info(task_idx: int, rollouts) -> dict[str, Any]:  # type: ignore[no-untyped-def]
@@ -177,12 +225,14 @@ def _score_cell(
     if hasattr(scoring, "score_cell"):
         # Whole-cell scorer (softmax_advantage): softmax over the rollouts'
         # per-token NLL, then expected advantage. Bounded by construction.
-        cell = scoring.score_cell([
+        # NB: keep the result off the ``cell`` name — shadowing the info dict
+        # here replaced the snapshot's cell coordinates with a bare tuple.
+        cell_score = scoring.score_cell([
             RolloutMeasurement(ce=ce, n_tokens=n, advantage=adv)
             for (_r, ce, n, adv) in measured
         ])
-        mean_score, win_rate = cell.mean_score, cell.win_rate
-        per_scores = cell.per_rollout_scores
+        mean_score, win_rate = cell_score.mean_score, cell_score.win_rate
+        per_scores = cell_score.per_rollout_scores
     else:
         # Per-rollout scorer (reward_weighted_ce): score each rollout, then
         # take the |advantage|-weighted mean — baseline rollouts (adv≈0)
