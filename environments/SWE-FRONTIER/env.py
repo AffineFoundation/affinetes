@@ -213,11 +213,18 @@ class FrontierActor:
         agent_result = agent.solve(image_tag)
 
         if not agent_result.success or agent_result.workspace_dir is None:
+            if agent_result.workspace_dir is not None:
+                shutil.rmtree(agent_result.workspace_dir, ignore_errors=True)
             return {
                 "task_name": "swe-frontier",
                 "score": 0.0,
                 "success": False,
                 "time_taken": time.time() - start,
+                "error": (
+                    None
+                    if agent_result.valid_for_scoring
+                    else "agent_execution_invalid"
+                ),
                 "extra": {
                     "task_id": task_id,
                     "image": image_tag,
@@ -225,7 +232,14 @@ class FrontierActor:
                     "model_calls": agent_result.model_calls,
                     "total_tokens": agent_result.total_tokens,
                     "conversation": agent_result.conversation,
-                    "error": agent_result.error,
+                    "valid_for_scoring": agent_result.valid_for_scoring,
+                    "agent_outcome": agent_result.disposition.value,
+                    "agent_process_exit_code": agent_result.process_exit_code,
+                    "agent_failure_kind": agent_result.failure_kind,
+                    "agent_turn_end_reason": agent_result.turn_end_reason,
+                    "agent_affent_ref": agent_result.affent_ref,
+                    "agent_affent_sha256": agent_result.affent_sha256,
+                    "failure_detail": agent_result.error,
                 },
             }
 
@@ -235,11 +249,14 @@ class FrontierActor:
         finally:
             shutil.rmtree(workspace, ignore_errors=True)
 
+        valid_for_scoring = not bool(score_payload.get("error"))
+
         return {
             "task_name": "swe-frontier",
             "score": score,
             "success": score > 0.0,
             "time_taken": time.time() - start,
+            "error": None if valid_for_scoring else "verification_invalid",
             "extra": {
                 "task_id": task_id,
                 "image": image_tag,
@@ -248,7 +265,14 @@ class FrontierActor:
                 "total_tokens": agent_result.total_tokens,
                 "conversation": agent_result.conversation,
                 "score_payload": score_payload,
-                "agent_warning": agent_result.error,
+                "valid_for_scoring": valid_for_scoring,
+                "agent_outcome": agent_result.disposition.value,
+                "agent_process_exit_code": agent_result.process_exit_code,
+                "agent_failure_kind": agent_result.failure_kind,
+                "agent_turn_end_reason": agent_result.turn_end_reason,
+                "agent_affent_ref": agent_result.affent_ref,
+                "agent_affent_sha256": agent_result.affent_sha256,
+                "failure_detail": score_payload.get("error"),
             },
         }
 

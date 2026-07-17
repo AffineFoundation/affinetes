@@ -46,6 +46,13 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 from wsgiref.simple_server import WSGIServer, make_server
 
+from .affent_protocol import (
+    AffentDisposition,
+    classify_affent_run,
+    failure_kind_from_provider_error,
+    verify_affent_binary,
+)
+
 DOCKER_PULL_TIMEOUT = 300
 
 # Stub-kick attempts: when the agent exits cleanly but never replaces
@@ -68,13 +75,6 @@ AFFENT_RETRY_BACKOFF = "4s"
 # actually iterate towards the correct answer.
 VERIFY_BUDGET_PER_SESSION = 20
 VERIFY_TIMEOUT_SEC = 1800
-
-
-def _find_affent_binary() -> str:
-    for path in ["/usr/local/bin/affent-static", os.path.expanduser("~/affent-static")]:
-        if os.path.isfile(path):
-            return path
-    return "affent-static"
 
 
 # Path to the in-container MCP forwarder script. Lives next to this file.
@@ -230,7 +230,10 @@ def _run_verify_server(state: _VerifyServerState, *, host: str = "127.0.0.1"):
         t.join(timeout=5)
 
 
-AFFENT_STATIC_BINARY = _find_affent_binary()
+AFFENT_STATIC_BINARY = os.getenv(
+    "AFFENT_STATIC_BINARY",
+    "/usr/local/bin/affent-static",
+)
 
 SYSTEM_INSTRUCTIONS_HEAD = """\
 You are an autonomous coding agent. ONLY files at /workspace are graded;
@@ -331,6 +334,13 @@ class AffentResult:
     total_tokens: int = 0
     conversation: List[Any] = field(default_factory=list)
     error: Optional[str] = None
+    valid_for_scoring: bool = False
+    disposition: AffentDisposition = AffentDisposition.INFRA_FAILURE
+    process_exit_code: Optional[int] = None
+    failure_kind: Optional[str] = None
+    turn_end_reason: Optional[str] = None
+    affent_ref: Optional[str] = None
+    affent_sha256: Optional[str] = None
 
 
 class AffentAgent:
@@ -342,6 +352,9 @@ class AffentAgent:
         self._host_workspace: Optional[Path] = None
         self._verify_server_ctx = None  # contextmanager handle
         self._verify_state: Optional[_VerifyServerState] = None
+        self._affent_ref: Optional[str] = None
+        self._affent_sha256: Optional[str] = None
+        self._affent_install_error: Optional[str] = None
 
     # ---- container helpers ---------------------------------------------------
 
@@ -371,6 +384,14 @@ class AffentAgent:
         )
 
     def _install_affent(self) -> bool:
+        try:
+            identity = verify_affent_binary(AFFENT_STATIC_BINARY)
+        except RuntimeError as exc:
+            self._affent_install_error = str(exc)
+            print(f"[AFFENT] Binary verification failed: {exc}")
+            return False
+        self._affent_ref = identity.revision
+        self._affent_sha256 = identity.sha256
         cp_result = subprocess.run(
             ["docker", "cp", AFFENT_STATIC_BINARY,
              f"{self._container_name}:/usr/local/bin/affentctl"],
@@ -451,12 +472,24 @@ class AffentAgent:
         return None  # message.delta, thinking.delta, tool.output, etc.
 
     @staticmethod
-    def _parse_trace(stdout: str) -> Tuple[int, int, List[Dict[str, Any]]]:
-        """Aggregate (total_tokens, model_calls, conversation) from a trace."""
+    def _parse_trace(
+        stdout: str,
+    ) -> Tuple[
+        int,
+        int,
+        List[Dict[str, Any]],
+        Optional[str],
+        Optional[str],
+        Optional[str],
+    ]:
+        """Aggregate usage, conversation, and structured terminal state."""
         events: List[Dict[str, Any]] = []
         total_input = 0
         total_output = 0
         model_calls = 0
+        error_message: Optional[str] = None
+        failure_kind: Optional[str] = None
+        turn_end_reason: Optional[str] = None
         for line in stdout.splitlines():
             line = line.strip()
             if not line:
@@ -465,24 +498,49 @@ class AffentAgent:
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(ev, dict):
+                continue
             events.append(ev)
             etype = ev.get("type")
             data = ev.get("data") or {}
+            if not isinstance(data, dict):
+                data = {}
             if etype == "usage":
                 # affent emits one usage event per LLM turn — use that as
                 # both the model-call count and the token aggregator.
                 model_calls += 1
                 total_input += int(data.get("input_tokens") or 0)
                 total_output += int(data.get("output_tokens") or 0)
+            elif etype == "error":
+                message = data.get("message")
+                if isinstance(message, str) and message.strip():
+                    error_message = message.strip()
+                if data.get("recoverable") is not False:
+                    failure_kind = None
+                else:
+                    kind = data.get("failure_kind")
+                    if isinstance(kind, str) and kind.strip():
+                        failure_kind = kind.strip()
+                    else:
+                        failure_kind = failure_kind_from_provider_error(message)
+            elif etype == "turn.end":
+                reason = data.get("reason")
+                turn_end_reason = (
+                    reason.strip()
+                    if isinstance(reason, str) and reason.strip()
+                    else None
+                )
         # Build a lightweight conversation view: user.message,
-        # message.end (assistant final), tool.request/result.
+        # message.done (assistant final), tool.request/result.
         conversation: List[Dict[str, Any]] = []
         for ev in events:
             etype = ev.get("type")
             data = ev.get("data") or {}
+            if not isinstance(data, dict):
+                data = {}
             if etype == "user.message":
                 conversation.append({"role": "user", "content": data.get("text", "")})
-            elif etype == "message.end":
+            elif etype in ("message.done", "message.end"):
                 conversation.append({"role": "assistant", "content": data.get("text", "")})
             elif etype == "tool.request":
                 conversation.append({
@@ -496,7 +554,14 @@ class AffentAgent:
                     "exit_code": data.get("exit_code"),
                     "summary": data.get("result_summary"),
                 })
-        return total_input + total_output, model_calls, conversation
+        return (
+            total_input + total_output,
+            model_calls,
+            conversation,
+            error_message,
+            failure_kind,
+            turn_end_reason,
+        )
 
     # ---- streaming runner ----------------------------------------------------
 
@@ -699,7 +764,10 @@ class AffentAgent:
             if not self._install_affent():
                 return AffentResult(
                     success=False,
-                    error="Failed to install affentctl in container",
+                    error=(
+                        self._affent_install_error
+                        or "Failed to install affentctl in container"
+                    ),
                 )
 
             # Start the host-side verify HTTP server. Token is short-lived
@@ -758,6 +826,10 @@ class AffentAgent:
             agg_conversation: List[Dict[str, Any]] = []
             agg_tokens = 0
             agg_calls = 0
+            final_disposition = AffentDisposition.INFRA_FAILURE
+            final_error: Optional[str] = None
+            final_failure_kind: Optional[str] = None
+            final_turn_end_reason: Optional[str] = None
 
             while attempts < max_attempts:
                 attempts += 1
@@ -808,28 +880,73 @@ class AffentAgent:
                         timeout=remaining,
                     )
                 except subprocess.TimeoutExpired:
-                    # Wall budget hit. Don't drop the workspace — the agent
-                    # may have written real code mid-attempt. Fall through
-                    # to the post-loop verification path so env.py can grade
-                    # whatever's there.
                     print(
                         f"[AFFENT] attempt {attempts} hit wall-time limit; "
-                        "preserving workspace for grading"
+                        "marking the execution invalid"
                     )
-                    rc = 124
-                    full_stdout = ""
-                    full_stderr = "wall_time_exhausted"
-                    break
+                    return AffentResult(
+                        success=False,
+                        workspace_dir=self._host_workspace,
+                        model_calls=agg_calls,
+                        total_tokens=agg_tokens,
+                        conversation=agg_conversation,
+                        error="affent wall_time_exhausted",
+                        valid_for_scoring=False,
+                        disposition=AffentDisposition.INFRA_FAILURE,
+                        process_exit_code=124,
+                        affent_ref=self._affent_ref,
+                        affent_sha256=self._affent_sha256,
+                    )
 
                 agg_stdout_parts.append(full_stdout)
-                tokens, calls, conv = self._parse_trace(full_stdout)
+                (
+                    tokens,
+                    calls,
+                    conv,
+                    trace_error,
+                    failure_kind,
+                    turn_end_reason,
+                ) = self._parse_trace(full_stdout)
                 agg_tokens += tokens
                 agg_calls += calls
                 agg_conversation.extend(conv)
+                final_failure_kind = failure_kind
+                final_turn_end_reason = turn_end_reason
+                final_error = trace_error
+                final_disposition = classify_affent_run(
+                    rc,
+                    turn_end_reason=turn_end_reason,
+                    failure_kind=failure_kind,
+                )
                 print(
                     f"[AFFENT] attempt {attempts} exit={rc} turns={calls} "
                     f"tokens={tokens}"
                 )
+
+                if final_disposition is not AffentDisposition.GRADABLE:
+                    detail = trace_error or (full_stderr or "").strip()
+                    if not detail:
+                        detail = "missing or inconsistent turn.end"
+                    return AffentResult(
+                        success=False,
+                        workspace_dir=self._host_workspace,
+                        model_calls=agg_calls,
+                        total_tokens=agg_tokens,
+                        conversation=agg_conversation,
+                        error=(
+                            f"affent exited {rc} "
+                            f"(turn_end={turn_end_reason!r}): {detail[:500]}"
+                        ),
+                        valid_for_scoring=(
+                            final_disposition is AffentDisposition.MODEL_FAILURE
+                        ),
+                        disposition=final_disposition,
+                        process_exit_code=rc,
+                        failure_kind=failure_kind,
+                        turn_end_reason=turn_end_reason,
+                        affent_ref=self._affent_ref,
+                        affent_sha256=self._affent_sha256,
+                    )
 
                 marker = self._exec(
                     "find /workspace -mindepth 1 -maxdepth 1 "
@@ -841,25 +958,13 @@ class AffentAgent:
                 stubs_unchanged = workspace_empty  # name kept for the rest of the flow
 
                 if not stubs_unchanged:
-                    # Real work was produced (stubs were replaced). Whether
-                    # affentctl exited cleanly or not, the workspace is
-                    # gradable — affent already retried transient upstream
-                    # errors internally before giving up.
+                    # Real work was produced and the structured terminal
+                    # event confirmed a gradable boundary.
                     break
-                if rc == 0:
-                    print(
-                        "[AFFENT] attempt finished cleanly but workspace empty; "
-                        "retrying with kick-prompt"
-                    )
-                else:
-                    # affent exhausted its own retry budget without producing
-                    # any code. One more wrapper-level attempt with the same
-                    # kick still has a chance — the next attempt seeds a
-                    # fresh `affentctl run` invocation with a new HTTP client.
-                    print(
-                        f"[AFFENT] attempt {attempts} failed (exit={rc}) "
-                        f"with workspace empty; retrying with kick-prompt"
-                    )
+                print(
+                    "[AFFENT] attempt reached a normal boundary with an empty "
+                    "workspace; retrying with kick-prompt"
+                )
 
                 if attempts < max_attempts:
                     time.sleep(min(5.0, max(1.0, 2.0 * attempts)))
@@ -873,13 +978,22 @@ class AffentAgent:
                 f"turns={model_calls} tokens={total_tokens}"
             )
 
-            # Workspace is bind-mounted, so the host already has the
-            # agent's final state — no docker-cp extraction step needed.
-            agent_warning: Optional[str] = None
-            if rc != 0:
-                detail = (full_stderr or full_stdout or "")[:500]
-                agent_warning = f"affentctl exited {rc}: {detail}"
-                print(f"[AFFENT] WARNING: {agent_warning[:400]}")
+            if final_disposition is not AffentDisposition.GRADABLE:
+                return AffentResult(
+                    success=False,
+                    workspace_dir=self._host_workspace,
+                    model_calls=model_calls,
+                    total_tokens=total_tokens,
+                    conversation=conversation,
+                    error=final_error or "affent did not produce a terminal event",
+                    valid_for_scoring=False,
+                    disposition=final_disposition,
+                    process_exit_code=rc,
+                    failure_kind=final_failure_kind,
+                    turn_end_reason=final_turn_end_reason,
+                    affent_ref=self._affent_ref,
+                    affent_sha256=self._affent_sha256,
+                )
 
             verify_calls = (
                 self._verify_state.calls if self._verify_state else 0
@@ -895,7 +1009,13 @@ class AffentAgent:
                 model_calls=model_calls,
                 total_tokens=total_tokens,
                 conversation=conversation,
-                error=agent_warning,
+                valid_for_scoring=True,
+                disposition=final_disposition,
+                process_exit_code=rc,
+                failure_kind=final_failure_kind,
+                turn_end_reason=final_turn_end_reason,
+                affent_ref=self._affent_ref,
+                affent_sha256=self._affent_sha256,
             )
         except subprocess.TimeoutExpired:
             return AffentResult(success=False, error="Operation timed out")

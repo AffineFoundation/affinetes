@@ -2,8 +2,11 @@
 
 import json
 import os
+import queue
 import sys
 import subprocess
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Dict, List, Tuple, Any
@@ -36,7 +39,6 @@ def _find_codex_binary() -> str:
 
 CODEX_STATIC_BINARY = _find_codex_binary()
 
-
 @dataclass
 class CodexConfig:
     model: str
@@ -56,6 +58,30 @@ class CodexResult:
     outcome: AgentOutcome = AgentOutcome.COMPLETED
     process_exit_code: Optional[int] = None
     failure_kind: Optional[str] = None
+
+
+def _codex_error_kind(payload: object) -> Optional[str]:
+    """Extract a native or provider-structured Codex failure kind."""
+    if not isinstance(payload, dict):
+        return None
+    value = payload.get("codex_error_info") or payload.get("codexErrorInfo")
+    native_kind: Optional[str] = None
+    if isinstance(value, str) and value.strip():
+        native_kind = value.strip()
+    elif isinstance(value, dict):
+        error_type = value.get("type")
+        if isinstance(error_type, str) and error_type.strip():
+            native_kind = error_type.strip()
+        elif len(value) == 1:
+            key = next(iter(value))
+            if isinstance(key, str) and key.strip():
+                native_kind = key.strip()
+
+    if native_kind in (None, "other", "badRequest"):
+        provider_kind = failure_kind_from_provider_error(payload.get("message"))
+        if provider_kind is not None:
+            return provider_kind
+    return native_kind
 
 
 class CodexAgent:
@@ -98,6 +124,190 @@ class CodexAgent:
                 f"docker container unavailable: {self._container_name}"
             )
         return result
+
+    def _run_codex_app_server(
+        self,
+        prompt: str,
+        *,
+        timeout: int,
+    ) -> subprocess.CompletedProcess:
+        """Run one Codex turn through its typed app-server protocol."""
+        command = [
+            "docker",
+            "exec",
+            "-i",
+            "-e",
+            f"CODEX_API_KEY={self.config.api_key}",
+            self._container_name,
+            "bash",
+            "-c",
+            "cd /app && codex app-server",
+        ]
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+        )
+        if process.stdin is None or process.stdout is None or process.stderr is None:
+            process.kill()
+            raise RuntimeError("failed to open Codex app-server stdio")
+
+        stdout_lines: list[str] = []
+        stderr_lines: list[str] = []
+        stdout_queue: queue.Queue[Optional[str]] = queue.Queue()
+        captured_methods = {
+            "error",
+            "item/completed",
+            "thread/tokenUsage/updated",
+            "turn/completed",
+        }
+        deadline = time.monotonic() + timeout
+        returncode = 1
+        timeout_error: Optional[subprocess.TimeoutExpired] = None
+
+        def _drain_stdout() -> None:
+            for line in process.stdout:
+                stdout_queue.put(line)
+            stdout_queue.put(None)
+
+        def _drain_stderr() -> None:
+            for line in process.stderr:
+                stderr_lines.append(line)
+
+        stdout_thread = threading.Thread(target=_drain_stdout, daemon=True)
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+
+        def _send(message: dict) -> None:
+            process.stdin.write(json.dumps(message, separators=(",", ":")) + "\n")
+            process.stdin.flush()
+
+        def _read_until(predicate) -> dict:
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                try:
+                    line = stdout_queue.get(timeout=remaining)
+                except queue.Empty:
+                    raise subprocess.TimeoutExpired(command, timeout)
+                if line is None:
+                    code = process.poll()
+                    raise RuntimeError(
+                        f"Codex app-server exited before turn completion: {code}"
+                    )
+                try:
+                    message = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if not isinstance(message, dict):
+                    continue
+                if message.get("method") in captured_methods:
+                    stdout_lines.append(line)
+                if message.get("id") is not None and "error" in message:
+                    raise RuntimeError(
+                        "Codex app-server request failed: "
+                        + json.dumps(message["error"], ensure_ascii=True)
+                    )
+                if predicate(message):
+                    return message
+
+        try:
+            _send({
+                "method": "initialize",
+                "id": 0,
+                "params": {
+                    "clientInfo": {
+                        "name": "swe_infinite",
+                        "title": "SWE-INFINITE",
+                        "version": "1",
+                    },
+                },
+            })
+            _read_until(lambda message: message.get("id") == 0)
+            _send({"method": "initialized", "params": {}})
+            _send({
+                "method": "thread/start",
+                "id": 1,
+                "params": {
+                    "model": self.config.model,
+                    "cwd": "/app",
+                    "approvalPolicy": "never",
+                    "sandbox": "danger-full-access",
+                    "ephemeral": True,
+                },
+            })
+            thread_response = _read_until(
+                lambda message: message.get("id") == 1
+            )
+            thread_id = (
+                thread_response.get("result", {})
+                .get("thread", {})
+                .get("id")
+            )
+            if not isinstance(thread_id, str) or not thread_id:
+                raise RuntimeError("Codex app-server returned no thread id")
+
+            _send({
+                "method": "turn/start",
+                "id": 2,
+                "params": {
+                    "threadId": thread_id,
+                    "input": [{"type": "text", "text": prompt}],
+                    "cwd": "/app",
+                    "approvalPolicy": "never",
+                    "sandboxPolicy": {"type": "dangerFullAccess"},
+                },
+            })
+            terminal = _read_until(
+                lambda message: message.get("method") == "turn/completed"
+            )
+            status = (
+                terminal.get("params", {})
+                .get("turn", {})
+                .get("status")
+            )
+            returncode = 0 if status == "completed" else 1
+        except subprocess.TimeoutExpired as exc:
+            timeout_error = exc
+        except Exception as exc:
+            stderr_lines.append(f"Codex app-server protocol error: {exc}\n")
+            process_code = process.poll()
+            returncode = process_code if process_code not in (None, 0) else 1
+        finally:
+            try:
+                process.stdin.close()
+            except (BrokenPipeError, OSError):
+                pass
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=3)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=3)
+            stdout_thread.join(timeout=1)
+            stderr_thread.join(timeout=1)
+
+        stdout = "".join(stdout_lines)
+        stderr = "".join(stderr_lines)
+        if timeout_error is not None:
+            raise subprocess.TimeoutExpired(
+                command,
+                timeout,
+                output=stdout,
+                stderr=stderr,
+            )
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=returncode,
+            stdout=stdout,
+            stderr=stderr,
+        )
 
     def _install_codex(self) -> bool:
         """Copy pre-built codex binary into the task container."""
@@ -158,15 +368,15 @@ class CodexAgent:
         Optional[str],
         Optional[str],
     ]:
-        """Parse JSONL output from codex --json.
+        """Parse Codex app-server JSONL, plus legacy exec JSONL if present.
 
-        Returns tokens, calls, conversation, error detail, and failure kind.
-        Under `--json` codex emits failures as structured events on stdout
-        (`error` / `turn.failed`). Provider failures retain their JSON body in
-        the event message, allowing exact classification without log matching.
+        Returns tokens, calls, conversation, error detail, and native error kind.
+        The app-server terminal event retains `codexErrorInfo`, which the
+        legacy `codex exec --json` projection omits.
         """
         total_input = 0
         total_output = 0
+        latest_total_tokens: Optional[int] = None
         model_calls = 0
         conversation: List[Dict[str, Any]] = []
         last_error: Optional[str] = None
@@ -180,8 +390,12 @@ class CodexAgent:
                 event = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(event, dict):
+                continue
 
             event_type = event.get("type", "")
+            method = event.get("method", "")
+            params = event.get("params") or {}
             if event_type == "turn.completed":
                 model_calls += 1
                 usage = event.get("usage", {})
@@ -190,19 +404,52 @@ class CodexAgent:
             elif event_type == "item.completed":
                 conversation.append(event.get("item", {}))
             elif event_type == "error":
-                msg = event.get("message")
+                error_payload = event.get("error")
+                if not isinstance(error_payload, dict):
+                    error_payload = event
+                msg = error_payload.get("message")
                 if isinstance(msg, str) and msg.strip():
                     last_error = msg.strip()
-                    last_failure_kind = failure_kind_from_provider_error(msg)
+                last_failure_kind = _codex_error_kind(error_payload)
             elif event_type == "turn.failed":
                 err = event.get("error") or {}
                 msg = err.get("message") if isinstance(err, dict) else None
                 if isinstance(msg, str) and msg.strip():
                     last_error = msg.strip()
-                    last_failure_kind = failure_kind_from_provider_error(msg)
+                last_failure_kind = _codex_error_kind(err)
+            elif method == "thread/tokenUsage/updated" and isinstance(params, dict):
+                total = (params.get("tokenUsage") or {}).get("total") or {}
+                value = total.get("totalTokens")
+                if isinstance(value, int):
+                    latest_total_tokens = value
+            elif method == "item/completed" and isinstance(params, dict):
+                item = params.get("item")
+                if isinstance(item, dict) and item.get("type") != "userMessage":
+                    conversation.append(item)
+            elif method == "error" and isinstance(params, dict):
+                error_payload = params.get("error") or {}
+                if isinstance(error_payload, dict):
+                    msg = error_payload.get("message")
+                    if isinstance(msg, str) and msg.strip():
+                        last_error = msg.strip()
+                    last_failure_kind = _codex_error_kind(error_payload)
+            elif method == "turn/completed" and isinstance(params, dict):
+                turn = params.get("turn") or {}
+                if not isinstance(turn, dict):
+                    continue
+                if turn.get("status") == "completed":
+                    model_calls += 1
+                error_payload = turn.get("error") or {}
+                if isinstance(error_payload, dict) and error_payload:
+                    msg = error_payload.get("message")
+                    if isinstance(msg, str) and msg.strip():
+                        last_error = msg.strip()
+                    last_failure_kind = _codex_error_kind(error_payload)
 
         return (
-            total_input + total_output,
+            latest_total_tokens
+            if latest_total_tokens is not None
+            else total_input + total_output,
             model_calls,
             conversation,
             last_error,
@@ -345,20 +592,16 @@ class CodexAgent:
             # 5. Write codex config
             self._write_codex_config()
 
-            # 6. Run codex exec (pass prompt via stdin)
-            codex_cmd = (
-                "cd /app && codex exec "
-                "--dangerously-bypass-approvals-and-sandbox "
-                "--json "
-                "-"
+            # 6. Run one turn through app-server. Unlike `codex exec --json`,
+            # this protocol preserves the native `codexErrorInfo` enum.
+            print(
+                f"[CODEX] Running codex app-server "
+                f"(timeout={self.config.timeout}s)..."
             )
-            print(f"[CODEX] Running codex exec (timeout={self.config.timeout}s)...")
             try:
-                result = self._exec(
-                    codex_cmd,
+                result = self._run_codex_app_server(
+                    prompt,
                     timeout=self.config.timeout,
-                    env={"CODEX_API_KEY": self.config.api_key},
-                    stdin_data=prompt,
                 )
             except subprocess.TimeoutExpired:
                 return CodexResult(
@@ -373,7 +616,10 @@ class CodexAgent:
             )
             # Prepend initial prompt as first conversation entry
             conversation.insert(0, {"role": "user", "content": prompt})
-            print(f"[CODEX] Exit code: {result.returncode}, turns: {model_calls}, tokens: {total_tokens}")
+            print(
+                f"[CODEX] Exit code: {result.returncode}, "
+                f"turns: {model_calls}, tokens: {total_tokens}"
+            )
 
             if result.returncode != 0:
                 if last_error:
@@ -383,13 +629,8 @@ class CodexAgent:
                 if result.stdout:
                     print(f"[CODEX] stdout: {result.stdout[:1000]}")
 
-            # Capture failure detail for the caller, but always attempt to
-            # harvest the patch — codex frequently exits non-zero (rate-limit,
-            # credit exhaustion, dropped connection) after the agent has
-            # already produced real edits on disk. Gating diff extraction on
-            # `model_calls == 0` discarded those edits because codex emits
-            # `item.completed` for every tool call without ever sending a
-            # closing `turn.completed`, so the counter stays zero.
+            # Capture failure detail for the caller, but always harvest the
+            # patch: a failed turn can leave useful partial edits on disk.
             outcome = outcome_from_process_exit_code(
                 result.returncode,
                 failure_kind=failure_kind,

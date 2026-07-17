@@ -1074,6 +1074,19 @@ bash /workspace/entryscript.sh
                 "agent_failure_kind": getattr(
                     agent_result, "failure_kind", None
                 ),
+                "agent_turn_end_reason": getattr(
+                    agent_result, "turn_end_reason", None
+                ),
+                "agent_affent_ref": (
+                    getattr(agent_result, "affent_ref", None)
+                    if agent == "affent"
+                    else None
+                ),
+                "agent_affent_sha256": (
+                    getattr(agent_result, "affent_sha256", None)
+                    if agent == "affent"
+                    else None
+                ),
                 "failure_detail": agent_result.error,
                 "test_stats": test_stats,
                 "usage": usage,
