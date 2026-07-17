@@ -16,9 +16,10 @@ from utils import (
     NETWORK_BLOCKLIST_SCRIPT,
     DIFF_EXTENSIONS,
     ContainerLostError,
-    is_container_lost,
+    is_container_running,
     is_image_prepared,
 )
+from agents.outcome import AgentOutcome, outcome_from_process_exit_code
 
 DOCKER_PULL_TIMEOUT = 300
 
@@ -48,6 +49,8 @@ class CodexResult:
     conversation: List[Any] = field(default_factory=list)
     success: bool = True
     error: Optional[str] = None
+    outcome: AgentOutcome = AgentOutcome.COMPLETED
+    process_exit_code: Optional[int] = None
 
 
 class CodexAgent:
@@ -85,12 +88,9 @@ class CodexAgent:
             timeout=timeout,
             input=stdin_data,
         )
-        # Docker daemon writes container-loss errors to stderr only; checking
-        # stderr (not stdout) avoids false positives from JSONL conversation
-        # content that the model itself might produce.
-        if result.returncode != 0 and is_container_lost(result.stderr or ""):
+        if result.returncode != 0 and not is_container_running(self._container_name):
             raise ContainerLostError(
-                f"docker container lost: {(result.stderr or '').strip()[:300]}"
+                f"docker container unavailable: {self._container_name}"
             )
         return result
 
@@ -286,6 +286,7 @@ class CodexAgent:
                     return CodexResult(
                         patch="", success=False,
                         error=f"Failed to pull image: {pull_result.stderr}",
+                        outcome=AgentOutcome.INFRA_FAILURE,
                     )
                 print(f"[CODEX] Using local image: {docker_image}")
 
@@ -307,6 +308,7 @@ class CodexAgent:
                 return CodexResult(
                     patch="", success=False,
                     error=f"Failed to start container: {run_result.stderr}",
+                    outcome=AgentOutcome.INFRA_FAILURE,
                 )
 
             # 3. Sanitize git history and normalize timestamps
@@ -317,6 +319,7 @@ class CodexAgent:
                 return CodexResult(
                     patch="", success=False,
                     error="Failed to install Codex CLI in container",
+                    outcome=AgentOutcome.INFRA_FAILURE,
                 )
 
             # 5. Write codex config
@@ -341,6 +344,7 @@ class CodexAgent:
                 return CodexResult(
                     patch="", success=False,
                     error=f"Codex timed out after {self.config.timeout}s",
+                    outcome=AgentOutcome.INFRA_FAILURE,
                 )
 
             # 7. Parse output
@@ -366,19 +370,14 @@ class CodexAgent:
             # `model_calls == 0` discarded those edits because codex emits
             # `item.completed` for every tool call without ever sending a
             # closing `turn.completed`, so the counter stays zero.
+            outcome = outcome_from_process_exit_code(result.returncode)
             error_detail: Optional[str] = None
             if result.returncode != 0:
                 detail = (
                     last_error
                     or (result.stderr or result.stdout or "")[:500]
                 )
-                if any(kw in detail for kw in ("404", "No matching chute", "not found", "authentication", "401", "403")):
-                    error_prefix = "api_error"
-                elif any(kw in detail for kw in ("Reconnecting", "connection", "network", "timeout")):
-                    error_prefix = "api_error"
-                else:
-                    error_prefix = "codex_error"
-                error_detail = f"{error_prefix}: exit {result.returncode}: {detail}"
+                error_detail = f"codex exited with {result.returncode}: {detail}"
 
             # 8. Extract diff from container — run unconditionally so that
             # partial edits left by a failed codex run are not silently lost.
@@ -395,15 +394,34 @@ class CodexAgent:
                 model_calls=model_calls,
                 total_tokens=total_tokens,
                 conversation=conversation,
-                success=bool(patch),
+                success=bool(patch) and outcome.valid_for_scoring,
                 error=error_detail,
+                outcome=outcome,
+                process_exit_code=result.returncode,
             )
 
         except subprocess.TimeoutExpired:
-            return CodexResult(patch="", success=False, error="Operation timed out")
+            return CodexResult(
+                patch="",
+                success=False,
+                error="Operation timed out",
+                outcome=AgentOutcome.INFRA_FAILURE,
+            )
+        except ContainerLostError as exc:
+            return CodexResult(
+                patch="",
+                success=False,
+                error=str(exc),
+                outcome=AgentOutcome.INFRA_FAILURE,
+            )
         except Exception:
             import traceback
-            return CodexResult(patch="", success=False, error=traceback.format_exc())
+            return CodexResult(
+                patch="",
+                success=False,
+                error=traceback.format_exc(),
+                outcome=AgentOutcome.INFRA_FAILURE,
+            )
         finally:
             self.cleanup()
 

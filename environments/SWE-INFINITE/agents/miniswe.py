@@ -13,6 +13,7 @@ from typing import Optional, List, Any
 
 import litellm
 import yaml
+from minisweagent.agents.default import DefaultAgent
 from minisweagent.models.litellm_model import (
     LitellmModel,
     logger as _litellm_model_logger,
@@ -34,8 +35,27 @@ from utils import (
     is_image_prepared,
     ContainerLostError,
     is_blacklisted_command,
-    is_container_lost,
+    is_container_running,
 )
+from agents.outcome import AgentOutcome
+
+try:
+    from minisweagent.exceptions import FormatError
+except ImportError:  # mini-swe-agent 1.x exports it from agents.default
+    from minisweagent.agents.default import FormatError
+
+
+_MODEL_FAILURE_EXCEPTIONS = (
+    FormatError,
+    litellm.exceptions.ContextWindowExceededError,
+)
+
+
+def outcome_from_exception(exc: BaseException) -> AgentOutcome:
+    """Classify typed MiniSWE exceptions without inspecting their messages."""
+    if isinstance(exc, _MODEL_FAILURE_EXCEPTIONS):
+        return AgentOutcome.MODEL_FAILURE
+    return AgentOutcome.INFRA_FAILURE
 
 
 class FailFastLitellmModel(LitellmModel):
@@ -49,8 +69,8 @@ class FailFastLitellmModel(LitellmModel):
     ~5-6 minutes on 10 doomed retries — slot stays occupied that whole
     time. Adding BadRequestError to the blacklist surfaces 4xx on the
     first try; only 5xx / network errors / KeyboardInterrupt still
-    retry. This pairs with env.py's _classify_agent_error, which then
-    records the failure as a non-retryable context_exceeded sample.
+    retry. Only LiteLLM's explicit ``ContextWindowExceededError`` is a
+    model failure; an untyped BadRequest remains invalid for scoring.
     """
 
     @retry(
@@ -109,9 +129,11 @@ class _BlacklistDockerEnv:
         result = self._env.execute(command, **kwargs)
         # Detect container loss: docker daemon errors mean the agent cannot
         # make any further progress, so abort the run and let the caller retry.
-        if result.get("returncode", 0) != 0 and is_container_lost(result.get("output", "")):
+        if result.get("returncode", 0) != 0 and not is_container_running(
+            self._env.container_id
+        ):
             raise ContainerLostError(
-                f"docker container lost: {result.get('output', '').strip()[:300]}"
+                f"docker container unavailable: {self._env.container_id}"
             )
         return result
 
@@ -141,6 +163,7 @@ class MiniSWEResult:
     conversation: List[Any] = field(default_factory=list)
     success: bool = True
     error: Optional[str] = None
+    outcome: AgentOutcome = AgentOutcome.COMPLETED
 
 
 class MiniSWEAgent:
@@ -211,7 +234,6 @@ class MiniSWEAgent:
     ) -> MiniSWEResult:
         """Run MiniSWE agent to implement the change."""
         try:
-            from minisweagent.agents.default import DefaultAgent, FormatError
             from minisweagent.environments.docker import DockerEnvironment
 
             # Subclass to handle <think> tags in model output
@@ -240,6 +262,7 @@ class MiniSWEAgent:
                     return MiniSWEResult(
                         patch="", success=False,
                         error=f"Failed to pull image: {pull_result.stderr}",
+                        outcome=AgentOutcome.INFRA_FAILURE,
                     )
                 print(f"[MINISWE] Using local image: {docker_image}")
 
@@ -314,14 +337,16 @@ class MiniSWEAgent:
             )
             patch = ""
             error = None
+            outcome = AgentOutcome.COMPLETED
 
             try:
                 loop = asyncio.get_event_loop()
                 _, result = await loop.run_in_executor(None, self._agent.run, prompt)
                 patch = result
-            except Exception:
+            except Exception as exc:
                 import traceback
                 error = traceback.format_exc()
+                outcome = outcome_from_exception(exc)
             finally:
                 self.cleanup()
 
@@ -346,13 +371,19 @@ class MiniSWEAgent:
                 model_cost=self._agent.model.cost if self._agent else 0.0,
                 total_tokens=total_tokens,
                 conversation=clean_conversation,
-                success=bool(patch) and error is None,
+                success=bool(patch) and error is None and outcome.valid_for_scoring,
                 error=error,
+                outcome=outcome,
             )
 
         except Exception:
             import traceback
-            return MiniSWEResult(patch="", success=False, error=traceback.format_exc())
+            return MiniSWEResult(
+                patch="",
+                success=False,
+                error=traceback.format_exc(),
+                outcome=AgentOutcome.INFRA_FAILURE,
+            )
 
     def _build_prompt(
         self,
