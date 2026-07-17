@@ -771,6 +771,31 @@ class Actor:
                 ep.conversation = affent_result["conversation"] or ep.conversation
                 ep.tool_trace = affent_result["tool_trace"]
 
+                if affent_result["disposition"] == "model_failure":
+                    return {
+                        "task_name": "qqr",
+                        "score": 0.0,
+                        "success": False,
+                        "time_taken": (datetime.now() - start_time).total_seconds(),
+                        "error": None,
+                        "extra": {
+                            "valid_for_scoring": True,
+                            "agent_outcome": "model_failure",
+                            "failure_detail": affent_result["failure_detail"],
+                            "agent_failure_kind": affent_result["failure_kind"],
+                            "agent_turn_end_reason": affent_result["turn_end_reason"],
+                            "agent_affent_ref": affent_result["affent_ref"],
+                            "agent_affent_sha256": affent_result["affent_sha256"],
+                            "agent_binary_path": affent_result["binary_path"],
+                            "affent_exit_code": affent_result["exit_code"],
+                            "seed": seed,
+                            "task_id": task_id,
+                            "usage": total_usage,
+                            "agent": "affent",
+                            "tool_trace": ep.tool_trace,
+                        },
+                    }
+
                 if not final_answer.strip():
                     logger.warning(
                         "affent produced no final answer (exit=%s); stderr_tail=%s",
@@ -781,8 +806,17 @@ class Actor:
                         "score": 0.0,
                         "success": False,
                         "time_taken": (datetime.now() - start_time).total_seconds(),
+                        "error": None,
                         "extra": {
-                            "error": "Agent produced no final answer",
+                            "valid_for_scoring": True,
+                            "agent_outcome": "completed",
+                            "failure_detail": "agent_produced_no_final_answer",
+                            "agent_failure_kind": affent_result["failure_kind"],
+                            "agent_turn_end_reason": affent_result["turn_end_reason"],
+                            "agent_affent_ref": affent_result["affent_ref"],
+                            "agent_affent_sha256": affent_result["affent_sha256"],
+                            "agent_binary_path": affent_result["binary_path"],
+                            "affent_exit_code": affent_result["exit_code"],
                             "seed": seed,
                             "task_id": task_id,
                             "usage": total_usage,
@@ -806,7 +840,14 @@ class Actor:
                         "score": 0.0,
                         "success": False,
                         "time_taken": (datetime.now() - start_time).total_seconds(),
-                        "extra": {"error": "episode not found", "seed": seed, "task_id": task_id},
+                        "error": "agent_execution_invalid",
+                        "extra": {
+                            "error": "episode not found",
+                            "valid_for_scoring": False,
+                            "failure_detail": "episode not found",
+                            "seed": seed,
+                            "task_id": task_id,
+                        },
                     }
 
                 score = final_ep.final_score
@@ -817,6 +858,7 @@ class Actor:
                     "score": score / 100.0,
                     "success": score >= 60,
                     "time_taken": (datetime.now() - start_time).total_seconds(),
+                    "error": None,
                     "extra": {
                         "conversation": conv,
                         "conversation_total_messages": len(conv),
@@ -834,11 +876,20 @@ class Actor:
                         ),
                         "agent": "affent",
                         "affent_exit_code": affent_result["exit_code"],
+                        "agent_failure_kind": affent_result["failure_kind"],
+                        "agent_turn_end_reason": affent_result["turn_end_reason"],
+                        "agent_affent_ref": affent_result["affent_ref"],
+                        "agent_affent_sha256": affent_result["affent_sha256"],
+                        "agent_binary_path": affent_result["binary_path"],
+                        "valid_for_scoring": True,
                     },
                 }
                 llm_error = final_ep.score_breakdown.get("error")
                 if llm_error:
+                    result["error"] = "verification_invalid"
                     result["extra"]["error"] = llm_error
+                    result["extra"]["valid_for_scoring"] = False
+                    result["extra"]["failure_detail"] = llm_error
 
                 if collect_logprobs and conv:
                     try:
@@ -863,8 +914,11 @@ class Actor:
                     "score": 0.0,
                     "success": False,
                     "time_taken": (datetime.now() - start_time).total_seconds(),
+                    "error": "agent_execution_invalid",
                     "extra": {
                         "error": f"affent binary not available: {e}",
+                        "valid_for_scoring": False,
+                        "failure_detail": str(e),
                         "seed": seed,
                         "task_id": task_id,
                     },
@@ -876,8 +930,11 @@ class Actor:
                     "score": 0.0,
                     "success": False,
                     "time_taken": (datetime.now() - start_time).total_seconds(),
+                    "error": "agent_execution_invalid",
                     "extra": {
                         "error": f"Agent run failed: {e}",
+                        "valid_for_scoring": False,
+                        "failure_detail": str(e),
                         "seed": seed,
                         "task_id": task_id,
                         "usage": total_usage,

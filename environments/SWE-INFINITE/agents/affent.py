@@ -26,22 +26,19 @@ from utils import (
     is_container_running,
     is_image_prepared,
 )
-from agents.outcome import AgentOutcome, outcome_from_process_exit_code
+from agents.affent_protocol import verify_affent_binary
+from agents.outcome import (
+    AgentOutcome,
+    failure_kind_from_provider_error,
+    outcome_from_affent_protocol,
+)
 
 DOCKER_PULL_TIMEOUT = 300
 
-
-def _find_affent_binary() -> str:
-    for path in [
-        "/usr/local/bin/affent-static",
-        os.path.expanduser("~/affent-static"),
-    ]:
-        if os.path.isfile(path):
-            return path
-    return "affent-static"  # fallback to PATH
-
-
-AFFENT_STATIC_BINARY = _find_affent_binary()
+AFFENT_STATIC_BINARY = os.getenv(
+    "AFFENT_STATIC_BINARY",
+    "/usr/local/bin/affent-static",
+)
 
 
 # affent's built-in system prompt is "dev-box" flavored (mentions schedule_*
@@ -88,6 +85,10 @@ class AffentResult:
     error: Optional[str] = None
     outcome: AgentOutcome = AgentOutcome.COMPLETED
     process_exit_code: Optional[int] = None
+    failure_kind: Optional[str] = None
+    turn_end_reason: Optional[str] = None
+    affent_ref: Optional[str] = None
+    affent_sha256: Optional[str] = None
 
 
 class AffentAgent:
@@ -96,6 +97,9 @@ class AffentAgent:
     def __init__(self, config: AffentConfig):
         self.config = config
         self._container_name: Optional[str] = None
+        self._affent_ref: Optional[str] = None
+        self._affent_sha256: Optional[str] = None
+        self._affent_install_error: Optional[str] = None
 
     def _exec(
         self,
@@ -131,6 +135,14 @@ class AffentAgent:
 
     def _install_affent(self) -> bool:
         """Copy the prebuilt affent binary into the task container."""
+        try:
+            identity = verify_affent_binary(AFFENT_STATIC_BINARY)
+        except RuntimeError as exc:
+            self._affent_install_error = str(exc)
+            print(f"[AFFENT] Binary verification failed: {exc}")
+            return False
+        self._affent_ref = identity.revision
+        self._affent_sha256 = identity.sha256
         print("[AFFENT] Copying affent binary into container...")
         cp_result = subprocess.run(
             ["docker", "cp", AFFENT_STATIC_BINARY,
@@ -138,14 +150,19 @@ class AffentAgent:
             capture_output=True, text=True, timeout=30,
         )
         if cp_result.returncode != 0:
-            print(f"[AFFENT] Failed to copy affent binary: {cp_result.stderr[:500]}")
+            self._affent_install_error = (
+                f"failed to copy affent binary: {cp_result.stderr[:500]}"
+            )
+            print(f"[AFFENT] {self._affent_install_error}")
             return False
-        # Smoke test: -h is the cheapest invocation that proves the binary loads.
+        # The pinned binary's help command must load and terminate successfully.
         result = self._exec("affentctl help", timeout=10)
-        # `help` exits with code 2 in some flag.FlagSet conventions.
-        if result.returncode not in (0, 2):
+        if result.returncode != 0:
             diagnostic = (result.stdout or "") + (result.stderr or "")
-            print(f"[AFFENT] affent binary not working: {diagnostic[:500]}")
+            self._affent_install_error = (
+                f"affent binary smoke test failed: {diagnostic[:500]}"
+            )
+            print(f"[AFFENT] {self._affent_install_error}")
             return False
         print("[AFFENT] affent ready")
         return True
@@ -206,8 +223,17 @@ class AffentAgent:
         lines.append(problem_statement.strip())
         return "\n".join(lines)
 
-    def _parse_jsonl_trace(self, jsonl_text: str) -> tuple[int, int, list]:
-        """Walk affent SSE trace JSONL → (total_tokens, model_calls, conversation).
+    def _parse_jsonl_trace(
+        self, jsonl_text: str
+    ) -> tuple[
+        int,
+        int,
+        list,
+        Optional[str],
+        Optional[str],
+        Optional[str],
+    ]:
+        """Walk the Affent trace and retain its terminal provider failure.
 
         Each line: {"id": int, "type": "...", "data": <obj>}. We fold deltas
         into OpenAI-style messages so downstream analysis matches the codex
@@ -220,6 +246,9 @@ class AffentAgent:
         total_tokens = 0
         model_calls = 0
         conversation: list[dict] = []
+        last_error: Optional[str] = None
+        last_failure_kind: Optional[str] = None
+        turn_end_reason: Optional[str] = None
         cur_assistant_parts: list[str] = []
         cur_tool_calls: list[dict] = []
 
@@ -241,8 +270,12 @@ class AffentAgent:
                 ev = json.loads(line)
             except json.JSONDecodeError:
                 continue
+            if not isinstance(ev, dict):
+                continue
             t = ev.get("type", "")
             d = ev.get("data") or {}
+            if not isinstance(d, dict):
+                d = {}
             if t == "user.message":
                 _flush_assistant()
                 conversation.append({"role": "user", "content": d.get("text", "")})
@@ -270,10 +303,35 @@ class AffentAgent:
                 })
             elif t == "usage":
                 total_tokens += int(d.get("input_tokens", 0)) + int(d.get("output_tokens", 0))
+            elif t == "error":
+                message = d.get("message")
+                last_error = (
+                    message.strip()
+                    if isinstance(message, str) and message.strip()
+                    else None
+                )
+                if d.get("recoverable") is not False:
+                    last_failure_kind = None
+                else:
+                    failure_kind = d.get("failure_kind")
+                    if isinstance(failure_kind, str) and failure_kind.strip():
+                        last_failure_kind = failure_kind.strip()
+                    else:
+                        last_failure_kind = failure_kind_from_provider_error(message)
             elif t == "turn.end":
                 _flush_assistant()
+                reason = d.get("reason")
+                if isinstance(reason, str) and reason.strip():
+                    turn_end_reason = reason.strip()
         _flush_assistant()
-        return total_tokens, model_calls, conversation
+        return (
+            total_tokens,
+            model_calls,
+            conversation,
+            last_error,
+            last_failure_kind,
+            turn_end_reason,
+        )
 
     async def solve(
         self,
@@ -333,7 +391,10 @@ class AffentAgent:
             if not self._install_affent():
                 return AffentResult(
                     patch="", success=False,
-                    error="Failed to install affent in container",
+                    error=(
+                        self._affent_install_error
+                        or "Failed to install affent in container"
+                    ),
                     outcome=AgentOutcome.INFRA_FAILURE,
                 )
 
@@ -369,6 +430,8 @@ class AffentAgent:
                     patch="", success=False,
                     error=f"affent timed out after {self.config.timeout}s",
                     outcome=AgentOutcome.INFRA_FAILURE,
+                    affent_ref=self._affent_ref,
+                    affent_sha256=self._affent_sha256,
                 )
 
             # 7. persist trace to host BEFORE cleanup deletes the container,
@@ -396,7 +459,14 @@ class AffentAgent:
                 )
                 trace_text = trace_read.stdout or ""
 
-            total_tokens, model_calls, conversation = self._parse_jsonl_trace(trace_text)
+            (
+                total_tokens,
+                model_calls,
+                conversation,
+                last_trace_error,
+                failure_kind,
+                turn_end_reason,
+            ) = self._parse_jsonl_trace(trace_text)
             if not any(m.get("role") == "user" for m in conversation):
                 conversation.insert(0, {"role": "user", "content": user_prompt})
 
@@ -407,20 +477,6 @@ class AffentAgent:
             if result.returncode != 0:
                 if result.stderr:
                     print(f"[AFFENT] stderr: {result.stderr[:1000]}")
-
-            # Pull out the most informative LLM error for diagnostics only.
-            # The process exit code, not this text, determines disposition.
-            trace_errors = []
-            for line in trace_text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("type") == "error":
-                    trace_errors.append((ev.get("data") or {}).get("message", ""))
 
             # Always attempt to extract the diff. Even when affentctl exits
             # with an error mid-loop, prior tool calls may have written real
@@ -435,22 +491,39 @@ class AffentAgent:
                 patch = patch.rstrip("\n") + "\n"
 
             error_str: Optional[str] = None
-            outcome = outcome_from_process_exit_code(result.returncode)
-            if result.returncode != 0:
-                msg = trace_errors[-1] if trace_errors else (
+            outcome = outcome_from_affent_protocol(
+                result.returncode,
+                turn_end_reason=turn_end_reason,
+                failure_kind=failure_kind,
+            )
+            if (
+                outcome is AgentOutcome.COMPLETED
+                and turn_end_reason in ("max_turns", "length")
+            ):
+                failure_kind = "turn_budget_exhausted"
+            if outcome is not AgentOutcome.COMPLETED:
+                msg = last_trace_error or (
                     (result.stderr or result.stdout or "").strip()
                 )
-                error_str = f"affent exited with {result.returncode}: {msg[:500]}"
+                detail = msg[:500] if msg else "missing or inconsistent turn.end"
+                error_str = (
+                    f"affent exited with {result.returncode} "
+                    f"(turn_end={turn_end_reason!r}): {detail}"
+                )
 
             return AffentResult(
                 patch=patch,
                 model_calls=model_calls,
                 total_tokens=total_tokens,
                 conversation=conversation,
-                success=bool(patch) and outcome.valid_for_scoring,
+                success=bool(patch) and outcome is AgentOutcome.COMPLETED,
                 error=error_str,
                 outcome=outcome,
                 process_exit_code=result.returncode,
+                failure_kind=failure_kind,
+                turn_end_reason=turn_end_reason,
+                affent_ref=self._affent_ref,
+                affent_sha256=self._affent_sha256,
             )
 
         except subprocess.TimeoutExpired:

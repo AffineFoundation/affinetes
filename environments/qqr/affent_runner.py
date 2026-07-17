@@ -18,6 +18,12 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from affent_protocol import (
+    AffentDisposition,
+    classify_affent_run,
+    failure_kind_from_provider_error,
+    verify_affent_binary,
+)
 from config import (
     AMAP_MAPS_API_KEY,
     MAX_TOOL_STEPS,
@@ -94,9 +100,18 @@ def _parse_trace_events(trace_path: Path) -> Dict[str, Any]:
     pending_requests: Dict[str, Dict[str, Any]] = {}
     tool_trace: List[Dict[str, Any]] = []
     usage = {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    turn_end_reason: Optional[str] = None
+    error_message: Optional[str] = None
+    failure_kind: Optional[str] = None
 
     if not trace_path.exists():
-        return {"tool_trace": tool_trace, "usage": usage}
+        return {
+            "tool_trace": tool_trace,
+            "usage": usage,
+            "turn_end_reason": None,
+            "error_message": None,
+            "failure_kind": None,
+        }
 
     for line in trace_path.read_text().splitlines():
         if not line.strip():
@@ -105,9 +120,13 @@ def _parse_trace_events(trace_path: Path) -> Dict[str, Any]:
             ev = json.loads(line)
         except json.JSONDecodeError:
             continue
+        if not isinstance(ev, dict):
+            continue
 
         etype = ev.get("type")
         payload = ev.get("data") or {}
+        if not isinstance(payload, dict):
+            payload = {}
 
         if etype == "tool.request":
             pending_requests[payload.get("call_id", "")] = {
@@ -131,8 +150,33 @@ def _parse_trace_events(trace_path: Path) -> Dict[str, Any]:
             usage["prompt_tokens"] += payload.get("input_tokens", 0) or 0
             usage["completion_tokens"] += payload.get("output_tokens", 0) or 0
             usage["total_tokens"] = usage["prompt_tokens"] + usage["completion_tokens"]
+        elif etype == "error":
+            message = payload.get("message")
+            if isinstance(message, str) and message.strip():
+                error_message = message.strip()
+            if payload.get("recoverable") is not False:
+                failure_kind = None
+            else:
+                kind = payload.get("failure_kind")
+                if isinstance(kind, str) and kind.strip():
+                    failure_kind = kind.strip()
+                else:
+                    failure_kind = failure_kind_from_provider_error(message)
+        elif etype == "turn.end":
+            reason = payload.get("reason")
+            turn_end_reason = (
+                reason.strip()
+                if isinstance(reason, str) and reason.strip()
+                else None
+            )
 
-    return {"tool_trace": tool_trace, "usage": usage}
+    return {
+        "tool_trace": tool_trace,
+        "usage": usage,
+        "turn_end_reason": turn_end_reason,
+        "error_message": error_message,
+        "failure_kind": failure_kind,
+    }
 
 
 def _extract_final_answer(conversation: List[Dict[str, Any]]) -> str:
@@ -154,23 +198,6 @@ def _extract_final_answer(conversation: List[Dict[str, Any]]) -> str:
         if content:
             return content
     return ""
-
-
-def _extract_first_error_event(trace_path: Path) -> Optional[str]:
-    """Pluck the first `error` event from affent's trace JSONL for diagnostics."""
-    if not trace_path.exists():
-        return None
-    for line in trace_path.read_text().splitlines():
-        if not line.strip():
-            continue
-        try:
-            ev = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if ev.get("type") == "error":
-            payload = ev.get("data") or {}
-            return f"[{payload.get('code', '?')}] {payload.get('message', '')}"
-    return None
 
 
 def _parse_session_log(session_path: Path) -> List[Dict[str, Any]]:
@@ -207,18 +234,19 @@ async def run_affent_agent(
             "final_answer": str,
             "usage":       {prompt_tokens, completion_tokens, total_tokens},
             "exit_code":   int,
+            "turn_end_reason": str,
+            "failure_kind": Optional[str],
+            "disposition": str,
+            "affent_ref": str,
+            "affent_sha256": str,
             "stderr_tail": str,  # last few KB of affentctl stderr for debugging
         }
 
     Raises:
-        FileNotFoundError if AFFENTCTL_BIN doesn't exist.
-        RuntimeError on subprocess timeout or non-zero exit.
+        RuntimeError if the binary does not match its build manifest, the
+        subprocess times out, or affent reports an invalid protocol outcome.
     """
-    if not Path(AFFENTCTL_BIN).exists():
-        raise FileNotFoundError(
-            f"affentctl binary not found at {AFFENTCTL_BIN}; "
-            "set AFFENTCTL_BIN or rebuild the Docker image."
-        )
+    identity = verify_affent_binary(AFFENTCTL_BIN)
 
     with tempfile.TemporaryDirectory(prefix="affent-qqr-") as ws:
         workspace = Path(ws)
@@ -267,21 +295,23 @@ async def run_affent_agent(
             raise RuntimeError(f"affentctl timed out after {timeout}s")
 
         stderr_tail = stderr.decode(errors="replace")[-2048:]
-        # affentctl exit codes: 0 completed, 2 max_turns, 3 error, 130 cancelled.
-        # max_turns means the agent did real work, just didn't finish naturally —
-        # the trace + session log are complete, so let the scorer grade what we have.
-        if proc.returncode not in (0, 2):
-            # Pull the error event from the trace JSONL — gives a much more useful
-            # message than the raw stderr (which is INFO-level zerolog noise).
-            trace_error = _extract_first_error_event(trace_file)
-            detail = trace_error or stderr_tail
+        trace = _parse_trace_events(trace_file)
+        disposition = classify_affent_run(
+            proc.returncode,
+            turn_end_reason=trace["turn_end_reason"],
+            failure_kind=trace["failure_kind"],
+        )
+        if disposition is AffentDisposition.INFRA_FAILURE:
+            detail = trace["error_message"] or stderr_tail
+            if not detail:
+                detail = "missing or inconsistent turn.end"
             raise RuntimeError(
-                f"affentctl exited {proc.returncode}: {detail}"
+                f"affentctl protocol failure: exit={proc.returncode}, "
+                f"turn_end={trace['turn_end_reason']!r}: {detail}"
             )
 
         session_log = workspace / ".affentctl" / f"{session_id}.jsonl"
         conversation = _parse_session_log(session_log)
-        trace = _parse_trace_events(trace_file)
 
         return {
             "conversation": conversation,
@@ -289,5 +319,12 @@ async def run_affent_agent(
             "final_answer": _extract_final_answer(conversation),
             "usage": trace["usage"],
             "exit_code": proc.returncode,
+            "turn_end_reason": trace["turn_end_reason"],
+            "failure_kind": trace["failure_kind"],
+            "failure_detail": trace["error_message"],
+            "disposition": disposition.value,
+            "affent_ref": identity.revision,
+            "affent_sha256": identity.sha256,
+            "binary_path": AFFENTCTL_BIN,
             "stderr_tail": stderr_tail,
         }

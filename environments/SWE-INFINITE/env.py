@@ -1022,6 +1022,14 @@ bash /workspace/entryscript.sh
                 "error": agent_result.error,
                 "error_type": outcome.value,
             }
+        elif outcome is AgentOutcome.MODEL_FAILURE:
+            if agent_result.error:
+                print(f"[SWE-INFINITE] Agent model failure:\n{agent_result.error}")
+            score = 0.0
+            test_stats = {
+                "error": agent_result.error,
+                "error_type": outcome.value,
+            }
         elif not fix_patch or not fix_patch.strip():
             if agent_result.error:
                 print(f"[SWE-INFINITE] Agent error:\n{agent_result.error}")
@@ -1062,6 +1070,22 @@ bash /workspace/entryscript.sh
                 "agent_outcome": outcome.value,
                 "agent_process_exit_code": getattr(
                     agent_result, "process_exit_code", None
+                ),
+                "agent_failure_kind": getattr(
+                    agent_result, "failure_kind", None
+                ),
+                "agent_turn_end_reason": getattr(
+                    agent_result, "turn_end_reason", None
+                ),
+                "agent_affent_ref": (
+                    getattr(agent_result, "affent_ref", None)
+                    if agent == "affent"
+                    else None
+                ),
+                "agent_affent_sha256": (
+                    getattr(agent_result, "affent_sha256", None)
+                    if agent == "affent"
+                    else None
                 ),
                 "failure_detail": agent_result.error,
                 "test_stats": test_stats,
