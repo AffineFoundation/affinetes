@@ -13,7 +13,11 @@ import litellm
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from agents.miniswe import outcome_from_exception
-from agents.affent import AffentAgent, AffentConfig
+from agents.affent import (
+    AffentAgent,
+    AffentConfig,
+    _is_gradable_turn_budget_exit,
+)
 from agents.codex import CodexAgent, CodexConfig, CodexResult
 from agents.outcome import (
     AgentOutcome,
@@ -122,7 +126,7 @@ def test_affent_trace_preserves_structured_provider_failure() -> None:
         },
     })
 
-    _, _, _, error, failure_kind = agent._parse_jsonl_trace(trace)
+    _, _, _, error, failure_kind, _ = agent._parse_jsonl_trace(trace)
 
     assert error == provider_error
     assert failure_kind == "context_overflow"
@@ -143,9 +147,33 @@ def test_affent_recoverable_context_error_is_not_terminal_model_failure() -> Non
         },
     })
 
-    _, _, _, _, failure_kind = agent._parse_jsonl_trace(trace)
+    _, _, _, _, failure_kind, _ = agent._parse_jsonl_trace(trace)
 
     assert failure_kind is None
+
+
+def test_affent_turn_budget_exhaustion_is_gradable_without_retry() -> None:
+    agent = AffentAgent(AffentConfig(
+        model="model",
+        api_base="http://inference/v1",
+        api_key="key",
+    ))
+    for reason in ("max_turns", "length"):
+        trace = json.dumps({
+            "type": "turn.end",
+            "data": {"reason": reason},
+        })
+
+        _, _, _, _, _, turn_end_reason = agent._parse_jsonl_trace(trace)
+
+        assert turn_end_reason == reason
+        assert _is_gradable_turn_budget_exit(2, turn_end_reason) is True
+
+
+def test_affent_exit_two_without_budget_contract_remains_infra() -> None:
+    assert _is_gradable_turn_budget_exit(2, None) is False
+    assert _is_gradable_turn_budget_exit(2, "error") is False
+    assert outcome_from_process_exit_code(2) is AgentOutcome.INFRA_FAILURE
 
 
 def test_miniswe_uses_exception_types_not_messages() -> None:

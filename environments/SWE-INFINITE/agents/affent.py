@@ -33,6 +33,15 @@ from agents.outcome import (
 )
 
 DOCKER_PULL_TIMEOUT = 300
+_GRADABLE_TURN_END_REASONS = frozenset({"max_turns", "length"})
+
+
+def _is_gradable_turn_budget_exit(
+    exit_code: int,
+    turn_end_reason: Optional[str],
+) -> bool:
+    """Return whether Affent stopped only because its action budget expired."""
+    return exit_code == 2 and turn_end_reason in _GRADABLE_TURN_END_REASONS
 
 
 def _find_affent_binary() -> str:
@@ -213,7 +222,14 @@ class AffentAgent:
 
     def _parse_jsonl_trace(
         self, jsonl_text: str
-    ) -> tuple[int, int, list, Optional[str], Optional[str]]:
+    ) -> tuple[
+        int,
+        int,
+        list,
+        Optional[str],
+        Optional[str],
+        Optional[str],
+    ]:
         """Walk the Affent trace and retain its terminal provider failure.
 
         Each line: {"id": int, "type": "...", "data": <obj>}. We fold deltas
@@ -229,6 +245,7 @@ class AffentAgent:
         conversation: list[dict] = []
         last_error: Optional[str] = None
         last_failure_kind: Optional[str] = None
+        turn_end_reason: Optional[str] = None
         cur_assistant_parts: list[str] = []
         cur_tool_calls: list[dict] = []
 
@@ -298,6 +315,9 @@ class AffentAgent:
                         last_failure_kind = failure_kind_from_provider_error(message)
             elif t == "turn.end":
                 _flush_assistant()
+                reason = d.get("reason")
+                if isinstance(reason, str) and reason.strip():
+                    turn_end_reason = reason.strip()
         _flush_assistant()
         return (
             total_tokens,
@@ -305,6 +325,7 @@ class AffentAgent:
             conversation,
             last_error,
             last_failure_kind,
+            turn_end_reason,
         )
 
     async def solve(
@@ -434,6 +455,7 @@ class AffentAgent:
                 conversation,
                 last_trace_error,
                 failure_kind,
+                turn_end_reason,
             ) = self._parse_jsonl_trace(trace_text)
             if not any(m.get("role") == "user" for m in conversation):
                 conversation.insert(0, {"role": "user", "content": user_prompt})
@@ -459,11 +481,21 @@ class AffentAgent:
                 patch = patch.rstrip("\n") + "\n"
 
             error_str: Optional[str] = None
-            outcome = outcome_from_process_exit_code(
+            turn_budget_exhausted = _is_gradable_turn_budget_exit(
                 result.returncode,
-                failure_kind=failure_kind,
+                turn_end_reason,
             )
-            if result.returncode != 0:
+            if turn_budget_exhausted:
+                # The action budget is part of the evaluation contract. Grade
+                # any patch produced so far instead of retrying the same task.
+                outcome = AgentOutcome.COMPLETED
+                failure_kind = "turn_budget_exhausted"
+            else:
+                outcome = outcome_from_process_exit_code(
+                    result.returncode,
+                    failure_kind=failure_kind,
+                )
+            if result.returncode != 0 and not turn_budget_exhausted:
                 msg = last_trace_error or (
                     (result.stderr or result.stdout or "").strip()
                 )
