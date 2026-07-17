@@ -19,7 +19,11 @@ from utils import (
     is_container_running,
     is_image_prepared,
 )
-from agents.outcome import AgentOutcome, outcome_from_process_exit_code
+from agents.outcome import (
+    AgentOutcome,
+    failure_kind_from_provider_error,
+    outcome_from_process_exit_code,
+)
 
 DOCKER_PULL_TIMEOUT = 300
 
@@ -51,6 +55,7 @@ class CodexResult:
     error: Optional[str] = None
     outcome: AgentOutcome = AgentOutcome.COMPLETED
     process_exit_code: Optional[int] = None
+    failure_kind: Optional[str] = None
 
 
 class CodexAgent:
@@ -146,19 +151,26 @@ class CodexAgent:
 
     def _parse_json_output(
         self, stdout: str
-    ) -> Tuple[int, int, List[Dict[str, Any]], Optional[str]]:
+    ) -> Tuple[
+        int,
+        int,
+        List[Dict[str, Any]],
+        Optional[str],
+        Optional[str],
+    ]:
         """Parse JSONL output from codex --json.
 
-        Returns (total_tokens, model_calls, conversation, last_error).
+        Returns tokens, calls, conversation, error detail, and failure kind.
         Under `--json` codex emits failures as structured events on stdout
-        (`error` / `turn.failed`) and leaves stderr empty, so we capture the
-        most recent such message for callers that need to report the cause.
+        (`error` / `turn.failed`). Provider failures retain their JSON body in
+        the event message, allowing exact classification without log matching.
         """
         total_input = 0
         total_output = 0
         model_calls = 0
         conversation: List[Dict[str, Any]] = []
         last_error: Optional[str] = None
+        last_failure_kind: Optional[str] = None
 
         for line in stdout.splitlines():
             line = line.strip()
@@ -181,13 +193,21 @@ class CodexAgent:
                 msg = event.get("message")
                 if isinstance(msg, str) and msg.strip():
                     last_error = msg.strip()
+                    last_failure_kind = failure_kind_from_provider_error(msg)
             elif event_type == "turn.failed":
                 err = event.get("error") or {}
                 msg = err.get("message") if isinstance(err, dict) else None
                 if isinstance(msg, str) and msg.strip():
                     last_error = msg.strip()
+                    last_failure_kind = failure_kind_from_provider_error(msg)
 
-        return total_input + total_output, model_calls, conversation, last_error
+        return (
+            total_input + total_output,
+            model_calls,
+            conversation,
+            last_error,
+            last_failure_kind,
+        )
 
     def _apply_patch(self, patch: str, label: str = "augmented test") -> None:
         """Apply a patch inside the container via base64 pipe."""
@@ -348,7 +368,7 @@ class CodexAgent:
                 )
 
             # 7. Parse output
-            total_tokens, model_calls, conversation, last_error = (
+            total_tokens, model_calls, conversation, last_error, failure_kind = (
                 self._parse_json_output(result.stdout)
             )
             # Prepend initial prompt as first conversation entry
@@ -370,7 +390,10 @@ class CodexAgent:
             # `model_calls == 0` discarded those edits because codex emits
             # `item.completed` for every tool call without ever sending a
             # closing `turn.completed`, so the counter stays zero.
-            outcome = outcome_from_process_exit_code(result.returncode)
+            outcome = outcome_from_process_exit_code(
+                result.returncode,
+                failure_kind=failure_kind,
+            )
             error_detail: Optional[str] = None
             if result.returncode != 0:
                 detail = (
@@ -394,10 +417,11 @@ class CodexAgent:
                 model_calls=model_calls,
                 total_tokens=total_tokens,
                 conversation=conversation,
-                success=bool(patch) and outcome.valid_for_scoring,
+                success=bool(patch) and outcome is AgentOutcome.COMPLETED,
                 error=error_detail,
                 outcome=outcome,
                 process_exit_code=result.returncode,
+                failure_kind=failure_kind,
             )
 
         except subprocess.TimeoutExpired:

@@ -26,7 +26,11 @@ from utils import (
     is_container_running,
     is_image_prepared,
 )
-from agents.outcome import AgentOutcome, outcome_from_process_exit_code
+from agents.outcome import (
+    AgentOutcome,
+    failure_kind_from_provider_error,
+    outcome_from_process_exit_code,
+)
 
 DOCKER_PULL_TIMEOUT = 300
 
@@ -88,6 +92,7 @@ class AffentResult:
     error: Optional[str] = None
     outcome: AgentOutcome = AgentOutcome.COMPLETED
     process_exit_code: Optional[int] = None
+    failure_kind: Optional[str] = None
 
 
 class AffentAgent:
@@ -206,8 +211,10 @@ class AffentAgent:
         lines.append(problem_statement.strip())
         return "\n".join(lines)
 
-    def _parse_jsonl_trace(self, jsonl_text: str) -> tuple[int, int, list]:
-        """Walk affent SSE trace JSONL → (total_tokens, model_calls, conversation).
+    def _parse_jsonl_trace(
+        self, jsonl_text: str
+    ) -> tuple[int, int, list, Optional[str], Optional[str]]:
+        """Walk the Affent trace and retain its terminal provider failure.
 
         Each line: {"id": int, "type": "...", "data": <obj>}. We fold deltas
         into OpenAI-style messages so downstream analysis matches the codex
@@ -220,6 +227,8 @@ class AffentAgent:
         total_tokens = 0
         model_calls = 0
         conversation: list[dict] = []
+        last_error: Optional[str] = None
+        last_failure_kind: Optional[str] = None
         cur_assistant_parts: list[str] = []
         cur_tool_calls: list[dict] = []
 
@@ -243,6 +252,8 @@ class AffentAgent:
                 continue
             t = ev.get("type", "")
             d = ev.get("data") or {}
+            if not isinstance(d, dict):
+                d = {}
             if t == "user.message":
                 _flush_assistant()
                 conversation.append({"role": "user", "content": d.get("text", "")})
@@ -270,10 +281,31 @@ class AffentAgent:
                 })
             elif t == "usage":
                 total_tokens += int(d.get("input_tokens", 0)) + int(d.get("output_tokens", 0))
+            elif t == "error":
+                message = d.get("message")
+                last_error = (
+                    message.strip()
+                    if isinstance(message, str) and message.strip()
+                    else None
+                )
+                if d.get("recoverable") is not False:
+                    last_failure_kind = None
+                else:
+                    failure_kind = d.get("failure_kind")
+                    if isinstance(failure_kind, str) and failure_kind.strip():
+                        last_failure_kind = failure_kind.strip()
+                    else:
+                        last_failure_kind = failure_kind_from_provider_error(message)
             elif t == "turn.end":
                 _flush_assistant()
         _flush_assistant()
-        return total_tokens, model_calls, conversation
+        return (
+            total_tokens,
+            model_calls,
+            conversation,
+            last_error,
+            last_failure_kind,
+        )
 
     async def solve(
         self,
@@ -396,7 +428,13 @@ class AffentAgent:
                 )
                 trace_text = trace_read.stdout or ""
 
-            total_tokens, model_calls, conversation = self._parse_jsonl_trace(trace_text)
+            (
+                total_tokens,
+                model_calls,
+                conversation,
+                last_trace_error,
+                failure_kind,
+            ) = self._parse_jsonl_trace(trace_text)
             if not any(m.get("role") == "user" for m in conversation):
                 conversation.insert(0, {"role": "user", "content": user_prompt})
 
@@ -407,20 +445,6 @@ class AffentAgent:
             if result.returncode != 0:
                 if result.stderr:
                     print(f"[AFFENT] stderr: {result.stderr[:1000]}")
-
-            # Pull out the most informative LLM error for diagnostics only.
-            # The process exit code, not this text, determines disposition.
-            trace_errors = []
-            for line in trace_text.splitlines():
-                line = line.strip()
-                if not line:
-                    continue
-                try:
-                    ev = json.loads(line)
-                except json.JSONDecodeError:
-                    continue
-                if ev.get("type") == "error":
-                    trace_errors.append((ev.get("data") or {}).get("message", ""))
 
             # Always attempt to extract the diff. Even when affentctl exits
             # with an error mid-loop, prior tool calls may have written real
@@ -435,9 +459,12 @@ class AffentAgent:
                 patch = patch.rstrip("\n") + "\n"
 
             error_str: Optional[str] = None
-            outcome = outcome_from_process_exit_code(result.returncode)
+            outcome = outcome_from_process_exit_code(
+                result.returncode,
+                failure_kind=failure_kind,
+            )
             if result.returncode != 0:
-                msg = trace_errors[-1] if trace_errors else (
+                msg = last_trace_error or (
                     (result.stderr or result.stdout or "").strip()
                 )
                 error_str = f"affent exited with {result.returncode}: {msg[:500]}"
@@ -447,10 +474,11 @@ class AffentAgent:
                 model_calls=model_calls,
                 total_tokens=total_tokens,
                 conversation=conversation,
-                success=bool(patch) and outcome.valid_for_scoring,
+                success=bool(patch) and outcome is AgentOutcome.COMPLETED,
                 error=error_str,
                 outcome=outcome,
                 process_exit_code=result.returncode,
+                failure_kind=failure_kind,
             )
 
         except subprocess.TimeoutExpired:
