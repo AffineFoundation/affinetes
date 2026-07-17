@@ -138,30 +138,30 @@ def is_blacklisted_command(cmd: str) -> bool:
     return False
 
 
-# Docker daemon error signatures that mean the task container is gone or
-# unreachable. These indicate infrastructure failure, not a recoverable
-# command error — the agent cannot make progress, so the whole evaluation
-# should fail fast and be retried by the caller.
-_CONTAINER_LOST_SIGNATURES = (
-    "No such container",
-    "is not running",
-    "is restarting",
-    "is paused",
-    "removal of container",
-    "Cannot connect to the Docker daemon",
-    "OCI runtime exec failed",
-)
-
-
 class ContainerLostError(RuntimeError):
     """Raised when the task container has been destroyed or is unreachable."""
 
 
-def is_container_lost(output: str) -> bool:
-    """Return True if docker exec output indicates the container is gone."""
-    if not output:
+def is_container_running(container: str | None) -> bool:
+    """Read Docker's structured state instead of interpreting CLI error text."""
+    if not container:
         return False
-    return any(sig in output for sig in _CONTAINER_LOST_SIGNATURES)
+    try:
+        result = subprocess.run(
+            ["docker", "inspect", container],
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+        if result.returncode != 0:
+            return False
+        payload = json.loads(result.stdout)
+        state = payload[0]["State"]
+        return bool(state["Running"]) and not any(
+            bool(state.get(field)) for field in ("Paused", "Restarting", "Dead")
+        )
+    except (OSError, subprocess.SubprocessError, ValueError, KeyError, IndexError, TypeError):
+        return False
 
 
 # ===== Multi-language test output parsers =====

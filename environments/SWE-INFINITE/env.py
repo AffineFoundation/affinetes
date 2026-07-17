@@ -16,7 +16,6 @@ import json
 import os
 import re
 import subprocess
-import tempfile
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -31,7 +30,8 @@ from agents import (
     CodexAgent, CodexConfig,
     MiniSWEAgent, MiniSWEConfig,
     AffentAgent, AffentConfig,
-    SUPPORTED_AGENTS, select_agent,
+    AgentOutcome,
+    select_agent,
 )
 from affinetes.core.openenv import OpenEnvResponse
 from utils import (
@@ -39,7 +39,7 @@ from utils import (
     NORMALIZE_TIMESTAMPS_SCRIPT,
     NETWORK_BLOCKLIST_SCRIPT,
     DIFF_EXTENSIONS,
-    is_container_lost,
+    is_container_running,
     is_image_prepared,
     parse_test_output,
 )
@@ -49,43 +49,6 @@ from canary import generate_canary, verify_canary
 DOCKER_PULL_TIMEOUT = 300
 VERIFY_TIMEOUT = 1800
 
-
-def _classify_agent_error(error_msg: str) -> str:
-    """Classify a miniswe / codex agent failure for retry routing.
-
-    Returned tag drives whether the eval is retried (raise RuntimeError
-    upstream) or recorded as a zero-score sample:
-
-      retryable: api_error, docker_error, agent_timeout
-      not retryable: context_exceeded, agent_error
-
-    Order matters — context_exceeded must precede api_error because every
-    LiteLLM traceback contains 'api'-ish substrings and would otherwise be
-    misclassified as a retryable network issue.
-    """
-    msg = (error_msg or "").lower()
-    if any(kw in msg for kw in (
-        "context length", "context window",
-        "maximum allowed length", "maximum context length",
-        "exceeds the maximum", "input length",
-        "contextwindowexceedederror",
-    )):
-        return "context_exceeded"
-    if "timeout" in msg or "timed out" in msg:
-        return "agent_timeout"
-    if msg.startswith("api_error") or any(kw in msg for kw in (
-        "authentication", "connection", "network",
-        "404", "401", "403", "no matching chute", "reconnecting",
-        "429", "rate limit", "ratelimit", "too many requests",
-        "500", "502", "503", "504",
-        "service unavailable", "internal server error", "bad gateway",
-    )):
-        return "api_error"
-    if any(kw in msg for kw in (
-        "docker", "container", "no space left", "pull image", "disk quota",
-    )):
-        return "docker_error"
-    return "agent_error"
 
 # OpenEnv constants
 DEFAULT_STEP_LIMIT = 100
@@ -857,7 +820,9 @@ bash /workspace/entryscript.sh
         # Container lost: docker daemon says the container is gone. Continuing
         # would burn the remaining step budget on a dead sandbox, so end the
         # episode and signal a retryable failure to the caller.
-        if output.get("returncode", 0) != 0 and is_container_lost(output.get("output", "")):
+        if output.get("returncode", 0) != 0 and not is_container_running(
+            ep.container_id
+        ):
             ep.done = True
             ep.truncated = True
             error_msg = f"Container lost: {output.get('output', '').strip()[:300]}"
@@ -1039,18 +1004,31 @@ bash /workspace/entryscript.sh
         finally:
             agent_obj.cleanup()
 
-        # Verify fix
+        # The adapter owns execution classification. Free-form diagnostics are
+        # never interpreted here or by the validator.
+        outcome = agent_result.outcome
+        if agent_result.error is not None and outcome is AgentOutcome.COMPLETED:
+            outcome = AgentOutcome.INFRA_FAILURE
+        valid_for_scoring = outcome.valid_for_scoring
+
+        # Verify only trustworthy executions. A partial patch left by a failed
+        # agent process is retained for diagnostics but cannot become a score.
         print("[SWE-INFINITE] Verifying fix...")
-        if not fix_patch or not fix_patch.strip():
+        if not valid_for_scoring:
+            if agent_result.error:
+                print(f"[SWE-INFINITE] Agent execution failed:\n{agent_result.error}")
+            score = 0.0
+            test_stats = {
+                "error": agent_result.error,
+                "error_type": outcome.value,
+            }
+        elif not fix_patch or not fix_patch.strip():
             if agent_result.error:
                 print(f"[SWE-INFINITE] Agent error:\n{agent_result.error}")
-                error_type = _classify_agent_error(agent_result.error)
-                if error_type in ("api_error", "docker_error", "agent_timeout"):
-                    error_msg = agent_result.error.lower()
-                    if "no space left" in error_msg or "disk quota" in error_msg:
-                        self._cleanup_docker_resources()
-                    raise RuntimeError(f"{error_type}: {agent_result.error}")
-                test_stats = {"error": agent_result.error, "error_type": error_type}
+                test_stats = {
+                    "error": agent_result.error,
+                    "error_type": outcome.value,
+                }
             else:
                 print("[SWE-INFINITE] No patch generated")
                 test_stats = {"failure_reason": "no_patch_generated"}
@@ -1066,6 +1044,7 @@ bash /workspace/entryscript.sh
             "score": score,
             "success": score > 0.0,
             "time_taken": time.time() - start,
+            "error": None if valid_for_scoring else "agent_execution_invalid",
             "extra": {
                 "task_id": task_id,
                 "task_type": "swe-infinite",
@@ -1079,6 +1058,12 @@ bash /workspace/entryscript.sh
                 "model_calls": agent_result.model_calls,
                 "model_cost": model_cost,
                 "total_tokens": agent_result.total_tokens,
+                "valid_for_scoring": valid_for_scoring,
+                "agent_outcome": outcome.value,
+                "agent_process_exit_code": getattr(
+                    agent_result, "process_exit_code", None
+                ),
+                "failure_detail": agent_result.error,
                 "test_stats": test_stats,
                 "usage": usage,
             },

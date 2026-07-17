@@ -7,6 +7,7 @@ selection based on task.
 from .codex import CodexAgent, CodexConfig, CodexResult
 from .miniswe import MiniSWEAgent, MiniSWEConfig, MiniSWEResult
 from .affent import AffentAgent, AffentConfig, AffentResult
+from .outcome import AgentOutcome
 
 SUPPORTED_AGENTS = ("codex", "miniswe", "affent")
 
@@ -37,5 +38,6 @@ __all__ = [
     "CodexAgent", "CodexConfig", "CodexResult",
     "MiniSWEAgent", "MiniSWEConfig", "MiniSWEResult",
     "AffentAgent", "AffentConfig", "AffentResult",
+    "AgentOutcome",
     "SUPPORTED_AGENTS", "select_agent",
 ]

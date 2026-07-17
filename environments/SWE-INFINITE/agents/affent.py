@@ -23,9 +23,10 @@ from utils import (
     NETWORK_BLOCKLIST_SCRIPT,
     DIFF_EXTENSIONS,
     ContainerLostError,
-    is_container_lost,
+    is_container_running,
     is_image_prepared,
 )
+from agents.outcome import AgentOutcome, outcome_from_process_exit_code
 
 DOCKER_PULL_TIMEOUT = 300
 
@@ -85,6 +86,8 @@ class AffentResult:
     conversation: List[Any] = field(default_factory=list)
     success: bool = True
     error: Optional[str] = None
+    outcome: AgentOutcome = AgentOutcome.COMPLETED
+    process_exit_code: Optional[int] = None
 
 
 class AffentAgent:
@@ -120,9 +123,9 @@ class AffentAgent:
             timeout=timeout,
             input=stdin_data,
         )
-        if result.returncode != 0 and is_container_lost(result.stderr or ""):
+        if result.returncode != 0 and not is_container_running(self._container_name):
             raise ContainerLostError(
-                f"docker container lost: {(result.stderr or '').strip()[:300]}"
+                f"docker container unavailable: {self._container_name}"
             )
         return result
 
@@ -139,11 +142,10 @@ class AffentAgent:
             return False
         # Smoke test: -h is the cheapest invocation that proves the binary loads.
         result = self._exec("affentctl help", timeout=10)
-        # `help` exits with code 2 in some flag.FlagSet conventions; we just
-        # check the binary produces usage text on stderr/stdout.
-        combined = (result.stdout or "") + (result.stderr or "")
-        if "affentctl" not in combined.lower():
-            print(f"[AFFENT] affent binary not working: {combined[:500]}")
+        # `help` exits with code 2 in some flag.FlagSet conventions.
+        if result.returncode not in (0, 2):
+            diagnostic = (result.stdout or "") + (result.stderr or "")
+            print(f"[AFFENT] affent binary not working: {diagnostic[:500]}")
             return False
         print("[AFFENT] affent ready")
         return True
@@ -299,6 +301,7 @@ class AffentAgent:
                     return AffentResult(
                         patch="", success=False,
                         error=f"Failed to pull image: {pull.stderr}",
+                        outcome=AgentOutcome.INFRA_FAILURE,
                     )
                 print(f"[AFFENT] Using local image: {docker_image}")
 
@@ -320,6 +323,7 @@ class AffentAgent:
                 return AffentResult(
                     patch="", success=False,
                     error=f"Failed to start container: {run.stderr}",
+                    outcome=AgentOutcome.INFRA_FAILURE,
                 )
 
             # 3. sanitize git, network blocklist, normalize timestamps
@@ -330,6 +334,7 @@ class AffentAgent:
                 return AffentResult(
                     patch="", success=False,
                     error="Failed to install affent in container",
+                    outcome=AgentOutcome.INFRA_FAILURE,
                 )
 
             # 5. stage prompts
@@ -363,6 +368,7 @@ class AffentAgent:
                 return AffentResult(
                     patch="", success=False,
                     error=f"affent timed out after {self.config.timeout}s",
+                    outcome=AgentOutcome.INFRA_FAILURE,
                 )
 
             # 7. persist trace to host BEFORE cleanup deletes the container,
@@ -402,11 +408,8 @@ class AffentAgent:
                 if result.stderr:
                     print(f"[AFFENT] stderr: {result.stderr[:1000]}")
 
-            # Pull out the most informative LLM error from the trace, if any.
-            # affent's stderr is mostly logging — the actual failure (HTTP 429,
-            # timeout, auth) lives in the SSE error events. Surfacing it lets
-            # env.py's _classify_agent_error route the failure to the correct
-            # bucket (api_error → retryable) instead of agent_error.
+            # Pull out the most informative LLM error for diagnostics only.
+            # The process exit code, not this text, determines disposition.
             trace_errors = []
             for line in trace_text.splitlines():
                 line = line.strip()
@@ -432,44 +435,46 @@ class AffentAgent:
                 patch = patch.rstrip("\n") + "\n"
 
             error_str: Optional[str] = None
+            outcome = outcome_from_process_exit_code(result.returncode)
             if result.returncode != 0:
-                # Prefer the trace's last error message (richer than affentctl's
-                # stderr, which is just "exit 3"). Build a string env.py's
-                # classifier can grep — keep "429" / "rate limit" / "timeout"
-                # verbatim so it routes to api_error.
                 msg = trace_errors[-1] if trace_errors else (
                     (result.stderr or result.stdout or "").strip()
                 )
-                lower = msg.lower()
-                if any(k in lower for k in (
-                    "429", "rate limit", "ratelimit", "too many requests",
-                    "infrastructure is at maximum capacity",
-                    "timeout", "timed out", "deadline exceeded",
-                    "connection", "network", "reconnecting",
-                    "401", "403", "authentication",
-                    "404", "no matching chute", "not found",
-                )):
-                    prefix = "api_error"
-                else:
-                    prefix = "affent_error"
-                error_str = f"{prefix}: exit {result.returncode}: {msg[:500]}"
+                error_str = f"affent exited with {result.returncode}: {msg[:500]}"
 
             return AffentResult(
                 patch=patch,
                 model_calls=model_calls,
                 total_tokens=total_tokens,
                 conversation=conversation,
-                success=bool(patch) and error_str is None,
+                success=bool(patch) and outcome.valid_for_scoring,
                 error=error_str,
+                outcome=outcome,
+                process_exit_code=result.returncode,
             )
 
         except subprocess.TimeoutExpired:
-            return AffentResult(patch="", success=False, error="Operation timed out")
+            return AffentResult(
+                patch="",
+                success=False,
+                error="Operation timed out",
+                outcome=AgentOutcome.INFRA_FAILURE,
+            )
         except ContainerLostError as e:
-            return AffentResult(patch="", success=False, error=f"docker_error: {e}")
+            return AffentResult(
+                patch="",
+                success=False,
+                error=str(e),
+                outcome=AgentOutcome.INFRA_FAILURE,
+            )
         except Exception:
             import traceback
-            return AffentResult(patch="", success=False, error=traceback.format_exc())
+            return AffentResult(
+                patch="",
+                success=False,
+                error=traceback.format_exc(),
+                outcome=AgentOutcome.INFRA_FAILURE,
+            )
         finally:
             self.cleanup()
 
