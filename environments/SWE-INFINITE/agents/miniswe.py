@@ -164,6 +164,7 @@ class MiniSWEResult:
     success: bool = True
     error: Optional[str] = None
     outcome: AgentOutcome = AgentOutcome.COMPLETED
+    exit_status: Optional[str] = None  # "Submitted" / "LimitsExceeded" / None
 
 
 class MiniSWEAgent:
@@ -337,12 +338,19 @@ class MiniSWEAgent:
             )
             patch = ""
             error = None
+            exit_status = None
             outcome = AgentOutcome.COMPLETED
 
             try:
                 loop = asyncio.get_event_loop()
-                _, result = await loop.run_in_executor(None, self._agent.run, prompt)
-                patch = result
+                exit_status, result = await loop.run_in_executor(None, self._agent.run, prompt)
+                # Only a submitted run yields a patch. Any other terminating
+                # status (e.g. LimitsExceeded) means the agent never issued the
+                # submission command. Deliberately NO git-diff fallback from the
+                # container here: unsubmitted work must score 0, matching
+                # upstream mini-swe-agent + SWE-bench semantics.
+                if exit_status == "Submitted":
+                    patch = result
             except Exception as exc:
                 import traceback
                 error = traceback.format_exc()
@@ -374,6 +382,7 @@ class MiniSWEAgent:
                 success=bool(patch) and error is None and outcome.valid_for_scoring,
                 error=error,
                 outcome=outcome,
+                exit_status=exit_status,
             )
 
         except Exception:
