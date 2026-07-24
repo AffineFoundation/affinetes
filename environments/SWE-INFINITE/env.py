@@ -1037,6 +1037,9 @@ bash /workspace/entryscript.sh
                     "error": agent_result.error,
                     "error_type": outcome.value,
                 }
+            elif getattr(agent_result, "exit_status", None) == "LimitsExceeded":
+                print("[SWE-INFINITE] Step/cost limit reached without submission")
+                test_stats = {"failure_reason": "limit_reached_no_submission"}
             else:
                 print("[SWE-INFINITE] No patch generated")
                 test_stats = {"failure_reason": "no_patch_generated"}
